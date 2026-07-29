@@ -1,0 +1,9 @@
+name: daily_checklists_flutter
+
+packages:
+  - apps/**
+  - packages/**
+
+command:
+  bootstrap:
+    runPubGetInParallel: true

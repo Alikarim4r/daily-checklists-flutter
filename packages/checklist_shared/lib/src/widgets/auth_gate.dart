@@ -1,0 +1,244 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../models/enums.dart';
+import '../models/profile.dart';
+import '../providers/providers.dart';
+import '../theme/viewer_palette.dart';
+
+typedef ProfilePredicate = bool Function(Profile profile);
+typedef HomeBuilder = Widget Function(BuildContext context, Profile profile);
+
+/// Login → approval → role gate → optional site access → home.
+class ChecklistAuthGate extends ConsumerStatefulWidget {
+  const ChecklistAuthGate({
+    super.key,
+    required this.appTitle,
+    required this.subtitle,
+    required this.allowedForProfile,
+    required this.homeBuilder,
+    this.siteAccessRequirement = SiteAccessRequirement.none,
+    this.accessDeniedMessage = 'لا تملك صلاحية استخدام هذا التطبيق.',
+    this.noSiteAccessMessage =
+        'لم تُعيَّن لك مواقع بعد. تواصل مع المسؤول لاعتماد الحساب وربطه بالمواقع.',
+  });
+
+  final String appTitle;
+  final String subtitle;
+  final ProfilePredicate allowedForProfile;
+  final HomeBuilder homeBuilder;
+  final SiteAccessRequirement siteAccessRequirement;
+  final String accessDeniedMessage;
+  final String noSiteAccessMessage;
+
+  @override
+  ConsumerState<ChecklistAuthGate> createState() => _ChecklistAuthGateState();
+}
+
+class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
+  final email = TextEditingController();
+  final password = TextEditingController();
+  bool loading = false;
+  String? error;
+
+  @override
+  void dispose() {
+    email.dispose();
+    password.dispose();
+    super.dispose();
+  }
+
+  Future<void> _signIn() async {
+    setState(() {
+      loading = true;
+      error = null;
+    });
+    try {
+      await ref.read(authRepositoryProvider).signIn(
+            email: email.text,
+            password: password.text,
+          );
+      ref.invalidate(currentProfileProvider);
+    } catch (e) {
+      setState(() => error = e.toString());
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = ref.watch(authStateProvider);
+    return auth.when(
+      loading: () => const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      ),
+      error: (e, _) => Scaffold(body: Center(child: Text('$e'))),
+      data: (state) {
+        if (state.session == null) return _loginScaffold();
+        final profileAsync = ref.watch(currentProfileProvider);
+        return profileAsync.when(
+          loading: () => const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          ),
+          error: (e, _) => Scaffold(body: Center(child: Text('$e'))),
+          data: (profile) {
+            if (profile == null) {
+              return Scaffold(
+                body: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('لم يتم العثور على الملف الشخصي.'),
+                      const SizedBox(height: 12),
+                      FilledButton(
+                        onPressed: () =>
+                            ref.read(authRepositoryProvider).signOut(),
+                        child: const Text('خروج'),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+            if (!profile.isApprovedActive && !profile.isPlatformOwner) {
+              return _statusScaffold(
+                'الحساب بانتظار الموافقة أو غير نشط.',
+                profile,
+              );
+            }
+            if (!widget.allowedForProfile(profile)) {
+              return _statusScaffold(widget.accessDeniedMessage, profile);
+            }
+            if (widget.siteAccessRequirement != SiteAccessRequirement.none &&
+                !profile.isPlatformOwner &&
+                profile.role != UserRole.superAdmin) {
+              return FutureBuilder<int>(
+                future: ref.read(siteRepositoryProvider).countMyAccess(
+                      requirement: widget.siteAccessRequirement,
+                    ),
+                builder: (context, snap) {
+                  if (!snap.hasData) {
+                    return const Scaffold(
+                      body: Center(child: CircularProgressIndicator()),
+                    );
+                  }
+                  if (snap.data! < 1) {
+                    return _statusScaffold(
+                      widget.noSiteAccessMessage,
+                      profile,
+                    );
+                  }
+                  return widget.homeBuilder(context, profile);
+                },
+              );
+            }
+            return widget.homeBuilder(context, profile);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _statusScaffold(String message, Profile profile) {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(message, textAlign: TextAlign.center),
+              const SizedBox(height: 8),
+              Text(profile.email, style: const TextStyle(color: Colors.grey)),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: () => ref.read(authRepositoryProvider).signOut(),
+                child: const Text('خروج'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _loginScaffold() {
+    return Scaffold(
+      backgroundColor: ViewerPalette.orangeSoft,
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Card(
+            elevation: 8,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    widget.appTitle,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    widget.subtitle,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.black54),
+                  ),
+                  const SizedBox(height: 20),
+                  TextField(
+                    controller: email,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(
+                      labelText: 'البريد الإلكتروني',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: password,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'كلمة المرور',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  if (error != null) ...[
+                    const SizedBox(height: 8),
+                    Text(error!, style: const TextStyle(color: Colors.red)),
+                  ],
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: ViewerPalette.orange,
+                        minimumSize: const Size.fromHeight(48),
+                      ),
+                      onPressed: loading ? null : _signIn,
+                      child: loading
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('دخول'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
