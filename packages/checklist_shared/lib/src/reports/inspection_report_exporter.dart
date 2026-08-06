@@ -129,11 +129,9 @@ class InspectionReportExporter {
         margin: const pw.EdgeInsets.fromLTRB(24, 22, 24, 18),
         theme: theme,
         footer: (context) => _pageFooter(
+          ar: ar,
           elegancia: waseefLogo,
           waseef: footerLogo,
-          disclaimer: disclaimer,
-          ar: ar,
-          isLastPage: context.pageNumber == context.pagesCount,
         ),
         build: (context) => [
           _header(inspection, ar, moeheLogo),
@@ -143,6 +141,17 @@ class InspectionReportExporter {
           _metaGrid(inspection, ar, signatureImage),
           pw.SizedBox(height: 10),
           _itemsTable(items, language, ar),
+          pw.SizedBox(height: 10),
+          pw.Text(
+            disclaimer,
+            textAlign: ar ? pw.TextAlign.right : pw.TextAlign.left,
+            style: pw.TextStyle(
+              fontSize: 8.5,
+              lineSpacing: 1.3,
+              color: PdfColors.black,
+            ),
+            textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+          ),
         ],
       ),
     );
@@ -170,6 +179,50 @@ class InspectionReportExporter {
         : (inspection.siteNameEn.isNotEmpty
             ? inspection.siteNameEn
             : inspection.buildingCode);
+
+    final logoWidget = logo != null
+        ? pw.Image(logo, height: 36)
+        : pw.Text(
+            'MOEHE',
+            style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 12),
+          );
+
+    // Titles hug the edge opposite the logo — not centered in the gap.
+    final titles = pw.ConstrainedBox(
+      constraints: const pw.BoxConstraints(maxWidth: 340),
+      child: pw.Column(
+        crossAxisAlignment:
+            ar ? pw.CrossAxisAlignment.end : pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            ar
+                ? 'خدمة الإدارة المتكاملة للمرافق لصالح وزارة التربية والتعليم والتعليم العالي'
+                : 'Integrated Facilities Management Service for MOEHE',
+            style: pw.TextStyle(
+              fontSize: 8.5,
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColors.black,
+            ),
+            textAlign: ar ? pw.TextAlign.right : pw.TextAlign.left,
+            textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+          ),
+          pw.SizedBox(height: 3),
+          pw.Text(
+            ar
+                ? 'قائمة الفحص اليومي للمرافق - $siteName'
+                : 'Facilities Daily Inspection Checklist - $siteName',
+            style: pw.TextStyle(
+              fontSize: 11,
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColors.black,
+            ),
+            textAlign: ar ? pw.TextAlign.right : pw.TextAlign.left,
+            textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+          ),
+        ],
+      ),
+    );
+
     return pw.Container(
       padding: const pw.EdgeInsets.only(bottom: 6),
       decoration: const pw.BoxDecoration(
@@ -177,51 +230,25 @@ class InspectionReportExporter {
       ),
       child: pw.Row(
         crossAxisAlignment: pw.CrossAxisAlignment.end,
-        children: [
-          pw.Expanded(
-            child: pw.Column(
-              crossAxisAlignment:
-                  ar ? pw.CrossAxisAlignment.end : pw.CrossAxisAlignment.start,
-              children: [
-                pw.Text(
-                  ar
-                      ? 'خدمة الإدارة المتكاملة للمرافق لصالح وزارة التربية والتعليم والتعليم العالي'
-                      : 'Integrated Facilities Management Service for MOEHE',
-                  style: pw.TextStyle(
-                    fontSize: 8.5,
-                    fontWeight: pw.FontWeight.bold,
-                    color: PdfColors.black,
+        children: ar
+            ? [
+                logoWidget,
+                pw.Expanded(
+                  child: pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: titles,
                   ),
-                  textAlign: ar ? pw.TextAlign.right : pw.TextAlign.left,
-                  textDirection:
-                      ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
                 ),
-                pw.SizedBox(height: 3),
-                pw.Text(
-                  ar
-                      ? 'قائمة الفحص اليومي للمرافق - $siteName'
-                      : 'Facilities Daily Inspection Checklist - $siteName',
-                  style: pw.TextStyle(
-                    fontSize: 11,
-                    fontWeight: pw.FontWeight.bold,
-                    color: PdfColors.black,
+              ]
+            : [
+                pw.Expanded(
+                  child: pw.Align(
+                    alignment: pw.Alignment.centerLeft,
+                    child: titles,
                   ),
-                  textAlign: ar ? pw.TextAlign.right : pw.TextAlign.left,
-                  textDirection:
-                      ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
                 ),
+                logoWidget,
               ],
-            ),
-          ),
-          pw.SizedBox(width: 10),
-          if (logo != null)
-            pw.Image(logo, height: 36)
-          else
-            pw.Text(
-              'MOEHE',
-              style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 12),
-            ),
-        ],
       ),
     );
   }
@@ -260,259 +287,308 @@ class InspectionReportExporter {
     pw.MemoryImage? signatureImage,
   ) {
     final pin = inspection.pin.isNotEmpty ? inspection.pin : '—';
+    final dir = ar ? pw.TextDirection.rtl : pw.TextDirection.ltr;
+    final startAlign = ar ? pw.Alignment.centerRight : pw.Alignment.centerLeft;
+    final startText = ar ? pw.TextAlign.right : pw.TextAlign.left;
 
-    // Fixed heights keep left Pin/Bldg rows locked to Signature + Date/Time.
-    const double topH = 20;
-    const double halfH = 24;
-    const double sigH = halfH * 2; // 48 — matches Pin + Bldg stacked
+    const double rowH = 18;
+    const double halfH = 22;
+    const double sigH = halfH * 2;
     const double labelW = 78;
     const double inspLabelW = 92;
-    const double dateLabelW = 40;
-    const double dateBlockW = 112;
-    const double bldgNoW = 30;
-    const double floorLabelW = 52;
+    const double dateLabelW = 38;
+    const double dateBlockW = 108;
+    const double bldgNoW = 28;
+    const double floorLabelW = 50;
 
     pw.TextStyle labelStyle() => pw.TextStyle(
-          fontSize: 8,
+          fontSize: 7.5,
           fontWeight: pw.FontWeight.bold,
           color: PdfColors.black,
         );
     pw.TextStyle valueStyle() => pw.TextStyle(
-          fontSize: 9,
+          fontSize: 8.5,
           fontWeight: pw.FontWeight.bold,
           color: PdfColors.black,
         );
 
-    pw.Widget gold(
-      String text, {
-      double? width,
+    pw.Border cellBorderAll() =>
+        pw.Border.all(color: _border, width: 0.75);
+
+    pw.Widget box({
       required double height,
-      pw.Border? border,
+      double? width,
+      PdfColor? bg,
+      required pw.Widget child,
+      pw.Alignment? align,
     }) {
       return pw.Container(
         width: width,
         height: height,
-        alignment: pw.Alignment.centerLeft,
-        padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        decoration: pw.BoxDecoration(color: _gold, border: border),
-        child: pw.Text(text, style: labelStyle()),
+        alignment: align ?? startAlign,
+        padding: const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+        decoration: pw.BoxDecoration(
+          color: bg,
+          border: cellBorderAll(),
+        ),
+        child: child,
       );
     }
 
-    pw.Widget value(
+    pw.Widget goldLabel(
+      String text, {
+      required double width,
+      required double height,
+    }) {
+      return box(
+        width: width,
+        height: height,
+        bg: _gold,
+        child: pw.Text(
+          text,
+          style: labelStyle(),
+          textAlign: startText,
+          textDirection: dir,
+        ),
+      );
+    }
+
+    pw.Widget val(
       String text, {
       double? width,
       required double height,
-      pw.TextAlign align = pw.TextAlign.left,
-      pw.Border? border,
+      pw.TextAlign? align,
+      bool forceLtr = false,
     }) {
-      return pw.Container(
+      final a = align ?? startText;
+      return box(
         width: width,
         height: height,
-        alignment: align == pw.TextAlign.center
+        align: a == pw.TextAlign.center
             ? pw.Alignment.center
-            : pw.Alignment.centerLeft,
-        padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        decoration: pw.BoxDecoration(border: border),
-        child: pw.Text(text, textAlign: align, style: valueStyle()),
+            : (a == pw.TextAlign.right
+                ? pw.Alignment.centerRight
+                : pw.Alignment.centerLeft),
+        child: pw.Text(
+          text,
+          textAlign: a,
+          style: valueStyle(),
+          textDirection: forceLtr ? pw.TextDirection.ltr : dir,
+        ),
       );
     }
 
-    pw.BorderSide side([double w = 0.7]) =>
-        pw.BorderSide(color: _border, width: w);
+    List<pw.Widget> pair(pw.Widget label, pw.Widget value) =>
+        ar ? [value, label] : [label, value];
 
-    // Internal dividers: right + bottom; outer edge comes from parent.
-    pw.Border cellBorder({
-      bool right = true,
-      bool bottom = true,
-    }) =>
-        pw.Border(
-          right: right ? side() : pw.BorderSide.none,
-          bottom: bottom ? side() : pw.BorderSide.none,
-        );
-
-    return pw.Container(
-      decoration: pw.BoxDecoration(
-        border: pw.Border.all(color: _border, width: 0.7),
+    final locationHalf = pw.Expanded(
+      child: pw.Row(
+        children: pair(
+          goldLabel(
+            ar ? 'الموقع:' : 'Location:',
+            width: labelW,
+            height: rowH,
+          ),
+          pw.Expanded(
+            child: val(inspection.locationLabel, height: rowH, forceLtr: !ar),
+          ),
+        ),
       ),
+    );
+    final nameHalf = pw.Expanded(
+      child: pw.Row(
+        children: pair(
+          goldLabel(
+            ar ? 'اسم المفتش:' : 'Inspector Name:',
+            width: inspLabelW,
+            height: rowH,
+          ),
+          pw.Expanded(
+            child: val(inspection.inspectorName, height: rowH, forceLtr: true),
+          ),
+        ),
+      ),
+    );
+
+    final pinRow = pw.SizedBox(
+      height: halfH,
+      child: pw.Row(
+        children: pair(
+          goldLabel(
+            ar ? 'رقم القسيمة' : 'Pin No.',
+            width: labelW,
+            height: halfH,
+          ),
+          pw.Expanded(child: val(pin, height: halfH, forceLtr: true)),
+        ),
+      ),
+    );
+    final bldgRow = pw.SizedBox(
+      height: halfH,
+      child: pw.Row(
+        children: ar
+            ? [
+                pw.Expanded(
+                  child: val(
+                    inspection.floorLabel,
+                    height: halfH,
+                    align: pw.TextAlign.center,
+                    forceLtr: true,
+                  ),
+                ),
+                goldLabel(
+                  ar ? 'الطابق' : 'Floor no.',
+                  width: floorLabelW,
+                  height: halfH,
+                ),
+                val(
+                  inspection.bldgNo,
+                  width: bldgNoW,
+                  height: halfH,
+                  align: pw.TextAlign.center,
+                  forceLtr: true,
+                ),
+                goldLabel(
+                  ar ? 'رقم المبنى' : 'Bldg. No.',
+                  width: labelW,
+                  height: halfH,
+                ),
+              ]
+            : [
+                goldLabel(
+                  ar ? 'رقم المبنى' : 'Bldg. No.',
+                  width: labelW,
+                  height: halfH,
+                ),
+                val(
+                  inspection.bldgNo,
+                  width: bldgNoW,
+                  height: halfH,
+                  align: pw.TextAlign.center,
+                ),
+                goldLabel(
+                  ar ? 'الطابق' : 'Floor no.',
+                  width: floorLabelW,
+                  height: halfH,
+                ),
+                pw.Expanded(
+                  child: val(
+                    inspection.floorLabel,
+                    height: halfH,
+                    align: pw.TextAlign.center,
+                  ),
+                ),
+              ],
+      ),
+    );
+
+    final leftHalf = pw.Expanded(
+      child: pw.Column(children: [pinRow, bldgRow]),
+    );
+
+    final dateBlock = pw.SizedBox(
+      width: dateBlockW,
+      height: sigH,
       child: pw.Column(
         children: [
-          // ── Top: Location | Inspector Name ──────────────────────────
-          pw.Row(
-            children: [
-              gold(
-                ar ? 'الموقع:' : 'Location:',
-                width: labelW,
-                height: topH,
-                border: cellBorder(),
-              ),
-              pw.Expanded(
-                flex: 5,
-                child: value(
-                  inspection.locationLabel,
-                  height: topH,
-                  border: cellBorder(),
+          pw.SizedBox(
+            height: halfH,
+            child: pw.Row(
+              children: pair(
+                goldLabel(
+                  ar ? 'التاريخ' : 'Date',
+                  width: dateLabelW,
+                  height: halfH,
+                ),
+                pw.Expanded(
+                  child: val(
+                    _formatMetaDate(inspection.inspectionDate),
+                    height: halfH,
+                    forceLtr: true,
+                  ),
                 ),
               ),
-              gold(
-                ar ? 'اسم المفتش:' : 'Inspector Name:',
-                width: inspLabelW,
-                height: topH,
-                border: cellBorder(),
-              ),
-              pw.Expanded(
-                flex: 5,
-                child: value(
-                  inspection.inspectorName,
-                  height: topH,
-                  border: cellBorder(right: false),
-                ),
-              ),
-            ],
+            ),
           ),
-          // ── Bottom: Pin/Bldg  |  Signature + Date/Time ──────────────
-          pw.Row(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              // LEFT half
-              pw.Expanded(
-                flex: 5,
-                child: pw.Column(
-                  children: [
-                    pw.Row(
-                      children: [
-                        gold(
-                          ar ? 'رقم القسيمة' : 'Pin No.',
-                          width: labelW,
-                          height: halfH,
-                          border: cellBorder(),
-                        ),
-                        pw.Expanded(
-                          child: value(
-                            pin,
-                            height: halfH,
-                            border: cellBorder(right: false),
-                          ),
-                        ),
-                      ],
-                    ),
-                    pw.Row(
-                      children: [
-                        gold(
-                          ar ? 'رقم المبنى' : 'Bldg. No.',
-                          width: labelW,
-                          height: halfH,
-                          border: cellBorder(bottom: false),
-                        ),
-                        value(
-                          inspection.bldgNo,
-                          width: bldgNoW,
-                          height: halfH,
-                          align: pw.TextAlign.center,
-                          border: cellBorder(bottom: false),
-                        ),
-                        gold(
-                          ar ? 'الطابق' : 'Floor no.',
-                          width: floorLabelW,
-                          height: halfH,
-                          border: cellBorder(bottom: false),
-                        ),
-                        pw.Expanded(
-                          child: value(
-                            inspection.floorLabel,
-                            height: halfH,
-                            align: pw.TextAlign.center,
-                            border: cellBorder(right: false, bottom: false),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+          pw.SizedBox(
+            height: halfH,
+            child: pw.Row(
+              children: pair(
+                goldLabel(
+                  ar ? 'الوقت:' : 'Time:',
+                  width: dateLabelW,
+                  height: halfH,
+                ),
+                pw.Expanded(
+                  child: val(
+                    inspection.inspectionTime,
+                    height: halfH,
+                    forceLtr: true,
+                  ),
                 ),
               ),
-              // Vertical split between halves
-              pw.Container(width: 0.7, height: sigH, color: _border),
-              // RIGHT half
-              pw.Expanded(
-                flex: 5,
-                child: pw.Row(
-                  crossAxisAlignment: pw.CrossAxisAlignment.start,
-                  children: [
-                    gold(
-                      ar ? 'توقيع المفتش:' : 'Inspector Signature:',
-                      width: inspLabelW,
-                      height: sigH,
-                      border: cellBorder(bottom: false),
-                    ),
-                    pw.Expanded(
-                      child: pw.Container(
-                        height: sigH,
-                        alignment: pw.Alignment.center,
-                        padding: const pw.EdgeInsets.all(3),
-                        decoration: pw.BoxDecoration(
-                          border: cellBorder(bottom: false),
-                        ),
-                        child: signatureImage != null
-                            ? pw.Image(
-                                signatureImage,
-                                height: sigH - 8,
-                                fit: pw.BoxFit.contain,
-                              )
-                            : pw.SizedBox(height: sigH - 8),
-                      ),
-                    ),
-                    pw.SizedBox(
-                      width: dateBlockW,
-                      height: sigH,
-                      child: pw.Column(
-                        children: [
-                          pw.Row(
-                            children: [
-                              gold(
-                                ar ? 'التاريخ' : 'Date',
-                                width: dateLabelW,
-                                height: halfH,
-                                border: cellBorder(),
-                              ),
-                              pw.Expanded(
-                                child: value(
-                                  _formatMetaDate(inspection.inspectionDate),
-                                  height: halfH,
-                                  border: cellBorder(right: false),
-                                ),
-                              ),
-                            ],
-                          ),
-                          pw.Row(
-                            children: [
-                              gold(
-                                ar ? 'الوقت:' : 'Time:',
-                                width: dateLabelW,
-                                height: halfH,
-                                border: cellBorder(bottom: false),
-                              ),
-                              pw.Expanded(
-                                child: value(
-                                  inspection.inspectionTime,
-                                  height: halfH,
-                                  border: cellBorder(
-                                    right: false,
-                                    bottom: false,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+            ),
           ),
         ],
       ),
+    );
+
+    final signatureLabel = goldLabel(
+      ar ? 'توقيع المفتش:' : 'Inspector Signature:',
+      width: inspLabelW,
+      height: sigH,
+    );
+    final signatureValue = pw.Expanded(
+      child: pw.Container(
+        height: sigH,
+        decoration: pw.BoxDecoration(border: cellBorderAll()),
+        child: pw.Stack(
+          children: [
+            if (signatureImage != null)
+              pw.Positioned(
+                left: -7,
+                top: -6,
+                right: -10,
+                bottom: -5,
+                child: pw.Image(
+                  signatureImage,
+                  fit: pw.BoxFit.contain,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+
+    final rightHalf = pw.Expanded(
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+        children: ar
+            ? [dateBlock, signatureValue, signatureLabel]
+            : [signatureLabel, signatureValue, dateBlock],
+      ),
+    );
+
+    return pw.Column(
+      children: [
+        pw.SizedBox(
+          height: rowH,
+          child: pw.Row(
+            children: ar
+                ? [nameHalf, locationHalf]
+                : [locationHalf, nameHalf],
+          ),
+        ),
+        pw.SizedBox(
+          height: sigH,
+          child: pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+            children: ar
+                ? [rightHalf, leftHalf]
+                : [leftHalf, rightHalf],
+          ),
+        ),
+      ],
     );
   }
 
@@ -567,10 +643,14 @@ class InspectionReportExporter {
     String text, {
     pw.TextAlign align = pw.TextAlign.center,
     double fontSize = 8,
+    bool ar = false,
   }) {
     return pw.Container(
-      color: _gold,
       padding: const pw.EdgeInsets.symmetric(vertical: 5, horizontal: 3),
+      decoration: pw.BoxDecoration(
+        color: _gold,
+        border: pw.Border.all(color: _border, width: 0.8),
+      ),
       child: pw.Text(
         text,
         textAlign: align,
@@ -579,6 +659,7 @@ class InspectionReportExporter {
           fontWeight: pw.FontWeight.bold,
           color: PdfColors.black,
         ),
+        textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
       ),
     );
   }
@@ -588,122 +669,115 @@ class InspectionReportExporter {
     String language,
     bool ar,
   ) {
+    final descAlign = ar ? pw.TextAlign.right : pw.TextAlign.left;
+    final headers = [
+      _th(ar ? 'م' : 'Item', ar: ar),
+      _th(ar ? 'الوصف' : 'Description', align: descAlign, ar: ar),
+      _th(ar ? 'نعم' : 'Yes', ar: ar),
+      _th(ar ? 'لا' : 'No', ar: ar),
+      _th(ar ? 'غ.م' : 'N/A', ar: ar),
+      _th(
+        ar
+            ? "إن كانت الإجابة لا، ما الإجراء؟"
+            : "If 'no', what are the actions taken?",
+        align: descAlign,
+        fontSize: 7,
+        ar: ar,
+      ),
+    ];
+
+    List<pw.Widget> rowCells(InspectionItem item) => [
+          pw.Container(
+            alignment: pw.Alignment.center,
+            padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+            child: pw.Text(
+              '${item.itemIndex}',
+              textAlign: pw.TextAlign.center,
+              style: pw.TextStyle(
+                fontSize: 9,
+                fontWeight: pw.FontWeight.bold,
+                color: PdfColors.black,
+              ),
+            ),
+          ),
+          pw.Container(
+            alignment: ar ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
+            padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+            child: pw.Text(
+              item.descriptionFor(language),
+              style: const pw.TextStyle(
+                fontSize: 8,
+                lineSpacing: 1.15,
+                color: PdfColors.black,
+              ),
+              textAlign: descAlign,
+              textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+            ),
+          ),
+          _markCell(item, ChecklistResponse.yes),
+          _markCell(item, ChecklistResponse.no),
+          _markCell(item, ChecklistResponse.na),
+          pw.Container(
+            alignment: ar ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
+            padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+            child: pw.Text(
+              item.actionsTaken,
+              style: const pw.TextStyle(fontSize: 8, color: PdfColors.black),
+              textAlign: descAlign,
+              textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+            ),
+          ),
+        ];
+
+    // Arabic: mirror columns (actions … item).
+    final headerRow = ar ? headers.reversed.toList() : headers;
+    final widths = ar
+        ? {
+            0: const pw.FlexColumnWidth(3.2),
+            1: const pw.FixedColumnWidth(30),
+            2: const pw.FixedColumnWidth(30),
+            3: const pw.FixedColumnWidth(30),
+            4: const pw.FlexColumnWidth(4.8),
+            5: const pw.FixedColumnWidth(30),
+          }
+        : {
+            0: const pw.FixedColumnWidth(30),
+            1: const pw.FlexColumnWidth(4.8),
+            2: const pw.FixedColumnWidth(30),
+            3: const pw.FixedColumnWidth(30),
+            4: const pw.FixedColumnWidth(30),
+            5: const pw.FlexColumnWidth(3.2),
+          };
+
     return pw.Table(
       border: pw.TableBorder.all(color: _border, width: 0.8),
-      columnWidths: {
-        0: const pw.FixedColumnWidth(30),
-        1: const pw.FlexColumnWidth(4.8),
-        2: const pw.FixedColumnWidth(30),
-        3: const pw.FixedColumnWidth(30),
-        4: const pw.FixedColumnWidth(30),
-        5: const pw.FlexColumnWidth(3.2),
-      },
+      columnWidths: widths,
       defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
       children: [
-        pw.TableRow(
-          children: [
-            _th(ar ? 'م' : 'Item'),
-            _th(ar ? 'الوصف' : 'Description', align: pw.TextAlign.left),
-            _th(ar ? 'نعم' : 'Yes'),
-            _th(ar ? 'لا' : 'No'),
-            _th(ar ? 'غ.م' : 'N/A'),
-            _th(
-              ar
-                  ? "إن كانت الإجابة لا، ما الإجراء؟"
-                  : "If 'no', what are the actions taken?",
-              align: pw.TextAlign.left,
-              fontSize: 7,
-            ),
-          ],
-        ),
+        pw.TableRow(children: headerRow),
         for (final item in items)
           pw.TableRow(
             verticalAlignment: pw.TableCellVerticalAlignment.middle,
-            children: [
-              pw.Container(
-                alignment: pw.Alignment.center,
-                padding:
-                    const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-                child: pw.Text(
-                  '${item.itemIndex}',
-                  textAlign: pw.TextAlign.center,
-                  style: pw.TextStyle(
-                    fontSize: 9,
-                    fontWeight: pw.FontWeight.bold,
-                    color: PdfColors.black,
-                  ),
-                ),
-              ),
-              pw.Container(
-                alignment: pw.Alignment.centerLeft,
-                padding: const pw.EdgeInsets.symmetric(
-                  vertical: 6,
-                  horizontal: 4,
-                ),
-                child: pw.Text(
-                  item.descriptionFor(language),
-                  style: const pw.TextStyle(
-                    fontSize: 8,
-                    lineSpacing: 1.15,
-                    color: PdfColors.black,
-                  ),
-                  textDirection:
-                      ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
-                ),
-              ),
-              _markCell(item, ChecklistResponse.yes),
-              _markCell(item, ChecklistResponse.no),
-              _markCell(item, ChecklistResponse.na),
-              pw.Container(
-                alignment: pw.Alignment.centerLeft,
-                padding: const pw.EdgeInsets.symmetric(
-                  vertical: 6,
-                  horizontal: 4,
-                ),
-                child: pw.Text(
-                  item.actionsTaken,
-                  style: const pw.TextStyle(
-                    fontSize: 8,
-                    color: PdfColors.black,
-                  ),
-                ),
-              ),
-            ],
+            children: ar ? rowCells(item).reversed.toList() : rowCells(item),
           ),
       ],
     );
   }
 
-  /// Sticky page footer: partner logos always at bottom; disclaimer on last page.
+  /// Sticky page footer: partner logos always at bottom of every page.
   pw.Widget _pageFooter({
+    required bool ar,
     required pw.MemoryImage? elegancia,
     required pw.MemoryImage? waseef,
-    required String disclaimer,
-    required bool ar,
-    required bool isLastPage,
   }) {
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.stretch,
       children: [
-        if (isLastPage) ...[
-          pw.SizedBox(height: 6),
-          pw.Text(
-            disclaimer,
-            textAlign: ar ? pw.TextAlign.right : pw.TextAlign.left,
-            style: pw.TextStyle(
-              fontSize: 8,
-              lineSpacing: 1.25,
-              color: PdfColors.black,
-            ),
-            textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
-          ),
-          pw.SizedBox(height: 8),
-        ] else
-          pw.SizedBox(height: 10),
+        pw.SizedBox(height: 8),
         _footerLogos(elegancia, waseef),
         pw.SizedBox(height: 4),
         pw.Align(
-          alignment: pw.Alignment.centerLeft,
+          alignment: ar ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
           child: pw.Text(
             'Classification - Public',
             style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600),

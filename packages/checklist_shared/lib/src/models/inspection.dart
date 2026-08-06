@@ -1,4 +1,5 @@
 import 'enums.dart';
+import '../utils/storage_path_list.dart';
 
 class InspectionItem {
   InspectionItem({
@@ -31,6 +32,100 @@ class InspectionItem {
   /// Consecutive problem days before Overdue for this item.
   int overdueAfterDays;
 
+  List<String> get issueImagePaths =>
+      decodeStoragePathList(issueImagePath ?? imagePath);
+
+  List<String> get fixImagePaths => decodeStoragePathList(fixImagePath);
+
+  /// Stable ordered remark photos with a permanent kind per path.
+  /// Filename stamp wins; otherwise the DB column the path lives in.
+  List<({String path, RemarkPhotoKind kind})> get remarkPhotos {
+    final ordered = <String>[];
+    final seen = <String>{};
+    for (final p in [...issueImagePaths, ...fixImagePaths]) {
+      if (p.isEmpty || !seen.add(p)) continue;
+      ordered.add(p);
+    }
+    final issueSet = issueImagePaths.toSet();
+    final fixSet = fixImagePaths.toSet();
+    return [
+      for (final p in ordered)
+        (
+          path: p,
+          kind: remarkPhotoKindFromPath(p) ??
+              (fixSet.contains(p) && !issueSet.contains(p)
+                  ? RemarkPhotoKind.fix
+                  : issueSet.contains(p) && !fixSet.contains(p)
+                      ? RemarkPhotoKind.issue
+                      : fixSet.contains(p)
+                          ? RemarkPhotoKind.fix
+                          : RemarkPhotoKind.issue),
+        ),
+    ];
+  }
+
+  void setIssueImagePaths(List<String> paths) {
+    issueImagePath = encodeStoragePathList(paths);
+    imagePath = paths.isEmpty ? null : paths.first;
+  }
+
+  void setFixImagePaths(List<String> paths) {
+    fixImagePath = encodeStoragePathList(paths);
+  }
+
+  /// Keep columns aligned with each path's permanent kind.
+  void _commitPhotoBuckets(
+    Iterable<({String path, RemarkPhotoKind kind})> photos,
+  ) {
+    final issues = <String>[];
+    final fixes = <String>[];
+    final seen = <String>{};
+    for (final photo in photos) {
+      if (photo.path.isEmpty || !seen.add(photo.path)) continue;
+      if (photo.kind == RemarkPhotoKind.fix) {
+        fixes.add(photo.path);
+      } else {
+        issues.add(photo.path);
+      }
+    }
+    setIssueImagePaths(issues);
+    setFixImagePaths(fixes);
+  }
+
+  void appendIssueImage(String path) {
+    if (path.trim().isEmpty) return;
+    final next = [
+      for (final p in remarkPhotos)
+        if (p.path != path) p,
+      (path: path, kind: RemarkPhotoKind.issue),
+    ];
+    _commitPhotoBuckets(next);
+  }
+
+  void appendFixImage(String path) {
+    if (path.trim().isEmpty) return;
+    final next = [
+      for (final p in remarkPhotos)
+        if (p.path != path) p,
+      (path: path, kind: RemarkPhotoKind.fix),
+    ];
+    _commitPhotoBuckets(next);
+  }
+
+  void removeIssueImage(String path) {
+    _commitPhotoBuckets([
+      for (final p in remarkPhotos)
+        if (p.path != path) p,
+    ]);
+  }
+
+  void removeFixImage(String path) {
+    _commitPhotoBuckets([
+      for (final p in remarkPhotos)
+        if (p.path != path) p,
+    ]);
+  }
+
   String descriptionFor(String language) =>
       language == 'ar' && (descriptionAr ?? '').isNotEmpty
           ? descriptionAr!
@@ -50,15 +145,9 @@ class InspectionItem {
     return r.shortCode == defaultAnswer.toUpperCase();
   }
 
-  bool get hasIssuePhoto {
-    final p = (issueImagePath ?? imagePath)?.trim() ?? '';
-    return p.isNotEmpty;
-  }
+  bool get hasIssuePhoto => issueImagePaths.isNotEmpty;
 
-  bool get hasFixPhoto {
-    final p = fixImagePath?.trim() ?? '';
-    return p.isNotEmpty;
-  }
+  bool get hasFixPhoto => fixImagePaths.isNotEmpty;
 
   /// HTML `getCheckColor` for a specific column value.
   ColorCode checkColorFor(ChecklistResponse column) {
@@ -74,22 +163,28 @@ class InspectionItem {
     final rawDefault = (json['default_answer'] ?? 'Y') as String;
     final defaultAnswer =
         ChecklistResponse.fromDb(rawDefault)?.shortCode ?? rawDefault.toUpperCase();
-    return InspectionItem(
+    final issuePaths = decodeStoragePathList(
+      json['issue_image_path'] as String? ?? json['image_path'] as String?,
+    );
+    final fixPaths =
+        decodeStoragePathList(json['fix_image_path'] as String?);
+    final item = InspectionItem(
       id: json['id'] as String?,
       itemIndex: json['item_index'] as int,
       description: (json['description'] ?? '') as String,
       descriptionAr: json['description_ar'] as String?,
-      // Prefer stored answer only — leave empty when null (no auto Yes/No).
       response: ChecklistResponse.fromDb(json['response'] as String?),
       actionsTaken: (json['actions_taken'] ?? '') as String,
-      imagePath: json['image_path'] as String?,
-      issueImagePath: json['issue_image_path'] as String? ??
-          json['image_path'] as String?,
-      fixImagePath: json['fix_image_path'] as String?,
+      imagePath: issuePaths.isEmpty ? null : issuePaths.first,
+      issueImagePath: encodeStoragePathList(issuePaths),
+      fixImagePath: encodeStoragePathList(fixPaths),
       defaultAnswer: defaultAnswer,
       isCustom: json['is_custom'] as bool? ?? false,
       overdueAfterDays: (json['overdue_after_days'] as num?)?.toInt() ?? 3,
     );
+    // Re-bucket so filename stamps win and a path never flips kind later.
+    item._commitPhotoBuckets(item.remarkPhotos);
+    return item;
   }
 
   Map<String, dynamic> toInsertJson(String inspectionId) => {
@@ -99,9 +194,9 @@ class InspectionItem {
         if (descriptionAr != null) 'description_ar': descriptionAr,
         'response': response?.dbValue,
         'actions_taken': actionsTaken,
-        'image_path': issueImagePath ?? imagePath,
-        'issue_image_path': issueImagePath,
-        'fix_image_path': fixImagePath,
+        'image_path': issueImagePaths.isEmpty ? null : issueImagePaths.first,
+        'issue_image_path': encodeStoragePathList(issueImagePaths),
+        'fix_image_path': encodeStoragePathList(fixImagePaths),
         'default_answer': defaultAnswer,
         'is_custom': isCustom,
         'overdue_after_days': overdueAfterDays,
@@ -110,9 +205,9 @@ class InspectionItem {
   Map<String, dynamic> toUpdateJson() => {
         'response': response?.dbValue,
         'actions_taken': actionsTaken,
-        'image_path': issueImagePath ?? imagePath,
-        'issue_image_path': issueImagePath,
-        'fix_image_path': fixImagePath,
+        'image_path': issueImagePaths.isEmpty ? null : issueImagePaths.first,
+        'issue_image_path': encodeStoragePathList(issueImagePaths),
+        'fix_image_path': encodeStoragePathList(fixImagePaths),
         'default_answer': defaultAnswer,
         'overdue_after_days': overdueAfterDays,
       };

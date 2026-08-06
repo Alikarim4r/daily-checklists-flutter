@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:checklist_shared/checklist_shared.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,11 +17,13 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   ChecklistChrome.use(ChecklistBrand.entry);
   await bootstrapSupabase();
+  await OfflineInspectionQueue.init();
   final prefs = await SharedPreferences.getInstance();
   runApp(
     ProviderScope(
       overrides: [
         sharedPreferencesProvider.overrideWithValue(prefs),
+        sessionSecurityAppKeyProvider.overrideWithValue('entry'),
       ],
       child: const EntryRoot(),
     ),
@@ -57,7 +60,9 @@ class _EntryRootState extends ConsumerState<EntryRoot> {
       themeMode: themeMode,
       builder: (context, child) => Directionality(
         textDirection: rtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-        child: child ?? const SizedBox.shrink(),
+        child: ChecklistAppBackground(
+          child: child ?? const SizedBox.shrink(),
+        ),
       ),
       home: ChecklistAuthGate(
         appTitle: labels.login,
@@ -151,6 +156,79 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
     );
   }
 
+  Future<void> _syncOfflineQueue() async {
+    final pending = OfflineInspectionQueue.instance.pending();
+    if (pending.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            widget.language == 'ar' ? 'لا توجد عناصر للمزامنة' : 'Nothing to sync',
+          ),
+        ),
+      );
+      return;
+    }
+    var okCount = 0;
+    for (final entry in pending) {
+      try {
+        final payload = entry.value;
+        final id = payload['inspectionId'] as String;
+        final full = await ref.read(inspectionRepositoryProvider).getById(id);
+        if (full == null) continue;
+        full.inspectorName = (payload['inspectorName'] as String?) ?? full.inspectorName;
+        full.inspectionTime =
+            (payload['inspectionTime'] as String?) ?? full.inspectionTime;
+        full.floorLabel = (payload['floorLabel'] as String?) ?? full.floorLabel;
+        full.signaturePath =
+            (payload['signaturePath'] as String?) ?? full.signaturePath;
+        final itemsRaw = payload['items'] as List? ?? const [];
+        for (final raw in itemsRaw) {
+          final map = Map<String, dynamic>.from(raw as Map);
+          final index = map['item_index'] as int?;
+          InspectionItem? match;
+          if (index != null) {
+            for (final item in full.items) {
+              if (item.itemIndex == index) {
+                match = item;
+                break;
+              }
+            }
+          }
+          if (match != null) {
+            match.response =
+                ChecklistResponse.fromDb(map['response'] as String?);
+            match.actionsTaken = (map['actions_taken'] as String?) ?? '';
+            match.setIssueImagePaths(
+              decodeStoragePathList(map['issue_image_path'] as String?),
+            );
+            match.setFixImagePaths(
+              decodeStoragePathList(map['fix_image_path'] as String?),
+            );
+          }
+        }
+        await ref.read(inspectionRepositoryProvider).saveItems(full);
+        if (payload['action'] == 'submit' && !full.isSubmitted) {
+          await ref.read(inspectionRepositoryProvider).submit(full.id);
+        }
+        await OfflineInspectionQueue.instance.remove(entry.key);
+        okCount++;
+      } catch (_) {
+        // keep in queue for next attempt
+      }
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          widget.language == 'ar'
+              ? 'تمت مزامنة $okCount عنصر'
+              : 'Synced $okCount item(s)',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final name = widget.profile.fullName.isEmpty
@@ -167,6 +245,15 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
       appBar: checklistGradientAppBar(
         title: L.mySites,
         actions: [
+          IconButton(
+            tooltip: widget.language == 'ar' ? 'مزامنة' : 'Sync',
+            onPressed: _syncOfflineQueue,
+            icon: Badge(
+              isLabelVisible: OfflineInspectionQueue.instance.pendingCount > 0,
+              label: Text('${OfflineInspectionQueue.instance.pendingCount}'),
+              child: const Icon(Icons.sync),
+            ),
+          ),
           IconButton(
             onPressed: _loadSites,
             icon: const Icon(Icons.refresh),
@@ -283,6 +370,7 @@ class EntryCampusScreen extends ConsumerWidget {
     return Scaffold(
       appBar: checklistGradientAppBar(
         title: group.titleFor(language),
+        leading: checklistBackButton(context),
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
@@ -582,6 +670,41 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen> {
     return false;
   }
 
+  Future<bool> _isOnline() async {
+    try {
+      final results = await Connectivity().checkConnectivity();
+      if (results.isEmpty) return false;
+      return results.any((r) => r != ConnectivityResult.none);
+    } catch (_) {
+      return true;
+    }
+  }
+
+  Future<void> _enqueueOffline(Inspection current, {required String action}) async {
+    await OfflineInspectionQueue.instance.enqueue(
+      localId: '${current.id}_$action',
+      payload: {
+        'action': action,
+        'inspectionId': current.id,
+        'inspectorName': current.inspectorName,
+        'inspectionTime': current.inspectionTime,
+        'floorLabel': current.floorLabel,
+        'signaturePath': current.signaturePath,
+        'items': [
+          for (final item in current.items)
+            {
+              'id': item.id,
+              ...item.toUpdateJson(),
+              'item_index': item.itemIndex,
+              'description': item.description,
+              'description_ar': item.descriptionAr,
+              'is_custom': item.isCustom,
+            },
+        ],
+      },
+    );
+  }
+
   Future<void> _save() async {
     final current = inspection;
     if (current == null || current.isSubmitted) return;
@@ -592,6 +715,21 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen> {
           (current.signaturePath == null || current.signaturePath!.isEmpty)) {
         // Saving answers without signature is allowed; submit requires it.
       }
+      if (!await _isOnline()) {
+        await _enqueueOffline(current, action: 'save');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                language == 'ar'
+                    ? 'حُفظ محليًا — سيُزامَن عند توفر الشبكة'
+                    : 'Saved offline — will sync when online',
+              ),
+            ),
+          );
+        }
+        return;
+      }
       await ref.read(inspectionRepositoryProvider).saveItems(current);
       await _loadHistory(current);
       await _refreshSignaturePreview();
@@ -601,7 +739,19 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen> {
         );
       }
     } catch (e) {
-      setState(() => message = e.toString());
+      await _enqueueOffline(current, action: 'save');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              language == 'ar'
+                  ? 'حُفظ محليًا — سيُزامَن عند توفر الشبكة'
+                  : 'Saved offline — will sync when online',
+            ),
+          ),
+        );
+      }
+      setState(() => message = null);
     } finally {
       if (mounted) setState(() => saving = false);
     }
@@ -645,6 +795,21 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen> {
     if (ok != true) return;
     setState(() => saving = true);
     try {
+      if (!await _isOnline()) {
+        await _enqueueOffline(current, action: 'submit');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                language == 'ar'
+                    ? 'تجهيز الإرسال محليًا — سيُزامَن عند توفر الشبكة'
+                    : 'Queued for submit — will sync when online',
+              ),
+            ),
+          );
+        }
+        return;
+      }
       await ref.read(inspectionRepositoryProvider).saveItems(current);
       await ref.read(inspectionRepositoryProvider).submit(current.id);
       final full =
@@ -657,7 +822,19 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen> {
         );
       }
     } catch (e) {
-      setState(() => message = e.toString());
+      await _enqueueOffline(current, action: 'submit');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              language == 'ar'
+                  ? 'تجهيز الإرسال محليًا — سيُزامَن عند توفر الشبكة'
+                  : 'Queued for submit — will sync when online',
+            ),
+          ),
+        );
+      }
+      setState(() => message = null);
     } finally {
       if (mounted) setState(() => saving = false);
     }
@@ -682,19 +859,19 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen> {
           ? widget.site.organizationId
           : current.organizationId;
       final kind = isIssue ? 'issue' : 'fix';
+      final stamp = DateTime.now().millisecondsSinceEpoch;
       final path = await ref.read(inspectionRepositoryProvider).uploadBytes(
             organizationId: orgId,
             siteId: widget.site.id,
             inspectionId: current.id,
-            fileName: '${item.itemIndex}_$kind.jpg',
+            fileName: '${item.itemIndex}_${kind}_$stamp.jpg',
             bytes: bytes,
           );
       setState(() {
         if (isIssue) {
-          item.issueImagePath = path;
-          item.imagePath = path;
+          item.appendIssueImage(path);
         } else {
-          item.fixImagePath = path;
+          item.appendFixImage(path);
         }
       });
       await ref.read(inspectionRepositoryProvider).saveItems(current);
@@ -751,7 +928,8 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen> {
     final locked = inspection?.isSubmitted == true;
     final site = widget.site;
     return Scaffold(
-      drawer: ChecklistSettingsDrawer(
+      // endDrawer keeps the AppBar leading free for Back (drawer would steal it).
+      endDrawer: ChecklistSettingsDrawer(
         profile: widget.profile,
         language: language,
         onLanguageChanged: _setLanguage,
@@ -760,11 +938,12 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen> {
       ),
       appBar: checklistGradientAppBar(
         title: site.buildingCode,
+        leading: checklistBackButton(context),
         actions: [
           Builder(
             builder: (ctx) => IconButton(
               tooltip: language == 'ar' ? 'الإعدادات' : 'Settings',
-              onPressed: () => Scaffold.of(ctx).openDrawer(),
+              onPressed: () => Scaffold.of(ctx).openEndDrawer(),
               icon: const Icon(Icons.settings_outlined),
             ),
           ),
@@ -933,9 +1112,17 @@ class _SignatureCard extends StatelessWidget {
 
   Widget _previewChild() {
     if (previewBytes != null && previewBytes!.isNotEmpty) {
-      return Image.memory(previewBytes!, fit: BoxFit.contain);
+      return Image.memory(
+        previewBytes!,
+        fit: BoxFit.fill,
+        alignment: Alignment.center,
+      );
     }
-    return Image.network(previewUrl!, fit: BoxFit.contain);
+    return Image.network(
+      previewUrl!,
+      fit: BoxFit.fill,
+      alignment: Alignment.center,
+    );
   }
 
   @override
@@ -964,13 +1151,26 @@ class _SignatureCard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           if (_hasPreview && readOnly)
-            SizedBox(height: 120, child: _previewChild())
+            SizedBox(
+              height: 160,
+              width: double.infinity,
+              child: FittedBox(
+                fit: BoxFit.fill,
+                child: SizedBox(
+                  width: 400,
+                  height: 160,
+                  child: _previewChild(),
+                ),
+              ),
+            )
           else if (!readOnly)
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: Container(
-                height: 160,
-                color: Colors.white,
+              child: SizedBox(
+                height: 200,
+                width: double.infinity,
+                // Do not pass width/height to [Signature] — that wraps in
+                // Center/LimitedBox and leaves the top of the pad untouchable.
                 child: Signature(
                   controller: controller,
                   backgroundColor: Colors.white,

@@ -20,6 +20,7 @@ Future<void> main() async {
     ProviderScope(
       overrides: [
         sharedPreferencesProvider.overrideWithValue(prefs),
+        sessionSecurityAppKeyProvider.overrideWithValue('admin'),
       ],
       child: const AdminRoot(),
     ),
@@ -55,7 +56,9 @@ class _AdminRootState extends ConsumerState<AdminRoot> {
       themeMode: themeMode,
       builder: (context, child) => Directionality(
         textDirection: rtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-        child: child ?? const SizedBox.shrink(),
+        child: ChecklistAppBackground(
+          child: child ?? const SizedBox.shrink(),
+        ),
       ),
       home: ChecklistAuthGate(
         appTitle: language == 'ar' ? 'إدارة الفحص اليومي' : 'Checklist Admin',
@@ -121,7 +124,7 @@ class _AdminShellState extends ConsumerState<AdminShell> {
         profile: p,
         language: widget.language,
         onLanguageChanged: widget.onLanguageChanged,
-        languages: const ['en', 'ar'],
+        languages: supportedLanguages,
         appIconAsset: 'assets/branding/app_icon_simple.png',
         advancedItems: [
           ListTile(

@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'checklist_app_background.dart';
+
 /// Centers content on a printable A4-width paper sheet (210×297 mm proportions).
 ///
 /// Height grows with content (multi-page feel) while width stays A4.
@@ -27,8 +29,8 @@ class A4PaperSheet extends StatelessWidget {
     final screenW = MediaQuery.sizeOf(context).width;
     final width = math.min(maxWidth, screenW - 24);
 
-    return ColoredBox(
-      color: background,
+    return ChecklistAppBackground(
+      opacity: 0.11,
       child: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 12),

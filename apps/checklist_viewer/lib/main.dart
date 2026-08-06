@@ -5,6 +5,7 @@ import 'package:checklist_shared/checklist_shared.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -19,6 +20,7 @@ Future<void> main() async {
     ProviderScope(
       overrides: [
         sharedPreferencesProvider.overrideWithValue(prefs),
+        sessionSecurityAppKeyProvider.overrideWithValue('viewer'),
       ],
       child: const ViewerRoot(),
     ),
@@ -54,7 +56,9 @@ class _ViewerRootState extends ConsumerState<ViewerRoot> {
       themeMode: themeMode,
       builder: (context, child) => Directionality(
         textDirection: rtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-        child: child ?? const SizedBox.shrink(),
+        child: ChecklistAppBackground(
+          child: child ?? const SizedBox.shrink(),
+        ),
       ),
       home: ChecklistAuthGate(
         appTitle: language == 'ar' ? 'لوحة العرض والاعتماد' : 'Viewer & Review',
@@ -96,6 +100,8 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
   List<UserSiteAccess> myAccess = [];
   List<Inspection> records = [];
   String? siteFilter;
+  /// Mobile/tablet drill-down into a campus before choosing a checklist.
+  CampusChecklistGroup? browseCampus;
   DateTime date = DateTime.now();
   Inspection? selected;
   Set<int> overdueIndexes = {};
@@ -108,19 +114,72 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
 
   String get language => widget.language;
 
-  String _siteFilterLabel(ChecklistSite s) {
-    CampusChecklistGroup? group;
-    for (final g in campusGroups) {
-      if (g.checklists.any((c) => c.id == s.id)) {
-        group = g;
-        break;
-      }
+  bool get _canNavBack => browseCampus != null || siteFilter != null;
+
+  String get _appBarTitle {
+    if (browseCampus != null && siteFilter == null) {
+      return browseCampus!.titleFor(language);
     }
-    final campus = group?.campus?.nameFor(language);
-    if (campus == null || campus.isEmpty) {
-      return '${s.buildingCode} — ${s.nameFor(language)}';
+    if (siteFilter != null) {
+      final site = sites.where((s) => s.id == siteFilter).firstOrNull;
+      if (site != null) return site.buildingCode;
     }
-    return '$campus › ${s.buildingCode}';
+    return language == 'ar'
+        ? 'MOEHE — عرض الفحص'
+        : 'MOEHE — Inspection Viewer';
+  }
+
+  void _navBack() {
+    if (siteFilter != null && browseCampus != null) {
+      setState(() {
+        siteFilter = null;
+        selected = null;
+      });
+      _load();
+      return;
+    }
+    if (siteFilter != null && browseCampus == null) {
+      setState(() {
+        siteFilter = null;
+        selected = null;
+      });
+      _load();
+      return;
+    }
+    if (browseCampus != null) {
+      setState(() {
+        browseCampus = null;
+        siteFilter = null;
+        selected = null;
+      });
+      _load();
+    }
+  }
+
+  Future<void> _openCampus(CampusChecklistGroup group) async {
+    if (group.checklists.length == 1 && group.campus == null) {
+      setState(() {
+        browseCampus = null;
+        siteFilter = group.checklists.first.id;
+        selected = null;
+      });
+      await _load();
+      return;
+    }
+    setState(() {
+      browseCampus = group;
+      siteFilter = null;
+      selected = null;
+    });
+    await _load();
+  }
+
+  Future<void> _openChecklist(ChecklistSite site) async {
+    setState(() {
+      siteFilter = site.id;
+      selected = null;
+    });
+    await _load();
   }
 
   @override
@@ -166,10 +225,11 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
   bool get _canEditSelected {
     final insp = selected;
     if (insp == null) return false;
+    // Managers may edit awaiting-review and approved forms on the paper itself.
+    if (_canManageSelected()) return true;
     if (insp.reviewStatus == ReviewStatus.approved) return false;
     if (!insp.isSubmitted) return _canWriteSelected();
-    // Submitted awaiting approve: site_admin / super can edit.
-    return _isReviewer && _canManageSelected();
+    return false;
   }
 
   Future<void> _refreshOverdue(Inspection insp) async {
@@ -520,87 +580,6 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
     }
   }
 
-  Future<void> _correctItem(InspectionItem item) async {
-    if (selected == null || item.id == null || !_canManageSelected()) return;
-    // Prefer direct edit while awaiting review; corrections log for approved.
-    if (selected!.awaitingReview && _canEditSelected) {
-      return;
-    }
-    final responseCtrl = TextEditingController(
-      text: item.response?.dbValue ?? '',
-    );
-    final actionsCtrl = TextEditingController(text: item.actionsTaken);
-    final reasonCtrl = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('تصحيح بند ${item.itemIndex}'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: responseCtrl,
-              decoration: const InputDecoration(
-                labelText: 'الإجابة (yes/no/na)',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: actionsCtrl,
-              decoration: const InputDecoration(
-                labelText: 'الإجراءات',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: reasonCtrl,
-              decoration: const InputDecoration(
-                labelText: 'سبب التصحيح',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('إلغاء'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('حفظ التصحيح'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    final newResponse = ChecklistResponse.fromDb(responseCtrl.text.trim());
-    try {
-      await ref.read(correctionRepositoryProvider).correctItem(
-            inspectionId: selected!.id,
-            itemId: item.id!,
-            fieldName: 'response+actions_taken',
-            oldValue: '${item.response?.dbValue}|${item.actionsTaken}',
-            newValue: '${newResponse?.dbValue}|${actionsCtrl.text}',
-            reason: reasonCtrl.text,
-            itemPatch: {
-              'response': newResponse?.dbValue,
-              'actions_taken': actionsCtrl.text,
-            },
-          );
-      final full =
-          await ref.read(inspectionRepositoryProvider).getById(selected!.id);
-      if (full != null) {
-        setState(() => selected = full);
-        await _refreshOverdue(full);
-      }
-    } catch (e) {
-      setState(() => message = e.toString());
-    }
-  }
-
   Widget _filtersBar({required bool showActions}) {
     final canEdit = _canEditSelected;
     final canApprove = selected != null &&
@@ -632,42 +611,6 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
                   await _load();
                 },
               ),
-            SizedBox(
-              width: 300,
-              child: DropdownButtonFormField<String?>(
-                value: siteFilter,
-                isExpanded: true,
-                decoration: InputDecoration(
-                  labelText: language == 'ar'
-                      ? 'قوائم الفحص'
-                      : 'Checklists',
-                  border: const OutlineInputBorder(),
-                  isDense: true,
-                ),
-                items: [
-                  DropdownMenuItem(
-                    value: null,
-                    child: Text(
-                      language == 'ar'
-                          ? 'كل القوائم داخل المواقع'
-                          : 'All site checklists',
-                    ),
-                  ),
-                  for (final s in sites)
-                    DropdownMenuItem(
-                      value: s.id,
-                      child: Text(
-                        _siteFilterLabel(s),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                ],
-                onChanged: (v) async {
-                  setState(() => siteFilter = v);
-                  await _load();
-                },
-              ),
-            ),
             OutlinedButton.icon(
               onPressed: () async {
                 final picked = await showDatePicker(
@@ -709,9 +652,122 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
     );
   }
 
+  Widget _campusGroupsList() {
+    if (campusGroups.isEmpty) {
+      return Center(
+        child: Text(
+          language == 'ar' ? 'لا توجد مواقع' : 'No sites',
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+      itemCount: campusGroups.length,
+      itemBuilder: (context, i) {
+        final group = campusGroups[i];
+        return ChecklistBrandCard(
+          onTap: () => _openCampus(group),
+          child: Row(
+            children: [
+              ChecklistIconWell(
+                icon: group.campus != null
+                    ? Icons.account_balance_rounded
+                    : Icons.apartment_rounded,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      group.titleFor(language),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 16,
+                        color: ChecklistChrome.ink,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      language == 'ar'
+                          ? '${group.checklists.length} قوائم فحص'
+                          : '${group.checklists.length} checklists',
+                      style: TextStyle(
+                        color: ChecklistChrome.inkMuted,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: ChecklistChrome.accent),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _campusChecklistsList(CampusChecklistGroup group) {
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+      itemCount: group.checklists.length,
+      itemBuilder: (context, i) {
+        final site = group.checklists[i];
+        return ChecklistBrandCard(
+          onTap: () => _openChecklist(site),
+          child: Row(
+            children: [
+              ChecklistIconWell(icon: Icons.checklist_rtl_rounded),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      site.nameFor(language),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 16,
+                        color: ChecklistChrome.ink,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${site.buildingCode} · ${site.checklistType}',
+                      style: TextStyle(
+                        color: ChecklistChrome.inkMuted,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: ChecklistChrome.accent),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _mobileBrowseBody() {
+    if (browseCampus == null && siteFilter == null) {
+      return _campusGroupsList();
+    }
+    if (browseCampus != null && siteFilter == null) {
+      return _campusChecklistsList(browseCampus!);
+    }
+    return _recordsList();
+  }
+
   Widget _recordsList() {
     if (records.isEmpty) {
-      return const Center(child: Text('لا توجد سجلات فحص'));
+      return Center(
+        child: Text(
+          language == 'ar' ? 'لا توجد سجلات فحص' : 'No inspection records',
+        ),
+      );
     }
     return ListView.builder(
       itemCount: records.length,
@@ -731,54 +787,174 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
     );
   }
 
+  Future<void> _pickPhoto(InspectionItem item, {required bool isIssue}) async {
+    final current = selected;
+    if (current == null || !_canEditSelected) return;
+    try {
+      final file = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 70,
+        maxWidth: 1600,
+      );
+      if (file == null) return;
+      final bytes = await file.readAsBytes();
+      final orgId = current.organizationId;
+      final kind = isIssue ? 'issue' : 'fix';
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      final path = await ref.read(inspectionRepositoryProvider).uploadBytes(
+            organizationId: orgId,
+            siteId: current.siteId,
+            inspectionId: current.id,
+            fileName: '${item.itemIndex}_${kind}_$stamp.jpg',
+            bytes: bytes,
+          );
+      setState(() {
+        if (isIssue) {
+          item.appendIssueImage(path);
+        } else {
+          item.appendFixImage(path);
+        }
+      });
+      await ref.read(inspectionRepositoryProvider).saveItems(current);
+    } catch (e) {
+      if (mounted) setState(() => message = '$e');
+    }
+  }
+
+  Future<void> _clearPhoto(
+    InspectionItem item,
+    String path, {
+    required bool isIssue,
+  }) async {
+    final current = selected;
+    if (current == null || !_canEditSelected) return;
+    setState(() {
+      if (isIssue) {
+        item.removeIssueImage(path);
+      } else {
+        item.removeFixImage(path);
+      }
+    });
+    await ref.read(inspectionRepositoryProvider).saveItems(current);
+  }
+
+  Future<void> _addCustomItem() async {
+    final current = selected;
+    if (current == null || !_canEditSelected) return;
+    final en = TextEditingController();
+    final ar = TextEditingController();
+    var def = 'Y';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setLocal) => AlertDialog(
+          title: Text(language == 'ar' ? 'إضافة بند' : 'Add item'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: en,
+                decoration: InputDecoration(
+                  labelText: language == 'ar' ? 'الوصف (EN)' : 'Description (EN)',
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: ar,
+                decoration: InputDecoration(
+                  labelText: language == 'ar' ? 'الوصف (AR)' : 'Description (AR)',
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: def,
+                decoration: InputDecoration(
+                  labelText: language == 'ar' ? 'الإجابة المثالية' : 'Ideal answer',
+                  border: const OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'Y', child: Text('Yes / نعم')),
+                  DropdownMenuItem(value: 'N', child: Text('No / لا')),
+                ],
+                onChanged: (v) => setLocal(() => def = v ?? 'Y'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(language == 'ar' ? 'إلغاء' : 'Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(language == 'ar' ? 'إضافة' : 'Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    final desc = en.text.trim().isNotEmpty ? en.text.trim() : ar.text.trim();
+    if (desc.isEmpty) return;
+    final nextIndex = current.items.isEmpty
+        ? 1
+        : current.items.map((e) => e.itemIndex).reduce(math.max) + 1;
+    final item = InspectionItem(
+      itemIndex: nextIndex,
+      description: en.text.trim().isNotEmpty ? en.text.trim() : desc,
+      descriptionAr: ar.text.trim().isEmpty ? null : ar.text.trim(),
+      defaultAnswer: def,
+      isCustom: true,
+    );
+    setState(() => current.items.add(item));
+    await ref.read(inspectionRepositoryProvider).saveItems(current);
+    final full =
+        await ref.read(inspectionRepositoryProvider).getById(current.id);
+    if (full != null && mounted) {
+      setState(() => selected = full);
+      await _refreshOverdue(full);
+    }
+  }
+
   Widget _formPane() {
     if (selected == null) {
       return const ColoredBox(
-        color: Color(0xFFE5E7EB),
+        color: Color(0x00E5E7EB),
         child: Center(child: Text('اختر سجلًا لعرض النموذج على ورقة A4')),
       );
     }
     final canEdit = _canEditSelected;
-    final canCorrectApproved = selected!.isApproved && _canManageSelected();
     return A4PaperSheet(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ChecklistFormLayout(
-            inspection: selected!,
-            language: language,
-            forceTableLayout: true,
-            readOnly: !canEdit,
-            overdueItemIndexes: overdueIndexes,
-            onInspectorChanged: (v) =>
-                setState(() => selected!.inspectorName = v),
-            onTimeChanged: (v) =>
-                setState(() => selected!.inspectionTime = v),
-            onFloorChanged: (v) => setState(() => selected!.floorLabel = v),
-            onResponseChanged: (item, value) =>
-                setState(() => item.response = value),
-            onActionsChanged: (item, value) =>
-                setState(() => item.actionsTaken = value),
-          ),
-          if (canCorrectApproved) ...[
-            const SizedBox(height: 16),
-            const Divider(),
-            const Text(
-              'تصحيح بعد الاعتماد (صلاحية إدارة الموقع)',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            for (final item in selected!.items)
-              ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text('${item.itemIndex}. ${item.description}'),
-                trailing: IconButton(
-                  icon: const Icon(Icons.edit),
-                  onPressed: () => _correctItem(item),
-                ),
-              ),
-          ],
-        ],
+      child: ChecklistFormLayout(
+        inspection: selected!,
+        language: language,
+        forceTableLayout: true,
+        readOnly: !canEdit,
+        overdueItemIndexes: overdueIndexes,
+        onInspectorChanged: (v) =>
+            setState(() => selected!.inspectorName = v),
+        onTimeChanged: (v) =>
+            setState(() => selected!.inspectionTime = v),
+        onFloorChanged: (v) => setState(() => selected!.floorLabel = v),
+        onResponseChanged: (item, value) =>
+            setState(() => item.response = value),
+        onActionsChanged: (item, value) =>
+            setState(() => item.actionsTaken = value),
+        onPickIssuePhoto: canEdit
+            ? (item) => _pickPhoto(item, isIssue: true)
+            : null,
+        onPickFixPhoto: canEdit
+            ? (item) => _pickPhoto(item, isIssue: false)
+            : null,
+        onClearIssuePhoto: canEdit
+            ? (item, path) => _clearPhoto(item, path, isIssue: true)
+            : null,
+        onClearFixPhoto: canEdit
+            ? (item, path) => _clearPhoto(item, path, isIssue: false)
+            : null,
+        onAddItem: canEdit ? _addCustomItem : null,
       ),
     );
   }
@@ -790,13 +966,14 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
         profile: widget.profile,
         language: language,
         onLanguageChanged: widget.onLanguageChanged,
-        languages: const ['en', 'ar'],
+        languages: supportedLanguages,
         appIconAsset: 'assets/branding/app_icon_simple.png',
       ),
       appBar: checklistGradientAppBar(
-        title: language == 'ar'
-            ? 'MOEHE — عرض الفحص'
-            : 'MOEHE — Inspection Viewer',
+        title: _appBarTitle,
+        leading: _canNavBack
+            ? checklistBackButton(context, onPressed: _navBack)
+            : null,
         actions: [
           IconButton(
             tooltip: language == 'ar' ? 'المتابعة والإشراف' : 'Ops & Supervision',
@@ -841,12 +1018,12 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
                 : _wide
                     ? Row(
                         children: [
-                          SizedBox(width: 300, child: _recordsList()),
+                          SizedBox(width: 320, child: _mobileBrowseBody()),
                           const VerticalDivider(width: 1),
                           Expanded(child: _formPane()),
                         ],
                       )
-                    : _recordsList(),
+                    : _mobileBrowseBody(),
           ),
         ],
       ),
@@ -909,9 +1086,10 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
   }
 
   bool get _canEdit {
+    if (_canManage) return true;
     if (inspection.reviewStatus == ReviewStatus.approved) return false;
     if (!inspection.isSubmitted) return _canWrite;
-    return _isReviewer && _canManage;
+    return false;
   }
 
   Future<void> _loadOverdue() async {
@@ -1050,86 +1228,143 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
     }
   }
 
-  Future<void> _correctItem(InspectionItem item) async {
-    if (item.id == null || !_canManage || !inspection.isApproved) return;
-    final responseCtrl =
-        TextEditingController(text: item.response?.dbValue ?? '');
-    final actionsCtrl = TextEditingController(text: item.actionsTaken);
-    final reasonCtrl = TextEditingController();
+  Future<void> _pickPhoto(InspectionItem item, {required bool isIssue}) async {
+    if (!_canEdit) return;
+    try {
+      final file = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 70,
+        maxWidth: 1600,
+      );
+      if (file == null) return;
+      final bytes = await file.readAsBytes();
+      final kind = isIssue ? 'issue' : 'fix';
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      final path = await ref.read(inspectionRepositoryProvider).uploadBytes(
+            organizationId: inspection.organizationId,
+            siteId: inspection.siteId,
+            inspectionId: inspection.id,
+            fileName: '${item.itemIndex}_${kind}_$stamp.jpg',
+            bytes: bytes,
+          );
+      setState(() {
+        if (isIssue) {
+          item.appendIssueImage(path);
+        } else {
+          item.appendFixImage(path);
+        }
+      });
+      await ref.read(inspectionRepositoryProvider).saveItems(inspection);
+    } catch (e) {
+      if (mounted) setState(() => message = '$e');
+    }
+  }
+
+  Future<void> _clearPhoto(
+    InspectionItem item,
+    String path, {
+    required bool isIssue,
+  }) async {
+    if (!_canEdit) return;
+    setState(() {
+      if (isIssue) {
+        item.removeIssueImage(path);
+      } else {
+        item.removeFixImage(path);
+      }
+    });
+    await ref.read(inspectionRepositoryProvider).saveItems(inspection);
+  }
+
+  Future<void> _addCustomItem() async {
+    if (!_canEdit) return;
+    final ar = widget.language == 'ar';
+    final enCtrl = TextEditingController();
+    final arCtrl = TextEditingController();
+    var def = 'Y';
     final ok = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text('تصحيح بند ${item.itemIndex}'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: responseCtrl,
-              decoration: const InputDecoration(
-                labelText: 'الإجابة (yes/no/na)',
-                border: OutlineInputBorder(),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setLocal) => AlertDialog(
+          title: Text(ar ? 'إضافة بند' : 'Add item'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: enCtrl,
+                decoration: InputDecoration(
+                  labelText: ar ? 'الوصف (EN)' : 'Description (EN)',
+                  border: const OutlineInputBorder(),
+                ),
               ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: arCtrl,
+                decoration: InputDecoration(
+                  labelText: ar ? 'الوصف (AR)' : 'Description (AR)',
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: def,
+                decoration: InputDecoration(
+                  labelText: ar ? 'الإجابة المثالية' : 'Ideal answer',
+                  border: const OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'Y', child: Text('Yes / نعم')),
+                  DropdownMenuItem(value: 'N', child: Text('No / لا')),
+                ],
+                onChanged: (v) => setLocal(() => def = v ?? 'Y'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(ar ? 'إلغاء' : 'Cancel'),
             ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: actionsCtrl,
-              decoration: const InputDecoration(
-                labelText: 'الإجراءات',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: reasonCtrl,
-              decoration: const InputDecoration(
-                labelText: 'سبب التصحيح',
-                border: OutlineInputBorder(),
-              ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(ar ? 'إضافة' : 'Add'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('إلغاء'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('حفظ'),
-          ),
-        ],
       ),
     );
     if (ok != true) return;
-    final newResponse = ChecklistResponse.fromDb(responseCtrl.text.trim());
-    await ref.read(correctionRepositoryProvider).correctItem(
-          inspectionId: inspection.id,
-          itemId: item.id!,
-          fieldName: 'response+actions_taken',
-          oldValue: '${item.response?.dbValue}|${item.actionsTaken}',
-          newValue: '${newResponse?.dbValue}|${actionsCtrl.text}',
-          reason: reasonCtrl.text,
-          itemPatch: {
-            'response': newResponse?.dbValue,
-            'actions_taken': actionsCtrl.text,
-          },
-        );
+    final desc =
+        enCtrl.text.trim().isNotEmpty ? enCtrl.text.trim() : arCtrl.text.trim();
+    if (desc.isEmpty) return;
+    final nextIndex = inspection.items.isEmpty
+        ? 1
+        : inspection.items.map((e) => e.itemIndex).reduce(math.max) + 1;
+    final item = InspectionItem(
+      itemIndex: nextIndex,
+      description: enCtrl.text.trim().isNotEmpty ? enCtrl.text.trim() : desc,
+      descriptionAr: arCtrl.text.trim().isEmpty ? null : arCtrl.text.trim(),
+      defaultAnswer: def,
+      isCustom: true,
+    );
+    setState(() => inspection.items.add(item));
+    await ref.read(inspectionRepositoryProvider).saveItems(inspection);
     final full =
         await ref.read(inspectionRepositoryProvider).getById(inspection.id);
-    if (full != null) setState(() => inspection = full);
+    if (full != null && mounted) setState(() => inspection = full);
     await widget.onChanged();
   }
 
   @override
   Widget build(BuildContext context) {
     final canEdit = _canEdit;
-    final canCorrect = inspection.isApproved && _canManage;
     final canApprove =
         inspection.awaitingReview && _isReviewer && _canManage;
     return Scaffold(
-      backgroundColor: const Color(0xFFF3F4F6),
-      appBar: AppBar(
-        title: Text('${inspection.buildingCode} — ${inspection.dateIso}'),
+      backgroundColor: Colors.transparent,
+      appBar: checklistGradientAppBar(
+        title: '${inspection.buildingCode} — ${inspection.dateIso}',
+        leading: checklistBackButton(context),
         actions: [
           IconButton(
             tooltip: widget.language == 'ar' ? 'تصدير PDF' : 'Export PDF',
@@ -1178,7 +1413,11 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
                         );
                       }
                     } catch (e) {
-                      if (mounted) setState(() => message = '$e');
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('$e')),
+                        );
+                      }
                     }
                   },
             icon: const Icon(Icons.picture_as_pdf_outlined),
@@ -1210,44 +1449,35 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
             ),
           Expanded(
             child: A4PaperSheet(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  ChecklistFormLayout(
-                    inspection: inspection,
-                    language: widget.language,
-                    forceTableLayout: true,
-                    readOnly: !canEdit,
-                    overdueItemIndexes: overdueIndexes,
-                    onInspectorChanged: (v) =>
-                        setState(() => inspection.inspectorName = v),
-                    onTimeChanged: (v) =>
-                        setState(() => inspection.inspectionTime = v),
-                    onFloorChanged: (v) =>
-                        setState(() => inspection.floorLabel = v),
-                    onResponseChanged: (item, value) =>
-                        setState(() => item.response = value),
-                    onActionsChanged: (item, value) =>
-                        setState(() => item.actionsTaken = value),
-                  ),
-                  if (canCorrect) ...[
-                    const SizedBox(height: 16),
-                    const Divider(),
-                    const Text(
-                      'تصحيح بعد الاعتماد',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    for (final item in inspection.items)
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text('${item.itemIndex}. ${item.description}'),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.edit),
-                          onPressed: () => _correctItem(item),
-                        ),
-                      ),
-                  ],
-                ],
+              child: ChecklistFormLayout(
+                inspection: inspection,
+                language: widget.language,
+                forceTableLayout: true,
+                readOnly: !canEdit,
+                overdueItemIndexes: overdueIndexes,
+                onInspectorChanged: (v) =>
+                    setState(() => inspection.inspectorName = v),
+                onTimeChanged: (v) =>
+                    setState(() => inspection.inspectionTime = v),
+                onFloorChanged: (v) =>
+                    setState(() => inspection.floorLabel = v),
+                onResponseChanged: (item, value) =>
+                    setState(() => item.response = value),
+                onActionsChanged: (item, value) =>
+                    setState(() => item.actionsTaken = value),
+                onPickIssuePhoto: canEdit
+                    ? (item) => _pickPhoto(item, isIssue: true)
+                    : null,
+                onPickFixPhoto: canEdit
+                    ? (item) => _pickPhoto(item, isIssue: false)
+                    : null,
+                onClearIssuePhoto: canEdit
+                    ? (item, path) => _clearPhoto(item, path, isIssue: true)
+                    : null,
+                onClearFixPhoto: canEdit
+                    ? (item, path) => _clearPhoto(item, path, isIssue: false)
+                    : null,
+                onAddItem: canEdit ? _addCustomItem : null,
               ),
             ),
           ),

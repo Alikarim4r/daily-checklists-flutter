@@ -20,6 +20,10 @@ dependencies:
   pdf: ^3.11.3
   printing: ^5.14.2
   url_launcher: ^6.3.1
+  local_auth: ^2.3.0
+  flutter_secure_storage: ^9.2.4
+  hive_flutter: ^1.1.0
+  connectivity_plus: ^6.1.4
 
 dev_dependencies:
   flutter_test:
@@ -33,6 +37,7 @@ flutter:
     - assets/branding/moehe_logo_drive.png
     - assets/branding/logo_waseef.png
     - assets/branding/logo_footer2.png
+    - assets/branding/bg_watermark.jpg
     - assets/ui_labels.json
     - assets/buildings.json
     - assets/checklist_lists.json

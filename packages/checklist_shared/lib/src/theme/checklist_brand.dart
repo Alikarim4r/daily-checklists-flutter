@@ -155,10 +155,7 @@ abstract final class ChecklistChrome {
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
-      scaffoldBackgroundColor: Color.alphaBlend(
-        accentSoft.withValues(alpha: 0.35),
-        const Color(0xFFF5F7F8),
-      ),
+      scaffoldBackgroundColor: Colors.transparent,
       appBarTheme: AppBarTheme(
         backgroundColor: primary,
         foregroundColor: onAccent,
@@ -266,7 +263,8 @@ PreferredSizeWidget checklistGradientAppBar({
   required String title,
   List<Widget>? actions,
   Widget? leading,
-  preferredSize = const Size.fromHeight(kToolbarHeight),
+  bool automaticallyImplyLeading = true,
+  Size preferredSize = const Size.fromHeight(kToolbarHeight),
 }) {
   return PreferredSize(
     preferredSize: preferredSize,
@@ -275,11 +273,30 @@ PreferredSizeWidget checklistGradientAppBar({
       child: AppBar(
         title: Text(title),
         actions: actions,
+        // Only pass [leading] when set — explicit null used to suppress
+        // imply + Drawer stealing the back affordance.
         leading: leading,
+        automaticallyImplyLeading:
+            leading == null && automaticallyImplyLeading,
         backgroundColor: Colors.transparent,
         foregroundColor: ChecklistChrome.onAccent,
         elevation: 0,
       ),
     ),
+  );
+}
+
+/// Prefer this over relying on [AppBar.automaticallyImplyLeading] when the
+/// scaffold also has a [Drawer] (drawer steals the leading slot).
+Widget checklistBackButton(
+  BuildContext context, {
+  VoidCallback? onPressed,
+  Color? color,
+}) {
+  return IconButton(
+    icon: const Icon(Icons.arrow_back),
+    color: color ?? ChecklistChrome.onAccent,
+    tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+    onPressed: onPressed ?? () => Navigator.of(context).maybePop(),
   );
 }

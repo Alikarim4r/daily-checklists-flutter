@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/enums.dart';
 import '../models/profile.dart';
 import '../providers/providers.dart';
+import '../providers/session_security_provider.dart';
 import '../theme/viewer_palette.dart';
 
 typedef ProfilePredicate = bool Function(Profile profile);
@@ -68,13 +69,49 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
       error = null;
     });
     try {
+      final mail = (overrideEmail ?? email.text).trim();
+      final pass = overridePassword ?? password.text;
       await ref.read(authRepositoryProvider).signIn(
-            email: overrideEmail ?? email.text,
-            password: overridePassword ?? password.text,
+            email: mail,
+            password: pass,
+          );
+      await ref.read(sessionSecurityProvider.notifier).onPasswordSignIn(
+            email: mail,
+            password: pass,
           );
       ref.invalidate(currentProfileProvider);
     } catch (e) {
       setState(() => error = e.toString());
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  Future<void> _biometricQuickSignIn() async {
+    final security = ref.read(sessionSecurityProvider);
+    final ar = Directionality.of(context) == TextDirection.rtl;
+    setState(() {
+      loading = true;
+      error = null;
+    });
+    try {
+      final ok = await ref.read(sessionSecurityProvider.notifier).unlock(
+            reason: ar
+                ? 'استخدم ${security.biometricLabel} لتسجيل الدخول'
+                : 'Use ${security.biometricLabel} to sign in',
+          );
+      if (!ok) {
+        setState(() => error = ar ? 'فشل التحقق بالبصمة' : 'Biometric failed');
+        return;
+      }
+      final creds =
+          await ref.read(sessionSecurityProvider.notifier).storedCredentials();
+      if (creds == null) {
+        setState(() =>
+            error = ar ? 'لا توجد بيانات محفوظة' : 'No saved credentials');
+        return;
+      }
+      await _signIn(overrideEmail: creds.email, overridePassword: creds.password);
     } finally {
       if (mounted) setState(() => loading = false);
     }
@@ -149,14 +186,67 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
                       profile,
                     );
                   }
-                  return widget.homeBuilder(context, profile);
+                  return _maybeBiometricGate(
+                    context,
+                    widget.homeBuilder(context, profile),
+                  );
                 },
               );
             }
-            return widget.homeBuilder(context, profile);
+            return _maybeBiometricGate(
+              context,
+              widget.homeBuilder(context, profile),
+            );
           },
         );
       },
+    );
+  }
+
+  Widget _maybeBiometricGate(BuildContext context, Widget home) {
+    final security = ref.watch(sessionSecurityProvider);
+    if (!security.ready) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (!security.requiresUnlock) return home;
+    final ar = Directionality.of(context) == TextDirection.rtl;
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.fingerprint, size: 56, color: ViewerPalette.orange),
+              const SizedBox(height: 16),
+              Text(
+                ar
+                    ? 'افتح التطبيق عبر ${security.biometricLabel}'
+                    : 'Unlock with ${security.biometricLabel}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: () async {
+                  await ref.read(sessionSecurityProvider.notifier).unlock(
+                        reason: ar
+                            ? 'استخدم ${security.biometricLabel} للمتابعة'
+                            : 'Use ${security.biometricLabel} to continue',
+                      );
+                },
+                icon: const Icon(Icons.fingerprint),
+                label: Text(ar ? 'فتح' : 'Unlock'),
+              ),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: () => ref.read(authRepositoryProvider).signOut(),
+                child: Text(ar ? 'تسجيل الخروج' : 'Sign out'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -252,6 +342,34 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
                             )
                           : const Text('دخول'),
                     ),
+                  ),
+                  Builder(
+                    builder: (context) {
+                      final security = ref.watch(sessionSecurityProvider);
+                      if (!security.ready ||
+                          !security.biometricEnabled ||
+                          !security.canUseBiometrics) {
+                        return const SizedBox.shrink();
+                      }
+                      final ar =
+                          Directionality.of(context) == TextDirection.rtl;
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed:
+                                loading ? null : _biometricQuickSignIn,
+                            icon: const Icon(Icons.fingerprint),
+                            label: Text(
+                              ar
+                                  ? 'دخول عبر ${security.biometricLabel}'
+                                  : 'Continue with ${security.biometricLabel}',
+                            ),
+                          ),
+                        ),
+                      );
+                    },
                   ),
                   if (_demoEnabled) ...[
                     const SizedBox(height: 12),

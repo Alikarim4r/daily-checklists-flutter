@@ -6,6 +6,7 @@ import '../l10n/app_labels.dart';
 import '../models/profile.dart';
 import '../providers/preferences_providers.dart';
 import '../providers/providers.dart';
+import '../providers/session_security_provider.dart';
 import '../theme/checklist_brand.dart';
 
 /// Settings drawer aligned with smart-meters entry/admin drawers.
@@ -124,17 +125,33 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                 const SizedBox(height: 20),
                 _section(ar ? 'اللغة' : 'Language', Icons.translate_outlined),
                 const SizedBox(height: 8),
-                SegmentedButton<String>(
-                  segments: [
+                DropdownButtonFormField<String>(
+                  value: languages.contains(language)
+                      ? language
+                      : languages.first,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                    prefixIcon: Icon(Icons.language_outlined, size: 20),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                  ),
+                  items: [
                     for (final code in languages)
-                      ButtonSegment(
+                      DropdownMenuItem(
                         value: code,
-                        label: Text(languageDisplayNames[code] ?? code),
+                        child: Text(
+                          languageDisplayNames[code] ?? code,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                   ],
-                  selected: {language},
-                  showSelectedIcon: false,
-                  onSelectionChanged: (s) => onLanguageChanged(s.first),
+                  onChanged: (code) {
+                    if (code != null) onLanguageChanged(code);
+                  },
                 ),
                 const SizedBox(height: 20),
                 _section(ar ? 'الحساب' : 'Account', Icons.person_outline),
@@ -144,6 +161,8 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                   title: Text(ar ? 'تغيير كلمة المرور' : 'Change password'),
                   onTap: () => _changePassword(context, ref, ar),
                 ),
+                const SizedBox(height: 8),
+                _biometricTile(context, ref, ar),
                 const SizedBox(height: 12),
                 _section(ar ? 'حول التطبيق' : 'About', Icons.info_outline),
                 const SizedBox(height: 6),
@@ -220,6 +239,80 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _biometricTile(BuildContext context, WidgetRef ref, bool ar) {
+    final security = ref.watch(sessionSecurityProvider);
+    if (!security.ready) return const SizedBox.shrink();
+    if (!security.canUseBiometrics) {
+      return ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: const Icon(Icons.fingerprint),
+        title: Text(
+          ar
+              ? 'الجهاز لا يدعم البصمة أو Face ID'
+              : 'This device has no fingerprint or Face ID',
+        ),
+      );
+    }
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      secondary: const Icon(Icons.fingerprint),
+      title: Text(
+        ar
+            ? 'الدخول عبر ${security.biometricLabel}'
+            : 'Sign in with ${security.biometricLabel}',
+      ),
+      value: security.biometricEnabled,
+      onChanged: (enabled) async {
+        if (!enabled) {
+          await ref.read(sessionSecurityProvider.notifier).disableBiometrics();
+          return;
+        }
+        final pwd = TextEditingController();
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(
+              ar
+                  ? 'تفعيل ${security.biometricLabel}'
+                  : 'Enable ${security.biometricLabel}',
+            ),
+            content: TextField(
+              controller: pwd,
+              obscureText: true,
+              decoration: InputDecoration(
+                labelText: ar ? 'كلمة المرور' : 'Password',
+                border: const OutlineInputBorder(),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text(ar ? 'إلغاء' : 'Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: Text(ar ? 'متابعة' : 'Continue'),
+              ),
+            ],
+          ),
+        );
+        if (ok != true || !context.mounted) return;
+        final err =
+            await ref.read(sessionSecurityProvider.notifier).enableBiometrics(
+                  email: profile.email,
+                  password: pwd.text,
+                  reason: ar
+                      ? 'أكد عبر ${security.biometricLabel}'
+                      : 'Confirm with ${security.biometricLabel}',
+                );
+        if (err != null && context.mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(err)));
+        }
+      },
     );
   }
 

@@ -96,6 +96,7 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
     return Scaffold(
       appBar: checklistGradientAppBar(
         title: ar ? 'المتابعة والإشراف' : 'Ops & Supervision',
+        leading: checklistBackButton(context),
         actions: [
           IconButton(
             tooltip: ar ? 'تحديث' : 'Refresh',

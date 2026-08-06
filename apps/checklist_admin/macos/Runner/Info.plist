@@ -28,5 +28,7 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Face ID / Touch ID is used to unlock the app securely.</string>
 </dict>
 </plist>
