@@ -14,11 +14,31 @@ dependencies:
     path: ../../packages/checklist_shared
   flutter_riverpod: ^2.6.1
   intl: ^0.20.2
+  shared_preferences: ^2.5.3
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  remove_alpha_ios: true
+  image_path: assets/branding/app_icon_simple.png
+  adaptive_icon_background: "#6B7280"
+  adaptive_icon_foreground: assets/branding/app_icon_simple.png
+  macos:
+    generate: true
+    image_path: assets/branding/app_icon_simple.png
+  web:
+    generate: true
+    image_path: assets/branding/app_icon_simple.png
+    background_color: "#6B7280"
+    theme_color: "#6B7280"
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/branding/app_icon_simple.png

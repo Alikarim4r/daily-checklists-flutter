@@ -44,6 +44,12 @@ ${debug_extra}	<key>com.apple.security.network.client</key>
 	<true/>
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
+	<key>com.apple.security.files.downloads.read-write</key>
+	<true/>
+	<key>com.apple.security.personal-information.photos-library</key>
+	<true/>
+	<key>com.apple.security.print</key>
+	<true/>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>\$(AppIdentifierPrefix)${BUNDLE_ID}</string>
@@ -75,9 +81,38 @@ PY
 
 cd "$APP_ROOT"
 flutter pub get >/dev/null
+
+# Prefer flutter build; if provisioning blocks it, fall back to xcodebuild
+# with -allowProvisioningUpdates (needed after macOS/Xcode profile refresh).
+set +e
 flutter build macos --debug "${DART_DEFINES[@]}"
+BUILD_RC=$?
+set -e
+if [[ $BUILD_RC -ne 0 ]]; then
+  echo "flutter build failed ($BUILD_RC); retrying with xcodebuild -allowProvisioningUpdates…"
+  flutter build macos --config-only --debug "${DART_DEFINES[@]}"
+  (
+    cd "$APP_ROOT/macos"
+    xcodebuild -workspace Runner.xcworkspace -scheme Runner -configuration Debug \
+      -destination 'platform=macOS' \
+      CODE_SIGN_STYLE=Automatic \
+      DEVELOPMENT_TEAM="$TEAM" \
+      CODE_SIGN_IDENTITY='Apple Development' \
+      -allowProvisioningUpdates \
+      build
+  )
+fi
 
 BUILT="$APP_ROOT/build/macos/Build/Products/Debug/${PRODUCT}.app"
+if [[ ! -d "$BUILT" ]]; then
+  # xcodebuild may only refresh DerivedData — copy from there
+  DERIVED=$(ls -td "$HOME"/Library/Developer/Xcode/DerivedData/Runner-*/Build/Products/Debug/"${PRODUCT}.app" 2>/dev/null | head -1 || true)
+  if [[ -n "${DERIVED:-}" && -d "$DERIVED" ]]; then
+    mkdir -p "$(dirname "$BUILT")"
+    rm -rf "$BUILT"
+    cp -R "$DERIVED" "$BUILT"
+  fi
+fi
 if [[ ! -d "$BUILT" ]]; then
   echo "Built app not found: $BUILT" >&2
   exit 1
@@ -88,6 +123,8 @@ codesign -dvv "$BUILT" 2>&1 | grep -E 'Authority|TeamIdentifier|Identifier' || t
 pkill -f "/${PRODUCT}.app/" 2>/dev/null || true
 rm -rf "$HOME/Applications/${PRODUCT}.app"
 cp -R "$BUILT" "$HOME/Applications/${PRODUCT}.app"
+# Keep original signature — do not ad-hoc re-sign (breaks launch).
+xattr -cr "$HOME/Applications/${PRODUCT}.app" 2>/dev/null || true
 echo "Installed: $HOME/Applications/${PRODUCT}.app"
 echo "FROM: $BUILT"
 echo "SUPABASE: $SUPABASE_URL"

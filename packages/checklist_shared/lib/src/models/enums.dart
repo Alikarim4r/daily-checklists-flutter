@@ -130,6 +130,26 @@ enum InspectionStatus {
       );
 }
 
+enum ReviewStatus {
+  draft('draft'),
+  submitted('submitted'),
+  approved('approved');
+
+  const ReviewStatus(this.dbValue);
+  final String dbValue;
+
+  static ReviewStatus fromDb(String? value) => ReviewStatus.values.firstWhere(
+        (e) => e.dbValue == value,
+        orElse: () => ReviewStatus.draft,
+      );
+
+  String get labelAr => switch (this) {
+        ReviewStatus.draft => 'مسودة',
+        ReviewStatus.submitted => 'بانتظار الاعتماد',
+        ReviewStatus.approved => 'معتمد',
+      };
+}
+
 /// Field-app gate: require at least one readable / writable site.
 enum SiteAccessRequirement {
   none,

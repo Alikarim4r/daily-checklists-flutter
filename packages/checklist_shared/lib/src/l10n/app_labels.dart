@@ -66,4 +66,36 @@ class AppLabels {
   String get previousAnswer => call('previousAnswer', 'Previous');
   String get persistentProblem =>
       call('persistentProblem', 'Persistent problem');
+  String get takeFixPhoto => call('takeFixPhoto', 'Take Repair Photo');
+  String get photoFixRequired =>
+      call('photoFixRequired', 'Photo of repair required');
+  String get photoRequiredMessage => call(
+        'photoRequiredMessage',
+        'Please attach a photo because there is a problem.',
+      );
+  String get photoFixMessage => call(
+        'photoFixMessage',
+        'Item has been repaired. Please attach a repair photo.',
+      );
+  String get previousIssue => call('previousIssue', 'Previous Problem');
+  String get repairPhoto => call('repairPhoto', 'Repair Photo');
+  String get problemIndicator => call('problemIndicator', 'Problem');
+  String get idealIndicator => call('idealIndicator', 'Ideal');
+  String get chooseSite => call('building', 'Choose a site');
+  String get mySites =>
+      language == 'ar' ? 'مواقعي' : 'My sites';
+  String get selectSiteHint => language == 'ar'
+      ? 'اختر الموقع ثم قائمة الفحص داخل الموقع'
+      : 'Select a site, then a checklist inside the site';
+  String get siteChecklists =>
+      language == 'ar' ? 'قوائم الفحص داخل الموقع' : 'Checklists at this site';
+  String get selectChecklistHint => language == 'ar'
+      ? 'اختر قائمة الفحص للمبنى أو المنطقة'
+      : 'Select a building or area checklist';
+  String get send => call('submit', 'Submit');
+  String get awaitingApproval =>
+      call('editingRecord', 'Submitted — awaiting approval');
+  String get overdue => call('persistentProblem', 'Overdue');
+  String get actions => call('remarks', 'Remarks / Actions');
+  String get welcome => call('welcomeBack', 'Welcome');
 }

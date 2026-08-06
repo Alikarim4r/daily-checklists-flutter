@@ -28,5 +28,9 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Photos are attached to inspection problem and repair records.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera may be used to capture inspection photos.</string>
 </dict>
 </plist>

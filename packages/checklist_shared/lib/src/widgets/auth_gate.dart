@@ -41,6 +41,20 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
   bool loading = false;
   String? error;
 
+  /// Temporary trial login (staging/demo only). Remove when real auth is ready.
+  static const _demoEnabled = bool.fromEnvironment(
+    'DEMO_LOGIN',
+    defaultValue: true,
+  );
+  static const _demoEmail = String.fromEnvironment(
+    'DEMO_EMAIL',
+    defaultValue: 'alikarim4r@gmail.com',
+  );
+  static const _demoPassword = String.fromEnvironment(
+    'DEMO_PASSWORD',
+    defaultValue: 'DemoTemp2026!',
+  );
+
   @override
   void dispose() {
     email.dispose();
@@ -48,15 +62,15 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
     super.dispose();
   }
 
-  Future<void> _signIn() async {
+  Future<void> _signIn({String? overrideEmail, String? overridePassword}) async {
     setState(() {
       loading = true;
       error = null;
     });
     try {
       await ref.read(authRepositoryProvider).signIn(
-            email: email.text,
-            password: password.text,
+            email: overrideEmail ?? email.text,
+            password: overridePassword ?? password.text,
           );
       ref.invalidate(currentProfileProvider);
     } catch (e) {
@@ -64,6 +78,12 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
     } finally {
       if (mounted) setState(() => loading = false);
     }
+  }
+
+  Future<void> _demoSignIn() async {
+    email.text = _demoEmail;
+    password.text = _demoPassword;
+    await _signIn(overrideEmail: _demoEmail, overridePassword: _demoPassword);
   }
 
   @override
@@ -223,7 +243,7 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
                         backgroundColor: ViewerPalette.orange,
                         minimumSize: const Size.fromHeight(48),
                       ),
-                      onPressed: loading ? null : _signIn,
+                      onPressed: loading ? null : () => _signIn(),
                       child: loading
                           ? const SizedBox(
                               width: 22,
@@ -233,6 +253,22 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
                           : const Text('دخول'),
                     ),
                   ),
+                  if (_demoEnabled) ...[
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: loading ? null : _demoSignIn,
+                        icon: const Icon(Icons.science_outlined),
+                        label: const Text('دخول تجريبي (مؤقت)'),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'للتجربة فقط — يُزال لاحقًا',
+                      style: TextStyle(fontSize: 11, color: Colors.black45),
+                    ),
+                  ],
                 ],
               ),
             ),

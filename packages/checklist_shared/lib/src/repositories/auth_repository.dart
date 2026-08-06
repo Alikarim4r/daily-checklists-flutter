@@ -24,6 +24,27 @@ class AuthRepository {
 
   Future<void> signOut() => _client.auth.signOut();
 
+  /// Create Auth user + pending profile (owner / super_admin RPC).
+  Future<String> createUser({
+    required String email,
+    required String password,
+    String? fullName,
+  }) async {
+    final id = await _client.rpc(
+      'admin_create_user',
+      params: {
+        'p_email': email.trim(),
+        'p_password': password,
+        'p_full_name': fullName,
+      },
+    );
+    return id as String;
+  }
+
+  Future<void> updatePassword(String newPassword) async {
+    await _client.auth.updateUser(UserAttributes(password: newPassword));
+  }
+
   Future<Profile?> fetchCurrentProfile() async {
     final user = currentUser;
     if (user == null) return null;

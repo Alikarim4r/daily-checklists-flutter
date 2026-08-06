@@ -12,6 +12,12 @@
 	<true/>
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
+	<key>com.apple.security.files.downloads.read-write</key>
+	<true/>
+	<key>com.apple.security.personal-information.photos-library</key>
+	<true/>
+	<key>com.apple.security.print</key>
+	<true/>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)com.moehe.checklists.checklistEntry</string>

@@ -24,6 +24,7 @@ class ChecklistFormLayout extends ConsumerWidget {
     this.onOpenPhoto,
     this.trailingHeader,
     this.forceTableLayout = false,
+    this.overdueItemIndexes = const {},
   });
 
   final Inspection inspection;
@@ -40,6 +41,8 @@ class ChecklistFormLayout extends ConsumerWidget {
   final void Function(String storagePath)? onOpenPhoto;
   final Widget? trailingHeader;
   final bool forceTableLayout;
+  /// Item indexes flagged overdue by org policy (ongoing problem streak).
+  final Set<int> overdueItemIndexes;
 
   static const _gold = Color(0xFFE8C547);
   static const _border = Color(0xFF000000);
@@ -51,8 +54,17 @@ class ChecklistFormLayout extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Always LTR like ViewerEditV2 `dir="ltr"` / A4 PDF — never reverse
+    // Item → Description → Yes → No → NA → Remarks.
+    final items = [...inspection.items]
+      ..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
+    for (final item in items) {
+      item.defaultAnswer = item.defaultAnswer.toUpperCase();
+      // Leave Yes/No/NA empty until the inspector answers.
+    }
+
     return Directionality(
-      textDirection: _ar ? ui.TextDirection.rtl : ui.TextDirection.ltr,
+      textDirection: ui.TextDirection.ltr,
       child: Container(
         color: Colors.white,
         child: Column(
@@ -62,18 +74,19 @@ class ChecklistFormLayout extends ConsumerWidget {
             const SizedBox(height: 8),
             _titleBanner(),
             const SizedBox(height: 10),
-            _metaGrid(),
+            _metaGrid(ref),
             if (trailingHeader != null) ...[
               const SizedBox(height: 8),
               trailingHeader!,
             ],
             const SizedBox(height: 12),
-            _table(context, ref),
+            _table(context, ref, items),
             const SizedBox(height: 14),
             Text(
               _ar
                   ? 'توفر هذه القائمة المتطلبات الأساسية للفحوصات اليومية لخدمات البنية. عند تسجيل «لا» لأي بند أعلاه، يجب اتخاذ إجراء فوري لمعالجة المشكلة لضمان استمرار التشغيل الآمن.'
                   : 'This checklist provides the basic requirements for hard services operations daily checks. Should a "No" be recorded for any of the above checklist items, immediate action to be taken to address the issues, to have safe, continued operation.',
+              textAlign: _ar ? TextAlign.right : TextAlign.left,
               style: const TextStyle(fontSize: 10.5, height: 1.4),
             ),
             const SizedBox(height: 14),
@@ -165,11 +178,9 @@ class ChecklistFormLayout extends ConsumerWidget {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 8),
-      decoration: const BoxDecoration(
-        border: Border(
-          top: BorderSide(color: _border),
-          bottom: BorderSide(color: _border),
-        ),
+      decoration: BoxDecoration(
+        color: _gold,
+        border: Border.all(color: _border),
       ),
       child: Text(
         _ar ? 'تقرير الفحص اليومي للمرافق' : 'Daily Facilities Inspection Report',
@@ -183,264 +194,509 @@ class ChecklistFormLayout extends ConsumerWidget {
     );
   }
 
-  Widget _metaGrid() {
+  static const _inspectorLabelW = 108.0;
+
+  Widget _metaGrid(WidgetRef ref) {
     final pin = inspection.pin.isNotEmpty ? inspection.pin : '—';
+    final signed = inspection.signaturePath?.isNotEmpty == true;
+    final signatureLabel = signed ? (_ar ? 'موقّع' : 'Signed') : '';
+
+    // Compact PDF layout — Name and Signature labels share the same width
+    // so their value columns line up.
+    return Directionality(
+      textDirection: ui.TextDirection.ltr,
+      child: Container(
+        decoration: BoxDecoration(border: Border.all(color: _border)),
+        child: Column(
+          children: [
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    flex: 5,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _metaLabel(_ar ? 'الموقع:' : 'Location:'),
+                        Expanded(
+                          child: _metaValue(inspection.locationLabel),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _vRule(),
+                  Expanded(
+                    flex: 5,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _metaLabel(
+                          _ar ? 'اسم المفتش:' : 'Inspector Name:',
+                          width: _inspectorLabelW,
+                        ),
+                        Expanded(
+                          child: _metaValue(
+                            inspection.inspectorName,
+                            onChanged: onInspectorChanged,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            _hRule(),
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    flex: 5,
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _metaLabel(_ar ? 'رقم القسيمة' : 'Pin No.'),
+                              Expanded(child: _metaValue(pin)),
+                            ],
+                          ),
+                        ),
+                        _hRule(),
+                        Expanded(
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _metaLabel(_ar ? 'رقم المبنى' : 'Bldg. No.'),
+                              SizedBox(
+                                width: 36,
+                                child: _metaValue(
+                                  inspection.bldgNo,
+                                  align: TextAlign.center,
+                                ),
+                              ),
+                              _vRule(),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 4,
+                                ),
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text(
+                                    _ar ? 'الطابق' : 'Floor no.',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                child: _metaValue(
+                                  inspection.floorLabel,
+                                  onChanged: onFloorChanged,
+                                  align: TextAlign.center,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _vRule(),
+                  Expanded(
+                    flex: 5,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _metaLabel(
+                          _ar ? 'توقيع المفتش:' : 'Inspector Signature:',
+                          width: _inspectorLabelW,
+                        ),
+                        Expanded(
+                          child: _signatureCell(ref, signatureLabel),
+                        ),
+                        _vRule(),
+                        SizedBox(
+                          width: 148,
+                          child: Column(
+                            children: [
+                              Expanded(
+                                child: Row(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    _metaLabel(
+                                      _ar ? 'التاريخ' : 'Date',
+                                      width: 48,
+                                    ),
+                                    Expanded(
+                                      child: _metaValue(
+                                        _formatMetaDate(
+                                          inspection.inspectionDate,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              _hRule(),
+                              Expanded(
+                                child: Row(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    _metaLabel(
+                                      _ar ? 'الوقت:' : 'Time:',
+                                      width: 48,
+                                    ),
+                                    Expanded(
+                                      child: _metaValue(
+                                        inspection.inspectionTime,
+                                        onChanged: onTimeChanged,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _signatureCell(WidgetRef ref, String fallback) {
+    final path = inspection.signaturePath;
+    if (path == null || path.isEmpty) {
+      return _metaValue('', align: TextAlign.center, minHeight: 44);
+    }
+    return FutureBuilder<String?>(
+      future: ref.read(inspectionRepositoryProvider).signedUrl(path),
+      builder: (context, snap) {
+        final url = snap.data;
+        if (url == null || url.isEmpty) {
+          return _metaValue(fallback, align: TextAlign.center, minHeight: 44);
+        }
+        return Container(
+          constraints: const BoxConstraints(minHeight: 44),
+          padding: const EdgeInsets.all(2),
+          alignment: Alignment.center,
+          child: Image.network(
+            url,
+            fit: BoxFit.contain,
+            height: 40,
+            errorBuilder: (_, __, ___) => Text(
+              fallback,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  String _formatMetaDate(DateTime d) {
+    final dd = d.day.toString().padLeft(2, '0');
+    final mm = d.month.toString().padLeft(2, '0');
+    final yy = (d.year % 100).toString().padLeft(2, '0');
+    return '$dd/$mm/$yy';
+  }
+
+  Widget _hRule() => Container(height: 1, color: _border);
+
+  Widget _vRule() => Container(width: 1, color: _border);
+
+  Widget _metaLabel(String text, {double width = 92}) {
     return Container(
-      decoration: BoxDecoration(border: Border.all(color: _border)),
-      child: Column(
-        children: [
-          _metaPair(
-            _metaCell(_ar ? 'الموقع' : 'Location', inspection.locationLabel),
-            _metaCell(_ar ? 'رقم القسيمة' : 'Pin No.', pin),
-          ),
-          _metaPair(
-            _metaCell(_ar ? 'رقم المبنى' : 'Bldg. No.', inspection.bldgNo),
-            _metaEditable(
-              _ar ? 'رقم الطابق' : 'Floor no.',
-              inspection.floorLabel,
-              onFloorChanged,
-            ),
-          ),
-          _metaPair(
-            _metaEditable(
-              _ar ? 'اسم المفتش' : 'Inspector Name',
-              inspection.inspectorName,
-              onInspectorChanged,
-            ),
-            _metaCell(
-              _ar ? 'توقيع المفتش' : 'Inspector Signature',
-              inspection.signaturePath?.isNotEmpty == true
-                  ? (_ar ? 'موقّع' : 'Signed')
-                  : '',
-            ),
-          ),
-          _metaPair(
-            _metaCell(_ar ? 'التاريخ' : 'Date', inspection.dateIso),
-            _metaEditable(
-              _ar ? 'الوقت' : 'Time',
-              inspection.inspectionTime,
-              onTimeChanged,
-            ),
-          ),
-        ],
+      width: width,
+      color: _gold,
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      alignment: Alignment.centerLeft,
+      child: Text(
+        text,
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
       ),
     );
   }
 
-  Widget _metaPair(Widget a, Widget b) {
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(child: a),
-          Container(width: 1, color: _border),
-          Expanded(child: b),
-        ],
-      ),
-    );
-  }
-
-  Widget _metaCell(String label, String value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Container(
-          color: _gold,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-          child: Text(
-            label,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
-          ),
-        ),
-        Container(
-          constraints: const BoxConstraints(minHeight: 32),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-          child: Text(
-            value,
-            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _metaEditable(
-    String label,
-    String value,
+  Widget _metaValue(
+    String value, {
     ValueChanged<String>? onChanged,
-  ) {
-    if (readOnly || onChanged == null) return _metaCell(label, value);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Container(
-          color: _gold,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-          child: Text(
-            label,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
-          ),
-        ),
-        TextFormField(
+    TextAlign align = TextAlign.left,
+    double minHeight = 26,
+  }) {
+    final style = TextStyle(
+      fontSize: 12,
+      fontWeight: FontWeight.w700,
+      height: 1.15,
+    );
+    if (!readOnly && onChanged != null) {
+      return Container(
+        constraints: BoxConstraints(minHeight: minHeight),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        alignment: Alignment.centerLeft,
+        child: TextFormField(
           initialValue: value,
           onChanged: onChanged,
-          style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+          style: style,
+          textAlign: align,
           decoration: const InputDecoration(
             isDense: true,
             border: InputBorder.none,
-            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            contentPadding: EdgeInsets.zero,
           ),
         ),
-      ],
+      );
+    }
+    return Container(
+      constraints: BoxConstraints(minHeight: minHeight),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      alignment: align == TextAlign.center
+          ? Alignment.center
+          : Alignment.centerLeft,
+      child: Text(value, textAlign: align, style: style),
     );
   }
 
-  Widget _table(BuildContext context, WidgetRef ref) {
+  Widget _table(
+    BuildContext context,
+    WidgetRef ref,
+    List<InspectionItem> items,
+  ) {
     final narrow =
         !forceTableLayout && MediaQuery.sizeOf(context).width < 720;
-    return Container(
-      decoration: BoxDecoration(border: Border.all(color: _border)),
-      child: Column(
-        children: [
-          _tableHeader(narrow: narrow),
-          for (var i = 0; i < inspection.items.length; i++) ...[
-            if (i > 0) Container(height: 1, color: _border),
-            _itemRow(context, ref, inspection.items[i], narrow: narrow),
+    if (narrow) {
+      return Container(
+        decoration: BoxDecoration(border: Border.all(color: _border)),
+        child: Column(
+          children: [
+            _tableHeader(narrow: true),
+            for (var i = 0; i < items.length; i++) ...[
+              if (i > 0) Container(height: 1, color: _border),
+              _itemRowNarrow(context, ref, items[i]),
+            ],
           ],
+        ),
+      );
+    }
+
+    // Table keeps header/body columns locked together (unlike separate Rows
+    // where missing vertical dividers shifted ✓ under the wrong Yes/No/NA).
+    return Directionality(
+      textDirection: ui.TextDirection.ltr,
+      child: Table(
+        border: TableBorder.all(color: _border, width: 1),
+        defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+        columnWidths: const {
+          0: FixedColumnWidth(40),
+          1: FlexColumnWidth(5),
+          2: FixedColumnWidth(36),
+          3: FixedColumnWidth(36),
+          4: FixedColumnWidth(36),
+          5: FlexColumnWidth(4),
+        },
+        children: [
+          TableRow(
+            decoration: const BoxDecoration(color: _gold),
+            children: [
+              _th(_ar ? 'م' : 'Item'),
+              _th(_ar ? 'الوصف' : 'Description', align: TextAlign.left),
+              _th(_ar ? 'نعم' : 'Yes'),
+              _th(_ar ? 'لا' : 'No'),
+              _th(_ar ? 'غ.م' : 'NA'),
+              _th(
+                _ar ? 'إن كانت الإجابة لا، ما الإجراء؟' : "If 'no', what are the actions taken?",
+                align: TextAlign.left,
+                singleLine: true,
+              ),
+            ],
+          ),
+          for (final item in items)
+            TableRow(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    '${item.itemIndex}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(7),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.descriptionFor(language),
+                        style: const TextStyle(fontSize: 12, height: 1.35),
+                      ),
+                      if (overdueItemIndexes.contains(item.itemIndex)) ...[
+                        const SizedBox(height: 4),
+                        _overdueChip(),
+                      ],
+                    ],
+                  ),
+                ),
+                _responseCell(item, ChecklistResponse.yes),
+                _responseCell(item, ChecklistResponse.no),
+                _responseCell(item, ChecklistResponse.na),
+                _remarksCell(context, ref, item),
+              ],
+            ),
         ],
+      ),
+    );
+  }
+
+  Widget _th(
+    String text, {
+    TextAlign align = TextAlign.center,
+    bool singleLine = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 3),
+      child: Text(
+        text,
+        textAlign: align,
+        maxLines: singleLine ? 1 : 3,
+        softWrap: !singleLine,
+        overflow: singleLine ? TextOverflow.ellipsis : TextOverflow.visible,
+        style: TextStyle(
+          fontSize: singleLine ? 9.5 : 11,
+          fontWeight: FontWeight.w800,
+          height: 1.15,
+        ),
       ),
     );
   }
 
   Widget _tableHeader({required bool narrow}) {
     const style = TextStyle(fontSize: 11, fontWeight: FontWeight.w800);
-    if (narrow) {
-      return Container(
-        color: _gold,
-        padding: const EdgeInsets.all(8),
-        child: Text(
-          _ar
-              ? 'البند | الوصف | نعم / لا / غ.م | الملاحظات والصور'
-              : 'Item | Description | Yes / No / NA | Remarks & Photos',
-          style: style,
-        ),
-      );
-    }
     return Container(
       color: _gold,
-      padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 4),
-      child: Row(
-        children: [
-          _hCell(40, _ar ? 'م' : 'Item', style),
-          Expanded(flex: 5, child: Text(_ar ? 'الوصف' : 'Description', style: style)),
-          _hCell(36, _ar ? 'نعم' : 'Yes', style),
-          _hCell(36, _ar ? 'لا' : 'No', style),
-          _hCell(36, _ar ? 'غ.م' : 'NA', style),
-          Expanded(
-            flex: 3,
-            child: Text(
-              _ar
-                  ? 'إن كانت الإجابة لا، ما الإجراء؟'
-                  : "If 'no', what are the actions taken?",
-              style: style,
-            ),
-          ),
-        ],
+      padding: const EdgeInsets.all(8),
+      child: Text(
+        _ar
+            ? 'البند | الوصف | نعم / لا / غ.م | الملاحظات والصور'
+            : 'Item | Description | Yes / No / NA | Remarks & Photos',
+        style: style,
       ),
     );
   }
 
-  Widget _hCell(double w, String t, TextStyle style) => SizedBox(
-        width: w,
-        child: Text(t, textAlign: TextAlign.center, style: style),
-      );
-
-  /// HTML-style ✓ mark with getCheckColor colors.
+  /// HTML-style ✓ — ideal answer is blue; opposite is red. Empty until chosen.
   Widget _responseCell(InspectionItem item, ChecklistResponse column) {
-    final code = item.checkColorFor(column);
-    final Color color = switch (code) {
+    final selected = item.response?.shortCode == column.shortCode;
+    final color = switch (item.checkColorFor(column)) {
       ColorCode.ok => _okBlue,
       ColorCode.problem => _problemRed,
-      ColorCode.na => Colors.black,
+      ColorCode.na => Colors.black87,
       ColorCode.empty => _emptyGray,
     };
-    final mark = item.response == column ? '✓' : '';
     return InkWell(
       onTap: readOnly
           ? null
           : () {
-              final next = item.response == column ? null : column;
-              onResponseChanged?.call(item, next);
+              if (selected) {
+                // Clear back to empty.
+                onResponseChanged?.call(item, null);
+              } else {
+                onResponseChanged?.call(item, column);
+              }
             },
       child: SizedBox(
-        width: 36,
-        height: 40,
+        height: 36,
         child: Center(
-          child: Text(
-            mark.isEmpty ? '·' : mark,
-            style: TextStyle(
-              fontSize: mark.isEmpty ? 14 : 18,
-              fontWeight: FontWeight.w900,
-              color: color,
-              height: 1,
-            ),
-          ),
+          child: selected
+              ? Text(
+                  '✓',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    height: 1,
+                    color: color,
+                  ),
+                )
+              : null,
         ),
       ),
     );
   }
 
   Widget _remarksCell(BuildContext context, WidgetRef ref, InspectionItem item) {
+    final hasRemark = item.actionsTaken.trim().isNotEmpty;
+    final photoWidgets = <Widget>[
+      _photoThumb(
+        ref,
+        path: item.issueImagePath,
+        border: _problemRed,
+        label: _ar ? 'مشكلة' : 'Problem',
+        onPick: !readOnly && item.isProblem && onPickIssuePhoto != null
+            ? () => onPickIssuePhoto!(item)
+            : null,
+        showPickButton: !readOnly && item.isProblem,
+      ),
+      _photoThumb(
+        ref,
+        path: item.fixImagePath,
+        border: const Color(0xFF28A745),
+        label: _ar ? 'إصلاح' : 'Repair',
+        onPick: !readOnly && item.isProblem && onPickFixPhoto != null
+            ? () => onPickFixPhoto!(item)
+            : null,
+        showPickButton:
+            !readOnly && item.isProblem && item.issueImagePath != null,
+      ),
+    ].where((w) => w is! SizedBox).toList();
+
+    // Viewer: nothing in remarks unless entry wrote text (photos optional).
+    if (readOnly) {
+      if (!hasRemark && photoWidgets.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.all(4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (hasRemark)
+              Text(item.actionsTaken, style: const TextStyle(fontSize: 11)),
+            if (photoWidgets.isNotEmpty) ...[
+              if (hasRemark) const SizedBox(height: 4),
+              Wrap(spacing: 4, runSpacing: 4, children: photoWidgets),
+            ],
+          ],
+        ),
+      );
+    }
+
     return Padding(
-      padding: const EdgeInsets.all(4),
+      padding: EdgeInsets.all(hasRemark || photoWidgets.isNotEmpty ? 4 : 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (!readOnly)
-            TextFormField(
-              initialValue: item.actionsTaken,
-              onChanged: (v) => onActionsChanged?.call(item, v),
-              style: const TextStyle(fontSize: 11),
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: _ar ? 'ملاحظات / HQHS-…' : 'Remarks / HQHS-…',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(2),
-                ),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-              ),
-            )
-          else if (item.actionsTaken.isNotEmpty)
-            Text(item.actionsTaken, style: const TextStyle(fontSize: 11)),
-          const SizedBox(height: 4),
-          Wrap(
-            spacing: 4,
-            runSpacing: 4,
-            children: [
-              _photoThumb(
-                ref,
-                path: item.issueImagePath,
-                border: _problemRed,
-                label: _ar ? 'مشكلة' : 'Problem',
-                onPick: !readOnly && item.isProblem && onPickIssuePhoto != null
-                    ? () => onPickIssuePhoto!(item)
-                    : null,
-                showPickButton: !readOnly && item.isProblem,
-              ),
-              _photoThumb(
-                ref,
-                path: item.fixImagePath,
-                border: const Color(0xFF28A745),
-                label: _ar ? 'إصلاح' : 'Repair',
-                onPick: !readOnly && item.isProblem && onPickFixPhoto != null
-                    ? () => onPickFixPhoto!(item)
-                    : null,
-                showPickButton:
-                    !readOnly && item.isProblem && item.issueImagePath != null,
-              ),
-            ],
+          _BlankRemarksField(
+            key: ValueKey('remarks-${item.id ?? item.itemIndex}'),
+            initialValue: item.actionsTaken,
+            onChanged: (v) => onActionsChanged?.call(item, v),
           ),
+          if (photoWidgets.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Wrap(spacing: 4, runSpacing: 4, children: photoWidgets),
+          ],
         ],
       ),
     );
@@ -512,70 +768,62 @@ class ChecklistFormLayout extends ConsumerWidget {
     );
   }
 
-  Widget _itemRow(
+  Widget _overdueChip() {
+    return Container(
+      margin: const EdgeInsets.only(top: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: const Color(0xFFB91C1C),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        _ar ? 'متأخر' : 'Overdue',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 8,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _itemRowNarrow(
     BuildContext context,
     WidgetRef ref,
-    InspectionItem item, {
-    required bool narrow,
-  }) {
-    if (narrow) {
-      return Padding(
-        padding: const EdgeInsets.all(8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              '${item.itemIndex}. ${item.descriptionFor(language)}',
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                _responseCell(item, ChecklistResponse.yes),
-                const Text('Yes', style: TextStyle(fontSize: 11)),
-                _responseCell(item, ChecklistResponse.no),
-                const Text('No', style: TextStyle(fontSize: 11)),
-                _responseCell(item, ChecklistResponse.na),
-                const Text('NA', style: TextStyle(fontSize: 11)),
-              ],
-            ),
-            _remarksCell(context, ref, item),
-          ],
-        ),
-      );
-    }
-    return IntrinsicHeight(
-      child: Row(
+    InspectionItem item,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.all(8),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SizedBox(
-            width: 40,
-            child: Center(
-              child: Text(
-                '${item.itemIndex}',
-                style: const TextStyle(fontWeight: FontWeight.w800),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${item.itemIndex}. ${item.descriptionFor(language)}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
               ),
-            ),
+              if (overdueItemIndexes.contains(item.itemIndex)) _overdueChip(),
+            ],
           ),
-          Container(width: 1, color: _border),
-          Expanded(
-            flex: 5,
-            child: Padding(
-              padding: const EdgeInsets.all(7),
-              child: Text(
-                item.descriptionFor(language),
-                style: const TextStyle(fontSize: 12, height: 1.35),
-              ),
-            ),
+          const SizedBox(height: 6),
+          Row(
+            textDirection: ui.TextDirection.ltr,
+            children: [
+              _responseCell(item, ChecklistResponse.yes),
+              const Text(' Yes  ', style: TextStyle(fontSize: 11)),
+              _responseCell(item, ChecklistResponse.no),
+              const Text(' No  ', style: TextStyle(fontSize: 11)),
+              _responseCell(item, ChecklistResponse.na),
+              const Text(' NA', style: TextStyle(fontSize: 11)),
+            ],
           ),
-          Container(width: 1, color: _border),
-          _responseCell(item, ChecklistResponse.yes),
-          Container(width: 1, color: _border),
-          _responseCell(item, ChecklistResponse.no),
-          Container(width: 1, color: _border),
-          _responseCell(item, ChecklistResponse.na),
-          Container(width: 1, color: _border),
-          Expanded(flex: 3, child: _remarksCell(context, ref, item)),
+          _remarksCell(context, ref, item),
         ],
       ),
     );
@@ -604,6 +852,82 @@ class ChecklistFormLayout extends ConsumerWidget {
             errorBuilder: (_, __, ___) => const SizedBox(height: 32),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Completely blank until typed — no hint, border, or placeholder.
+class _BlankRemarksField extends StatefulWidget {
+  const _BlankRemarksField({
+    super.key,
+    required this.initialValue,
+    required this.onChanged,
+  });
+
+  final String initialValue;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_BlankRemarksField> createState() => _BlankRemarksFieldState();
+}
+
+class _BlankRemarksFieldState extends State<_BlankRemarksField> {
+  late final TextEditingController _controller;
+  late final FocusNode _focus;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialValue);
+    _focus = FocusNode()..addListener(() => setState(() {}));
+    _controller.addListener(() => setState(() {}));
+  }
+
+  @override
+  void didUpdateWidget(covariant _BlankRemarksField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialValue != widget.initialValue &&
+        widget.initialValue != _controller.text) {
+      _controller.text = widget.initialValue;
+    }
+  }
+
+  @override
+  void dispose() {
+    _focus.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  bool get _active =>
+      _controller.text.trim().isNotEmpty || _focus.hasFocus;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _controller,
+      focusNode: _focus,
+      style: TextStyle(
+        fontSize: 11,
+        height: 1.3,
+        color: _active ? Colors.black : Colors.transparent,
+      ),
+      maxLines: null,
+      minLines: 1,
+      cursorColor: _active ? const Color(0xFF1F4E79) : Colors.transparent,
+      onChanged: widget.onChanged,
+      decoration: InputDecoration(
+        isDense: true,
+        isCollapsed: !_active,
+        hintText: null,
+        filled: false,
+        border: InputBorder.none,
+        enabledBorder: InputBorder.none,
+        focusedBorder: InputBorder.none,
+        contentPadding: _active
+            ? const EdgeInsets.symmetric(horizontal: 2, vertical: 4)
+            : EdgeInsets.zero,
       ),
     );
   }

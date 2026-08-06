@@ -28,6 +28,16 @@ class Profile {
   bool get canDeleteInspections =>
       isPlatformOwner || role.canDeleteInspections;
 
+  /// site_admin / super_admin can edit submitted inspections before approve.
+  bool get canReviewInspections =>
+      isPlatformOwner || role.isElevatedAdmin;
+
+  bool get canManageStructure =>
+      isPlatformOwner || role == UserRole.superAdmin;
+
+  bool get canManagePolicies =>
+      isPlatformOwner || role == UserRole.superAdmin;
+
   factory Profile.fromJson(Map<String, dynamic> json) {
     return Profile(
       id: json['id'] as String,
@@ -47,6 +57,8 @@ class ChecklistSite {
     required this.nameEn,
     required this.nameAr,
     required this.buildingCode,
+    this.zoneId,
+    this.parentSiteId,
     this.pin = '',
     this.checklistType = 'DEFAULT',
     this.location = 'MOEHE Permanent Headquarters',
@@ -55,6 +67,9 @@ class ChecklistSite {
 
   final String id;
   final String organizationId;
+  final String? zoneId;
+  /// Parent campus/site when this row is a building checklist unit.
+  final String? parentSiteId;
   final String nameEn;
   final String nameAr;
   final String buildingCode;
@@ -65,6 +80,12 @@ class ChecklistSite {
 
   String nameFor(String language) => language == 'ar' ? nameAr : nameEn;
 
+  /// Daily checklist unit (building / area with a building_code).
+  bool get isChecklistUnit => buildingCode.trim().isNotEmpty;
+
+  /// Campus / container site that groups checklists (no building_code).
+  bool get isCampus => !isChecklistUnit;
+
   String get bldgNo {
     final m = RegExp(r'(\d+)').firstMatch(buildingCode);
     return m?.group(1) ?? buildingCode;
@@ -74,6 +95,8 @@ class ChecklistSite {
     return ChecklistSite(
       id: json['id'] as String,
       organizationId: (json['organization_id'] ?? '') as String,
+      zoneId: json['zone_id'] as String?,
+      parentSiteId: json['parent_site_id'] as String?,
       nameEn: (json['name_en'] ?? '') as String,
       nameAr: (json['name_ar'] ?? '') as String,
       buildingCode: (json['building_code'] ?? '') as String,
@@ -82,6 +105,23 @@ class ChecklistSite {
       location: (json['location'] ?? 'MOEHE Permanent Headquarters') as String,
       isActive: json['is_active'] as bool? ?? true,
     );
+  }
+}
+
+/// Site (campus) with the checklist units nested under it.
+class CampusChecklistGroup {
+  const CampusChecklistGroup({
+    this.campus,
+    required this.checklists,
+  });
+
+  /// Null when checklists have no parent (orphan units).
+  final ChecklistSite? campus;
+  final List<ChecklistSite> checklists;
+
+  String titleFor(String language) {
+    if (campus != null) return campus!.nameFor(language);
+    return language == 'ar' ? 'قوائم أخرى' : 'Other checklists';
   }
 }
 

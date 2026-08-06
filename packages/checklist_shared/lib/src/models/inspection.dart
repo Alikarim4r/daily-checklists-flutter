@@ -13,6 +13,7 @@ class InspectionItem {
     this.fixImagePath,
     this.defaultAnswer = 'Y',
     this.isCustom = false,
+    this.overdueAfterDays = 3,
   });
 
   final String? id;
@@ -27,6 +28,8 @@ class InspectionItem {
   /// Expected answer from catalog: Y or N (HTML `default`).
   String defaultAnswer;
   final bool isCustom;
+  /// Consecutive problem days before Overdue for this item.
+  int overdueAfterDays;
 
   String descriptionFor(String language) =>
       language == 'ar' && (descriptionAr ?? '').isNotEmpty
@@ -40,6 +43,23 @@ class InspectionItem {
     return r.shortCode != defaultAnswer.toUpperCase();
   }
 
+  /// Answered and matches catalog ideal (closes a prior problem when fixing).
+  bool get isIdealAnswer {
+    final r = response;
+    if (r == null || r == ChecklistResponse.na) return false;
+    return r.shortCode == defaultAnswer.toUpperCase();
+  }
+
+  bool get hasIssuePhoto {
+    final p = (issueImagePath ?? imagePath)?.trim() ?? '';
+    return p.isNotEmpty;
+  }
+
+  bool get hasFixPhoto {
+    final p = fixImagePath?.trim() ?? '';
+    return p.isNotEmpty;
+  }
+
   /// HTML `getCheckColor` for a specific column value.
   ColorCode checkColorFor(ChecklistResponse column) {
     if (response != column) return ColorCode.empty;
@@ -51,19 +71,24 @@ class InspectionItem {
   }
 
   factory InspectionItem.fromJson(Map<String, dynamic> json) {
+    final rawDefault = (json['default_answer'] ?? 'Y') as String;
+    final defaultAnswer =
+        ChecklistResponse.fromDb(rawDefault)?.shortCode ?? rawDefault.toUpperCase();
     return InspectionItem(
       id: json['id'] as String?,
       itemIndex: json['item_index'] as int,
       description: (json['description'] ?? '') as String,
       descriptionAr: json['description_ar'] as String?,
+      // Prefer stored answer only — leave empty when null (no auto Yes/No).
       response: ChecklistResponse.fromDb(json['response'] as String?),
       actionsTaken: (json['actions_taken'] ?? '') as String,
       imagePath: json['image_path'] as String?,
       issueImagePath: json['issue_image_path'] as String? ??
           json['image_path'] as String?,
       fixImagePath: json['fix_image_path'] as String?,
-      defaultAnswer: (json['default_answer'] ?? 'Y') as String,
+      defaultAnswer: defaultAnswer,
       isCustom: json['is_custom'] as bool? ?? false,
+      overdueAfterDays: (json['overdue_after_days'] as num?)?.toInt() ?? 3,
     );
   }
 
@@ -79,6 +104,7 @@ class InspectionItem {
         'fix_image_path': fixImagePath,
         'default_answer': defaultAnswer,
         'is_custom': isCustom,
+        'overdue_after_days': overdueAfterDays,
       };
 
   Map<String, dynamic> toUpdateJson() => {
@@ -88,6 +114,7 @@ class InspectionItem {
         'issue_image_path': issueImagePath,
         'fix_image_path': fixImagePath,
         'default_answer': defaultAnswer,
+        'overdue_after_days': overdueAfterDays,
       };
 }
 
@@ -106,8 +133,11 @@ class Inspection {
     this.inspectorUserId,
     this.signaturePath,
     this.status = InspectionStatus.draft,
+    this.reviewStatus = ReviewStatus.draft,
     this.submittedAt,
     this.submittedBy,
+    this.approvedAt,
+    this.approvedBy,
     this.createdAt,
     this.updatedAt,
     List<InspectionItem>? items,
@@ -128,8 +158,11 @@ class Inspection {
   final String? inspectorUserId;
   String? signaturePath;
   InspectionStatus status;
+  ReviewStatus reviewStatus;
   final DateTime? submittedAt;
   final String? submittedBy;
+  final DateTime? approvedAt;
+  final String? approvedBy;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final List<InspectionItem> items;
@@ -139,6 +172,8 @@ class Inspection {
   final String organizationId;
 
   bool get isSubmitted => status == InspectionStatus.submitted;
+  bool get isApproved => reviewStatus == ReviewStatus.approved;
+  bool get awaitingReview => reviewStatus == ReviewStatus.submitted;
 
   String get dateIso =>
       '${inspectionDate.year.toString().padLeft(4, '0')}-'
@@ -168,10 +203,16 @@ class Inspection {
       inspectorUserId: json['inspector_user_id'] as String?,
       signaturePath: json['signature_path'] as String?,
       status: InspectionStatus.fromDb((json['status'] ?? 'draft') as String),
+      reviewStatus:
+          ReviewStatus.fromDb(json['review_status'] as String? ?? 'draft'),
       submittedAt: json['submitted_at'] != null
           ? DateTime.tryParse(json['submitted_at'] as String)
           : null,
       submittedBy: json['submitted_by'] as String?,
+      approvedAt: json['approved_at'] != null
+          ? DateTime.tryParse(json['approved_at'] as String)
+          : null,
+      approvedBy: json['approved_by'] as String?,
       createdAt: json['created_at'] != null
           ? DateTime.tryParse(json['created_at'] as String)
           : null,
