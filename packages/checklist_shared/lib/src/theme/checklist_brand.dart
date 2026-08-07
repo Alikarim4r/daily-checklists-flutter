@@ -124,26 +124,51 @@ abstract final class ChecklistChrome {
         colors: [primary, accentDeep],
       );
 
+  /// Deep navy / ink dark surfaces (shared across brands).
+  static const Color darkCanvas = Color(0xFF0B1220);
+  static const Color darkSurface = Color(0xFF152033);
+  static const Color darkSurfaceHigh = Color(0xFF1A2740);
+  static const Color darkInk = Color(0xFFE8EEF5);
+  static const Color darkInkMuted = Color(0xFF94A3B8);
+  static const Color darkBorder = Color(0xFF2A3A4F);
+
+  static LinearGradient cardWashFor(Brightness brightness) {
+    if (brightness == Brightness.dark) {
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          darkSurface,
+          Color.alphaBlend(accent.withValues(alpha: 0.18), darkSurfaceHigh),
+        ],
+      );
+    }
+    return cardWash;
+  }
+
   static BoxDecoration cardDecoration({
     double radius = 16,
     Color? borderColor,
     double borderWidth = 1.2,
-  }) =>
-      BoxDecoration(
-        borderRadius: BorderRadius.circular(radius),
-        border: Border.all(
-          color: borderColor ?? borderLight,
-          width: borderWidth,
+    Brightness brightness = Brightness.light,
+  }) {
+    final dark = brightness == Brightness.dark;
+    return BoxDecoration(
+      borderRadius: BorderRadius.circular(radius),
+      border: Border.all(
+        color: borderColor ?? (dark ? darkBorder : borderLight),
+        width: borderWidth,
+      ),
+      gradient: cardWashFor(brightness),
+      boxShadow: [
+        BoxShadow(
+          color: accent.withValues(alpha: dark ? 0.22 : 0.10),
+          blurRadius: dark ? 14 : 10,
+          offset: const Offset(0, 3),
         ),
-        gradient: cardWash,
-        boxShadow: [
-          BoxShadow(
-            color: accent.withValues(alpha: 0.10),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      );
+      ],
+    );
+  }
 
   static ThemeData theme() {
     final scheme = ColorScheme.fromSeed(
@@ -186,6 +211,81 @@ abstract final class ChecklistChrome {
       ),
     );
   }
+
+  /// Deep navy ink dark theme aligned with brand accent.
+  static ThemeData darkTheme() {
+    final scheme = ColorScheme.dark(
+      primary: accent,
+      onPrimary: onAccent,
+      secondary: accent,
+      onSecondary: onAccent,
+      surface: darkSurface,
+      onSurface: darkInk,
+      onSurfaceVariant: darkInkMuted,
+      outline: darkBorder,
+      error: const Color(0xFFF87171),
+      onError: darkCanvas,
+    );
+    return ThemeData(
+      useMaterial3: true,
+      brightness: Brightness.dark,
+      colorScheme: scheme,
+      scaffoldBackgroundColor: Colors.transparent,
+      canvasColor: darkCanvas,
+      dialogTheme: const DialogThemeData(backgroundColor: darkSurface),
+      drawerTheme: const DrawerThemeData(backgroundColor: darkSurface),
+      listTileTheme: const ListTileThemeData(
+        iconColor: darkInkMuted,
+        textColor: darkInk,
+      ),
+      dividerColor: darkBorder,
+      appBarTheme: AppBarTheme(
+        backgroundColor: primary,
+        foregroundColor: onAccent,
+        elevation: 0,
+      ),
+      cardTheme: CardThemeData(
+        elevation: 0,
+        color: darkSurface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: darkSurfaceHigh,
+        labelStyle: const TextStyle(color: darkInkMuted),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: darkBorder),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: darkBorder),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: accent,
+          foregroundColor: onAccent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: darkInk,
+          side: const BorderSide(color: darkBorder),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      ),
+      snackBarTheme: const SnackBarThemeData(
+        backgroundColor: darkSurfaceHigh,
+        contentTextStyle: TextStyle(color: darkInk),
+      ),
+    );
+  }
 }
 
 class ChecklistBrandCard extends StatelessWidget {
@@ -209,6 +309,7 @@ class ChecklistBrandCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final radius = BorderRadius.circular(16);
+    final brightness = Theme.of(context).brightness;
     return Padding(
       padding: margin,
       child: Material(
@@ -221,8 +322,16 @@ class ChecklistBrandCard extends StatelessWidget {
             decoration: ChecklistChrome.cardDecoration(
               borderColor: borderColor,
               borderWidth: borderWidth,
+              brightness: brightness,
             ),
-            child: Padding(padding: padding, child: child),
+            child: DefaultTextStyle.merge(
+              style: TextStyle(
+                color: brightness == Brightness.dark
+                    ? ChecklistChrome.darkInk
+                    : ChecklistChrome.ink,
+              ),
+              child: Padding(padding: padding, child: child),
+            ),
           ),
         ),
       ),
@@ -244,17 +353,34 @@ class ChecklistIconWell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
-        gradient: ChecklistChrome.iconWellGradient,
+        gradient: dark
+            ? LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  ChecklistChrome.darkSurfaceHigh,
+                  Color.alphaBlend(
+                    ChecklistChrome.accent.withValues(alpha: 0.45),
+                    ChecklistChrome.darkSurface,
+                  ),
+                ],
+              )
+            : ChecklistChrome.iconWellGradient,
         border: Border.all(
-          color: ChecklistChrome.accent.withValues(alpha: 0.35),
+          color: ChecklistChrome.accent.withValues(alpha: dark ? 0.55 : 0.35),
         ),
       ),
-      child: Icon(icon, size: iconSize, color: ChecklistChrome.iconGlyph),
+      child: Icon(
+        icon,
+        size: iconSize,
+        color: dark ? ChecklistChrome.darkInk : ChecklistChrome.iconGlyph,
+      ),
     );
   }
 }

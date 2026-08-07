@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -6,6 +7,7 @@ import '../data/checklist_lists.dart';
 import '../models/enums.dart';
 import '../models/inspection.dart';
 import '../models/profile.dart';
+import '../utils/storage_path_list.dart';
 import 'catalog_repository.dart';
 
 class InspectionRepository {
@@ -302,6 +304,13 @@ class InspectionRepository {
     }).eq('id', inspection.id);
   }
 
+  Future<void> deleteInspectionItem(String itemId) async {
+    await _client
+        .from('checklist_inspection_items')
+        .delete()
+        .eq('id', itemId);
+  }
+
   Future<void> submit(String inspectionId) async {
     final userId = _client.auth.currentUser?.id;
     await _client.from('checklist_inspections').update({
@@ -357,17 +366,37 @@ class InspectionRepository {
     return path;
   }
 
-  Future<String?> signedUrl(String path, {int expiresIn = 3600}) async {
-    try {
-      return await _client.storage.from(bucket).createSignedUrl(path, expiresIn);
-    } catch (_) {
-      return null;
+  final Map<String, ({Future<String?> future, DateTime expiresAt})>
+      _signedUrlFutures = {};
+
+  Future<String?> signedUrl(String path, {int expiresIn = 3600}) {
+    final storagePath = storagePathOf(path);
+    final hit = _signedUrlFutures[storagePath];
+    if (hit != null && hit.expiresAt.isAfter(DateTime.now())) {
+      return hit.future;
     }
+    final keepFor = Duration(seconds: math.max(60, expiresIn - 120));
+    final future = () async {
+      try {
+        return await _client.storage
+            .from(bucket)
+            .createSignedUrl(storagePath, expiresIn);
+      } catch (_) {
+        return null;
+      }
+    }();
+    _signedUrlFutures[storagePath] = (
+      future: future,
+      expiresAt: DateTime.now().add(keepFor),
+    );
+    return future;
   }
+
+  void clearSignedUrlCache() => _signedUrlFutures.clear();
 
   Future<Uint8List?> downloadBytes(String path) async {
     try {
-      return await _client.storage.from(bucket).download(path);
+      return await _client.storage.from(bucket).download(storagePathOf(path));
     } catch (_) {
       return null;
     }

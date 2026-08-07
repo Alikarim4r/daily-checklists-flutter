@@ -5,7 +5,7 @@ import '../models/enums.dart';
 import '../models/profile.dart';
 import '../providers/providers.dart';
 import '../providers/session_security_provider.dart';
-import '../theme/viewer_palette.dart';
+import '../theme/checklist_brand.dart';
 
 typedef ProfilePredicate = bool Function(Profile profile);
 typedef HomeBuilder = Widget Function(BuildContext context, Profile profile);
@@ -217,7 +217,7 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.fingerprint, size: 56, color: ViewerPalette.orange),
+              Icon(Icons.fingerprint, size: 56, color: ChecklistChrome.accent),
               const SizedBox(height: 16),
               Text(
                 ar
@@ -274,15 +274,26 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
   }
 
   Widget _loginScaffold() {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
-      backgroundColor: ViewerPalette.orangeSoft,
+      backgroundColor: dark
+          ? ChecklistChrome.darkCanvas
+          : Color.alphaBlend(
+              ChecklistChrome.accentSoft.withValues(alpha: 0.55),
+              Colors.white,
+            ),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
           child: Card(
-            elevation: 8,
+            elevation: dark ? 0 : 8,
+            color: dark ? ChecklistChrome.darkSurface : scheme.surface,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(20),
+              side: dark
+                  ? const BorderSide(color: ChecklistChrome.darkBorder)
+                  : BorderSide.none,
             ),
             child: Padding(
               padding: const EdgeInsets.all(24),
@@ -291,9 +302,10 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
                 children: [
                   Text(
                     widget.appTitle,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
+                      color: dark ? ChecklistChrome.darkInk : null,
                     ),
                     textAlign: TextAlign.center,
                   ),
@@ -301,7 +313,11 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
                   Text(
                     widget.subtitle,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.black54),
+                    style: TextStyle(
+                      color: dark
+                          ? ChecklistChrome.darkInkMuted
+                          : Colors.black54,
+                    ),
                   ),
                   const SizedBox(height: 20),
                   TextField(
@@ -330,7 +346,7 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
                     width: double.infinity,
                     child: FilledButton(
                       style: FilledButton.styleFrom(
-                        backgroundColor: ViewerPalette.orange,
+                        backgroundColor: ChecklistChrome.accent,
                         minimumSize: const Size.fromHeight(48),
                       ),
                       onPressed: loading ? null : () => _signIn(),

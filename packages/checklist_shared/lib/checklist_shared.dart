@@ -19,6 +19,7 @@ export 'src/providers/session_security_provider.dart';
 export 'src/security/biometric_auth_service.dart';
 export 'src/security/session_security_store.dart';
 export 'src/offline/offline_inspection_queue.dart';
+export 'src/photos/inspection_photo_watermark.dart';
 export 'src/utils/storage_path_list.dart';
 export 'src/reports/inspection_report_exporter.dart';
 export 'src/repositories/auth_repository.dart';

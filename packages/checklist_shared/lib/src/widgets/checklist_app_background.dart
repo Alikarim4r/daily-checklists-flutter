@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/checklist_brand.dart';
+
 /// Subtle BMS watermark behind app scaffolds (Entry / Viewer / Admin).
 class ChecklistAppBackground extends StatelessWidget {
   const ChecklistAppBackground({
@@ -21,13 +23,15 @@ class ChecklistAppBackground extends StatelessWidget {
         Positioned.fill(
           child: ColoredBox(
             color: Theme.of(context).brightness == Brightness.dark
-                ? const Color(0xFF121416)
+                ? ChecklistChrome.darkCanvas
                 : const Color(0xFFF3F4F6),
           ),
         ),
         Positioned.fill(
           child: Opacity(
-            opacity: opacity,
+            opacity: Theme.of(context).brightness == Brightness.dark
+                ? opacity * 0.45
+                : opacity,
             child: Image.asset(
               assetPath,
               package: 'checklist_shared',

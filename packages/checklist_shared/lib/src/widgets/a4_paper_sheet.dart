@@ -2,51 +2,71 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../theme/checklist_brand.dart';
 import 'checklist_app_background.dart';
 
-/// Centers content on a printable A4-width paper sheet (210×297 mm proportions).
+/// Centers content on a printable A4-width paper sheet (≈794px @ 96dpi).
 ///
-/// Height grows with content (multi-page feel) while width stays A4.
+/// Content is always laid out at full [maxWidth] (desktop / PDF proportions),
+/// then uniformly scaled to fit the viewport so phones match the paper form.
 class A4PaperSheet extends StatelessWidget {
   const A4PaperSheet({
     super.key,
     required this.child,
     this.maxWidth = 794, // ≈ A4 @ 96 dpi
     this.margin = const EdgeInsets.fromLTRB(28, 32, 28, 36),
-    this.background = const Color(0xFFE5E7EB),
   });
 
   final Widget child;
   final double maxWidth;
   final EdgeInsets margin;
-  final Color background;
 
   /// A4 aspect ratio (width / height) for a single page viewport hint.
   static const double a4Aspect = 210 / 297;
 
   @override
   Widget build(BuildContext context) {
-    final screenW = MediaQuery.sizeOf(context).width;
-    final width = math.min(maxWidth, screenW - 24);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
 
     return ChecklistAppBackground(
-      opacity: 0.11,
-      child: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 12),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: width),
-            child: Material(
-              color: Colors.white,
-              elevation: 6,
-              shadowColor: Colors.black26,
-              child: Padding(
-                padding: margin,
-                child: child,
+      opacity: dark ? 0.06 : 0.11,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final available = math.max(280.0, constraints.maxWidth - 16);
+          final scale = math.min(1.0, available / maxWidth);
+          final displayW = maxWidth * scale;
+
+          return ColoredBox(
+            color: dark
+                ? ChecklistChrome.darkCanvas.withValues(alpha: 0.35)
+                : Colors.transparent,
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(8, 12, 8, 20 + bottomInset),
+              child: Center(
+                child: SizedBox(
+                  width: displayW,
+                  child: FittedBox(
+                    fit: BoxFit.fitWidth,
+                    alignment: Alignment.topCenter,
+                    child: SizedBox(
+                      width: maxWidth,
+                      child: Material(
+                        color: Colors.white,
+                        elevation: 6,
+                        shadowColor: Colors.black26,
+                        child: Padding(
+                          padding: margin,
+                          child: child,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }

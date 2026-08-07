@@ -45,14 +45,7 @@ class _AdminRootState extends ConsumerState<AdminRoot> {
       title: language == 'ar' ? 'فحص يومي — إدارة' : 'Daily Checklists — Admin',
       debugShowCheckedModeBanner: false,
       theme: ChecklistChrome.theme(),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: ChecklistChrome.accent,
-          brightness: Brightness.dark,
-        ),
-      ),
+      darkTheme: ChecklistChrome.darkTheme(),
       themeMode: themeMode,
       builder: (context, child) => Directionality(
         textDirection: rtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,

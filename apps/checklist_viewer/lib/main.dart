@@ -45,14 +45,7 @@ class _ViewerRootState extends ConsumerState<ViewerRoot> {
       title: language == 'ar' ? 'فحص يومي — عرض' : 'Daily Checklists — Viewer',
       debugShowCheckedModeBanner: false,
       theme: ChecklistChrome.theme(),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: ChecklistChrome.accent,
-          brightness: Brightness.dark,
-        ),
-      ),
+      darkTheme: ChecklistChrome.darkTheme(),
       themeMode: themeMode,
       builder: (context, child) => Directionality(
         textDirection: rtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
@@ -71,7 +64,9 @@ class _ViewerRootState extends ConsumerState<ViewerRoot> {
         homeBuilder: (context, profile) => ViewerHome(
           profile: profile,
           language: language,
-          onLanguageChanged: (v) => setState(() => language = v),
+          onLanguageChanged: (v) => setState(() {
+            language = viewerLanguages.contains(v) ? v : 'en';
+          }),
         ),
       ),
     );
@@ -271,35 +266,21 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
         date: date,
         reviewStatuses: _reviewFilter,
       );
+      // Parallel hydrate — skip per-record overdue history (done on open).
+      final withItems = await Future.wait([
+        for (final row in list)
+          () async {
+            try {
+              return await inspRepo.getById(row.id) ?? row;
+            } catch (_) {
+              return row;
+            }
+          }(),
+      ]);
       final overdueMap = <String, Set<int>>{};
-      final withItems = <Inspection>[];
-      for (final row in list) {
-        try {
-          final full = await inspRepo.getById(row.id);
-          if (full == null) {
-            withItems.add(row);
-            continue;
-          }
-          withItems.add(full);
-          final lookback = full.items.isEmpty
-              ? 14
-              : full.items
-                  .map((e) => e.overdueAfterDays)
-                  .fold<int>(14, (a, b) => math.max(a, b + 2));
-          final history = await inspRepo.listRecentForSite(
-            siteId: full.siteId,
-            asOfDate: full.inspectionDate,
-            lookbackDays: lookback,
-          );
-          final map = buildProblemHistory(history: history, current: full);
-          final overdue = overdueItemIndexes(
-            inspection: full,
-            problemByDateIso: map,
-          );
-          if (overdue.isNotEmpty) overdueMap[full.id] = overdue;
-        } catch (_) {
-          withItems.add(row);
-        }
+      if (selected != null &&
+          overdueByInspectionId.containsKey(selected!.id)) {
+        overdueMap[selected!.id] = overdueByInspectionId[selected!.id]!;
       }
       final built = buildViewerNotices(
         records: withItems,
@@ -430,12 +411,12 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
   Future<void> _open(Inspection row) async {
     final full = await ref.read(inspectionRepositoryProvider).getById(row.id);
     if (full == null) {
-      setState(() => message = 'تعذر فتح السجل');
+      setState(() => message = language == 'ar' ? 'تعذر فتح السجل' : 'Could not open record');
       return;
     }
     // Viewer role must not open non-approved (defense in depth).
     if (!_isReviewer && full.reviewStatus != ReviewStatus.approved) {
-      setState(() => message = 'هذا الفحص غير معتمد للعرض بعد');
+      setState(() => message = language == 'ar' ? 'هذا الفحص غير معتمد للعرض بعد' : 'This inspection is not approved for viewing yet');
       return;
     }
     if (!_wide && mounted) {
@@ -467,13 +448,13 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
     final result = validateProblemPhotos(inspection: current, policy: pol);
     if (result.ok) return true;
     if (result.blocksSubmit) {
-      setState(() => message = result.messageAr);
+      setState(() => message = result.messageFor(language));
       return false;
     }
     if (result.severity == PolicySeverity.info) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(result.messageAr)),
+          SnackBar(content: Text(result.messageFor(language))),
         );
       }
       return true;
@@ -481,16 +462,16 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
     final proceed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('صورة المشكلة ناقصة'),
-        content: Text(result.messageAr),
+        title: Text(language == 'ar' ? 'صورة المشكلة ناقصة' : 'Issue photo missing'),
+        content: Text(result.messageFor(language)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('إكمال الصور'),
+            child: Text(language == 'ar' ? 'إكمال الصور' : 'Add photos'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('متابعة'),
+            child: Text(language == 'ar' ? 'متابعة' : 'Continue'),
           ),
         ],
       ),
@@ -505,7 +486,7 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
       await ref.read(inspectionRepositoryProvider).saveItems(current);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم حفظ التعديلات')),
+          SnackBar(content: Text(language == 'ar' ? 'تم حفظ التعديلات' : 'Changes saved')),
         );
       }
       await _load();
@@ -523,18 +504,20 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('إرسال التقرير'),
-        content: const Text(
-          'تأكيد إرسال سجل الفحص؟ سيُراجع قبل ظهوره للعارض.',
+        title: Text(language == 'ar' ? 'إرسال التقرير' : 'Submit report'),
+        content: Text(
+          language == 'ar'
+              ? 'تأكيد إرسال سجل الفحص؟ سيُراجع قبل ظهوره للعارض.'
+              : 'Submit this inspection for review?',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('إلغاء'),
+            child: Text(language == 'ar' ? 'إلغاء' : 'Cancel'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('إرسال'),
+            child: Text(language == 'ar' ? 'إرسال' : 'Submit'),
           ),
         ],
       ),
@@ -565,7 +548,7 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
           .approveInspection(current.id);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم اعتماد الفحص للعرض')),
+          SnackBar(content: Text(language == 'ar' ? 'تم اعتماد الفحص للعرض' : 'Inspection approved for viewing')),
         );
       }
       await _load();
@@ -590,7 +573,9 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
         !selected!.isSubmitted &&
         _canWriteSelected();
     return Material(
-      color: Colors.white,
+      color: Theme.of(context).brightness == Brightness.dark
+          ? ChecklistChrome.darkSurface
+          : Theme.of(context).colorScheme.surface,
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Wrap(
@@ -600,10 +585,10 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
           children: [
             if (_isReviewer)
               SegmentedButton<int>(
-                segments: const [
-                  ButtonSegment(value: 0, label: Text('الكل')),
-                  ButtonSegment(value: 1, label: Text('بانتظار الاعتماد')),
-                  ButtonSegment(value: 2, label: Text('معتمدة')),
+                segments: [
+                  ButtonSegment(value: 0, label: Text(language == 'ar' ? 'الكل' : 'All')),
+                  ButtonSegment(value: 1, label: Text(language == 'ar' ? 'بانتظار الاعتماد' : 'Pending')),
+                  ButtonSegment(value: 2, label: Text(language == 'ar' ? 'معتمدة' : 'Approved')),
                 ],
                 selected: {listMode},
                 onSelectionChanged: (s) async {
@@ -633,18 +618,18 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
                   backgroundColor: ViewerPalette.orange,
                 ),
                 onPressed: _save,
-                child: const Text('حفظ'),
+                child: Text(language == 'ar' ? 'حفظ' : 'Save'),
               ),
             if (showActions && canSubmitDraft)
               FilledButton(
                 onPressed: _submit,
-                child: const Text('إرسال التقرير'),
+                child: Text(language == 'ar' ? 'إرسال التقرير' : 'Submit report'),
               ),
             if (showActions && canApprove)
               FilledButton.icon(
                 onPressed: _approve,
                 icon: const Icon(Icons.verified_outlined),
-                label: const Text('اعتماد للعرض'),
+                label: Text(language == 'ar' ? 'اعتماد للعرض' : 'Approve for view'),
               ),
           ],
         ),
@@ -775,10 +760,11 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
         final r = records[i];
         final selectedId = selected?.id == r.id;
         return ListTile(
+          key: ValueKey(r.id),
           selected: selectedId,
           title: Text(r.buildingCode),
           subtitle: Text(
-            '${r.inspectorName} • ${r.reviewStatus.labelAr}',
+            '${r.inspectorName} • ${r.reviewStatus.labelFor(language)}',
           ),
           trailing: const Icon(Icons.chevron_left),
           onTap: () => _open(r),
@@ -798,6 +784,27 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
       );
       if (file == null) return;
       final bytes = await file.readAsBytes();
+      final siteName = language == 'ar' && current.siteNameAr.isNotEmpty
+          ? current.siteNameAr
+          : (current.siteNameEn.isNotEmpty
+              ? current.siteNameEn
+              : current.buildingCode);
+      final stamped = await InspectionPhotoWatermark().apply(
+        imageBytes: bytes,
+        context: InspectionPhotoContext(
+          siteName: siteName,
+          buildingCode: current.buildingCode,
+          inspectionDateIso: current.dateIso,
+          inspectionTime: current.inspectionTime,
+          itemIndex: item.itemIndex,
+          itemDescription: item.descriptionFor(language),
+          inspectorName: current.inspectorName,
+          kindLabel: isIssue
+              ? (language == 'ar' ? 'مشكلة' : 'Issue')
+              : (language == 'ar' ? 'إصلاح' : 'Repair'),
+          sourceLabel: 'Gallery',
+        ),
+      );
       final orgId = current.organizationId;
       final kind = isIssue ? 'issue' : 'fix';
       final stamp = DateTime.now().millisecondsSinceEpoch;
@@ -806,7 +813,7 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
             siteId: current.siteId,
             inspectionId: current.id,
             fileName: '${item.itemIndex}_${kind}_$stamp.jpg',
-            bytes: bytes,
+            bytes: stamped,
           );
       setState(() {
         if (isIssue) {
@@ -836,6 +843,60 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
       }
     });
     await ref.read(inspectionRepositoryProvider).saveItems(current);
+  }
+
+  Future<void> _deleteCustomItem(InspectionItem item) async {
+    final current = selected;
+    if (current == null || !_canEditSelected || !item.isCustom) return;
+    final ar = language == 'ar';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(ar ? 'حذف البند؟' : 'Delete item?'),
+        content: Text(
+          ar
+              ? 'سيتم حذف البند المخصص رقم ${item.itemIndex}.'
+              : 'Custom item #${item.itemIndex} will be deleted.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(ar ? 'إلغاء' : 'Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(ar ? 'حذف' : 'Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      if (item.id != null) {
+        await ref
+            .read(inspectionRepositoryProvider)
+            .deleteInspectionItem(item.id!);
+      }
+      setState(() {
+        current.items.removeWhere(
+          (i) =>
+              identical(i, item) ||
+              (item.id != null && i.id == item.id) ||
+              (i.isCustom &&
+                  i.itemIndex == item.itemIndex &&
+                  i.description == item.description),
+        );
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(ar ? 'تم حذف البند' : 'Item deleted'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) setState(() => message = '$e');
+    }
   }
 
   Future<void> _addCustomItem() async {
@@ -920,9 +981,15 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
 
   Widget _formPane() {
     if (selected == null) {
-      return const ColoredBox(
-        color: Color(0x00E5E7EB),
-        child: Center(child: Text('اختر سجلًا لعرض النموذج على ورقة A4')),
+      return ColoredBox(
+        color: const Color(0x00E5E7EB),
+        child: Center(
+          child: Text(
+            language == 'ar'
+                ? 'اختر سجلًا لعرض النموذج على ورقة A4'
+                : 'Select a record to view the A4 form',
+          ),
+        ),
       );
     }
     final canEdit = _canEditSelected;
@@ -955,6 +1022,7 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
             ? (item, path) => _clearPhoto(item, path, isIssue: false)
             : null,
         onAddItem: canEdit ? _addCustomItem : null,
+        onDeleteItem: canEdit ? _deleteCustomItem : null,
       ),
     );
   }
@@ -966,7 +1034,7 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
         profile: widget.profile,
         language: language,
         onLanguageChanged: widget.onLanguageChanged,
-        languages: supportedLanguages,
+        languages: viewerLanguages,
         appIconAsset: 'assets/branding/app_icon_simple.png',
       ),
       appBar: checklistGradientAppBar(
@@ -1119,13 +1187,13 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
         validateProblemPhotos(inspection: inspection, policy: pol);
     if (result.ok) return true;
     if (result.blocksSubmit) {
-      setState(() => message = result.messageAr);
+      setState(() => message = result.messageFor(widget.language));
       return false;
     }
     if (result.severity == PolicySeverity.info) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(result.messageAr)),
+          SnackBar(content: Text(result.messageFor(widget.language))),
         );
       }
       return true;
@@ -1133,16 +1201,16 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
     final proceed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('صورة المشكلة ناقصة'),
-        content: Text(result.messageAr),
+        title: Text(widget.language == 'ar' ? 'صورة المشكلة ناقصة' : 'Issue photo missing'),
+        content: Text(result.messageFor(widget.language)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('إكمال الصور'),
+            child: Text(widget.language == 'ar' ? 'إكمال الصور' : 'Add photos'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('متابعة'),
+            child: Text(widget.language == 'ar' ? 'متابعة' : 'Continue'),
           ),
         ],
       ),
@@ -1158,7 +1226,7 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
       await widget.onChanged();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم الحفظ')),
+          SnackBar(content: Text(widget.language == 'ar' ? 'تم الحفظ' : 'Saved')),
         );
       }
     } catch (e) {
@@ -1174,16 +1242,16 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('إرسال التقرير'),
-        content: const Text('تأكيد إرسال سجل الفحص؟'),
+        title: Text(widget.language == 'ar' ? 'إرسال التقرير' : 'Submit report'),
+        content: Text(widget.language == 'ar' ? 'تأكيد إرسال سجل الفحص؟' : 'Submit this inspection?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('إلغاء'),
+            child: Text(widget.language == 'ar' ? 'إلغاء' : 'Cancel'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('إرسال'),
+            child: Text(widget.language == 'ar' ? 'إرسال' : 'Submit'),
           ),
         ],
       ),
@@ -1218,7 +1286,7 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
       await widget.onChanged();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم الاعتماد')),
+          SnackBar(content: Text(widget.language == 'ar' ? 'تم الاعتماد' : 'Approved')),
         );
       }
     } catch (e) {
@@ -1238,6 +1306,28 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
       );
       if (file == null) return;
       final bytes = await file.readAsBytes();
+      final lang = widget.language;
+      final siteName = lang == 'ar' && inspection.siteNameAr.isNotEmpty
+          ? inspection.siteNameAr
+          : (inspection.siteNameEn.isNotEmpty
+              ? inspection.siteNameEn
+              : inspection.buildingCode);
+      final stamped = await InspectionPhotoWatermark().apply(
+        imageBytes: bytes,
+        context: InspectionPhotoContext(
+          siteName: siteName,
+          buildingCode: inspection.buildingCode,
+          inspectionDateIso: inspection.dateIso,
+          inspectionTime: inspection.inspectionTime,
+          itemIndex: item.itemIndex,
+          itemDescription: item.descriptionFor(lang),
+          inspectorName: inspection.inspectorName,
+          kindLabel: isIssue
+              ? (lang == 'ar' ? 'مشكلة' : 'Issue')
+              : (lang == 'ar' ? 'إصلاح' : 'Repair'),
+          sourceLabel: 'Gallery',
+        ),
+      );
       final kind = isIssue ? 'issue' : 'fix';
       final stamp = DateTime.now().millisecondsSinceEpoch;
       final path = await ref.read(inspectionRepositoryProvider).uploadBytes(
@@ -1245,7 +1335,7 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
             siteId: inspection.siteId,
             inspectionId: inspection.id,
             fileName: '${item.itemIndex}_${kind}_$stamp.jpg',
-            bytes: bytes,
+            bytes: stamped,
           );
       setState(() {
         if (isIssue) {
@@ -1274,6 +1364,52 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
       }
     });
     await ref.read(inspectionRepositoryProvider).saveItems(inspection);
+  }
+
+  Future<void> _deleteCustomItem(InspectionItem item) async {
+    if (!_canEdit || !item.isCustom) return;
+    final ar = widget.language == 'ar';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(ar ? 'حذف البند؟' : 'Delete item?'),
+        content: Text(
+          ar
+              ? 'سيتم حذف البند المخصص رقم ${item.itemIndex}.'
+              : 'Custom item #${item.itemIndex} will be deleted.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(ar ? 'إلغاء' : 'Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(ar ? 'حذف' : 'Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      if (item.id != null) {
+        await ref
+            .read(inspectionRepositoryProvider)
+            .deleteInspectionItem(item.id!);
+      }
+      setState(() {
+        inspection.items.removeWhere(
+          (i) =>
+              identical(i, item) ||
+              (item.id != null && i.id == item.id) ||
+              (i.isCustom &&
+                  i.itemIndex == item.itemIndex &&
+                  i.description == item.description),
+        );
+      });
+    } catch (e) {
+      if (mounted) setState(() => message = '$e');
+    }
   }
 
   Future<void> _addCustomItem() async {
@@ -1425,18 +1561,18 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
           if (canEdit)
             TextButton(
               onPressed: saving ? null : _save,
-              child: const Text('حفظ', style: TextStyle(color: Colors.white)),
+              child: Text(widget.language == 'ar' ? 'حفظ' : 'Save', style: const TextStyle(color: Colors.white)),
             ),
           if (!inspection.isSubmitted && _canWrite)
             TextButton(
               onPressed: saving ? null : _submit,
-              child: const Text('إرسال', style: TextStyle(color: Colors.white)),
+              child: Text(widget.language == 'ar' ? 'إرسال' : 'Submit', style: const TextStyle(color: Colors.white)),
             ),
           if (canApprove)
             TextButton(
               onPressed: saving ? null : _approve,
               child:
-                  const Text('اعتماد', style: TextStyle(color: Colors.white)),
+                  Text(widget.language == 'ar' ? 'اعتماد' : 'Approve', style: const TextStyle(color: Colors.white)),
             ),
         ],
       ),
@@ -1478,6 +1614,7 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
                     ? (item, path) => _clearPhoto(item, path, isIssue: false)
                     : null,
                 onAddItem: canEdit ? _addCustomItem : null,
+                onDeleteItem: canEdit ? _deleteCustomItem : null,
               ),
             ),
           ),

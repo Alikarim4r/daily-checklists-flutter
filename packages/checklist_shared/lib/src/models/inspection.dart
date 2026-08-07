@@ -32,45 +32,63 @@ class InspectionItem {
   /// Consecutive problem days before Overdue for this item.
   int overdueAfterDays;
 
-  List<String> get issueImagePaths =>
-      decodeStoragePathList(issueImagePath ?? imagePath);
-
-  List<String> get fixImagePaths => decodeStoragePathList(fixImagePath);
-
-  /// Stable ordered remark photos with a permanent kind per path.
-  /// Filename stamp wins; otherwise the DB column the path lives in.
-  List<({String path, RemarkPhotoKind kind})> get remarkPhotos {
-    final ordered = <String>[];
-    final seen = <String>{};
-    for (final p in [...issueImagePaths, ...fixImagePaths]) {
-      if (p.isEmpty || !seen.add(p)) continue;
-      ordered.add(p);
-    }
-    final issueSet = issueImagePaths.toSet();
-    final fixSet = fixImagePaths.toSet();
+  List<String> get issueImagePaths {
+    final raw = decodeStoragePathList(issueImagePath ?? imagePath);
     return [
-      for (final p in ordered)
-        (
-          path: p,
-          kind: remarkPhotoKindFromPath(p) ??
-              (fixSet.contains(p) && !issueSet.contains(p)
-                  ? RemarkPhotoKind.fix
-                  : issueSet.contains(p) && !fixSet.contains(p)
-                      ? RemarkPhotoKind.issue
-                      : fixSet.contains(p)
-                          ? RemarkPhotoKind.fix
-                          : RemarkPhotoKind.issue),
-        ),
+      for (final p in raw)
+        if (remarkPhotoKindFromTagged(p) != RemarkPhotoKind.fix)
+          storagePathOf(p),
     ];
   }
 
+  List<String> get fixImagePaths {
+    final raw = decodeStoragePathList(fixImagePath);
+    // Prefer explicitly tagged fix rows; also accept untagged legacy in this column.
+    return [
+      for (final p in raw)
+        if (remarkPhotoKindFromTagged(p) != RemarkPhotoKind.issue)
+          storagePathOf(p),
+    ];
+  }
+
+  /// Stable ordered remark photos — kind is stored with the path (issue:/fix:).
+  List<({String path, RemarkPhotoKind kind})> get remarkPhotos {
+    final ordered = <({String path, RemarkPhotoKind kind})>[];
+    final seen = <String>{};
+
+    void addRaw(String raw, RemarkPhotoKind fallback) {
+      final kind = remarkPhotoKindFromPath(raw) ?? fallback;
+      final path = storagePathOf(raw);
+      if (path.isEmpty || !seen.add(path)) return;
+      ordered.add((path: path, kind: kind));
+    }
+
+    for (final p in decodeStoragePathList(issueImagePath ?? imagePath)) {
+      addRaw(p, RemarkPhotoKind.issue);
+    }
+    for (final p in decodeStoragePathList(fixImagePath)) {
+      addRaw(p, RemarkPhotoKind.fix);
+    }
+    return ordered;
+  }
+
   void setIssueImagePaths(List<String> paths) {
-    issueImagePath = encodeStoragePathList(paths);
-    imagePath = paths.isEmpty ? null : paths.first;
+    final tagged = [
+      for (final p in paths)
+        if (storagePathOf(p).isNotEmpty)
+          tagStoragePath(p, RemarkPhotoKind.issue),
+    ];
+    issueImagePath = encodeStoragePathList(tagged);
+    imagePath = tagged.isEmpty ? null : storagePathOf(tagged.first);
   }
 
   void setFixImagePaths(List<String> paths) {
-    fixImagePath = encodeStoragePathList(paths);
+    final tagged = [
+      for (final p in paths)
+        if (storagePathOf(p).isNotEmpty)
+          tagStoragePath(p, RemarkPhotoKind.fix),
+    ];
+    fixImagePath = encodeStoragePathList(tagged);
   }
 
   /// Keep columns aligned with each path's permanent kind.
@@ -81,11 +99,12 @@ class InspectionItem {
     final fixes = <String>[];
     final seen = <String>{};
     for (final photo in photos) {
-      if (photo.path.isEmpty || !seen.add(photo.path)) continue;
+      final path = storagePathOf(photo.path);
+      if (path.isEmpty || !seen.add(path)) continue;
       if (photo.kind == RemarkPhotoKind.fix) {
-        fixes.add(photo.path);
+        fixes.add(path);
       } else {
-        issues.add(photo.path);
+        issues.add(path);
       }
     }
     setIssueImagePaths(issues);
@@ -93,36 +112,40 @@ class InspectionItem {
   }
 
   void appendIssueImage(String path) {
-    if (path.trim().isEmpty) return;
+    final raw = storagePathOf(path);
+    if (raw.isEmpty) return;
     final next = [
       for (final p in remarkPhotos)
-        if (p.path != path) p,
-      (path: path, kind: RemarkPhotoKind.issue),
+        if (p.path != raw) p,
+      (path: raw, kind: RemarkPhotoKind.issue),
     ];
     _commitPhotoBuckets(next);
   }
 
   void appendFixImage(String path) {
-    if (path.trim().isEmpty) return;
+    final raw = storagePathOf(path);
+    if (raw.isEmpty) return;
     final next = [
       for (final p in remarkPhotos)
-        if (p.path != path) p,
-      (path: path, kind: RemarkPhotoKind.fix),
+        if (p.path != raw) p,
+      (path: raw, kind: RemarkPhotoKind.fix),
     ];
     _commitPhotoBuckets(next);
   }
 
   void removeIssueImage(String path) {
+    final raw = storagePathOf(path);
     _commitPhotoBuckets([
       for (final p in remarkPhotos)
-        if (p.path != path) p,
+        if (p.path != raw) p,
     ]);
   }
 
   void removeFixImage(String path) {
+    final raw = storagePathOf(path);
     _commitPhotoBuckets([
       for (final p in remarkPhotos)
-        if (p.path != path) p,
+        if (p.path != raw) p,
     ]);
   }
 
@@ -175,15 +198,26 @@ class InspectionItem {
       descriptionAr: json['description_ar'] as String?,
       response: ChecklistResponse.fromDb(json['response'] as String?),
       actionsTaken: (json['actions_taken'] ?? '') as String,
-      imagePath: issuePaths.isEmpty ? null : issuePaths.first,
-      issueImagePath: encodeStoragePathList(issuePaths),
-      fixImagePath: encodeStoragePathList(fixPaths),
+      imagePath: null,
+      issueImagePath: null,
+      fixImagePath: null,
       defaultAnswer: defaultAnswer,
       isCustom: json['is_custom'] as bool? ?? false,
       overdueAfterDays: (json['overdue_after_days'] as num?)?.toInt() ?? 3,
     );
-    // Re-bucket so filename stamps win and a path never flips kind later.
-    item._commitPhotoBuckets(item.remarkPhotos);
+    // Tag + bucket once so kinds stay fixed (issue:/fix: prefixes).
+    item._commitPhotoBuckets([
+      for (final p in issuePaths)
+        (
+          path: storagePathOf(p),
+          kind: remarkPhotoKindFromPath(p) ?? RemarkPhotoKind.issue,
+        ),
+      for (final p in fixPaths)
+        (
+          path: storagePathOf(p),
+          kind: remarkPhotoKindFromPath(p) ?? RemarkPhotoKind.fix,
+        ),
+    ]);
     return item;
   }
 
@@ -194,9 +228,9 @@ class InspectionItem {
         if (descriptionAr != null) 'description_ar': descriptionAr,
         'response': response?.dbValue,
         'actions_taken': actionsTaken,
-        'image_path': issueImagePaths.isEmpty ? null : issueImagePaths.first,
-        'issue_image_path': encodeStoragePathList(issueImagePaths),
-        'fix_image_path': encodeStoragePathList(fixImagePaths),
+        'image_path': _firstIssueRawPath,
+        'issue_image_path': _encodedTaggedIssues,
+        'fix_image_path': _encodedTaggedFixes,
         'default_answer': defaultAnswer,
         'is_custom': isCustom,
         'overdue_after_days': overdueAfterDays,
@@ -205,12 +239,31 @@ class InspectionItem {
   Map<String, dynamic> toUpdateJson() => {
         'response': response?.dbValue,
         'actions_taken': actionsTaken,
-        'image_path': issueImagePaths.isEmpty ? null : issueImagePaths.first,
-        'issue_image_path': encodeStoragePathList(issueImagePaths),
-        'fix_image_path': encodeStoragePathList(fixImagePaths),
+        'image_path': _firstIssueRawPath,
+        'issue_image_path': _encodedTaggedIssues,
+        'fix_image_path': _encodedTaggedFixes,
         'default_answer': defaultAnswer,
         'overdue_after_days': overdueAfterDays,
       };
+
+  String? get _firstIssueRawPath {
+    for (final p in remarkPhotos) {
+      if (p.kind == RemarkPhotoKind.issue) return p.path;
+    }
+    return null;
+  }
+
+  String? get _encodedTaggedIssues => encodeStoragePathList([
+        for (final p in remarkPhotos)
+          if (p.kind == RemarkPhotoKind.issue)
+            tagStoragePath(p.path, RemarkPhotoKind.issue),
+      ]);
+
+  String? get _encodedTaggedFixes => encodeStoragePathList([
+        for (final p in remarkPhotos)
+          if (p.kind == RemarkPhotoKind.fix)
+            tagStoragePath(p.path, RemarkPhotoKind.fix),
+      ]);
 }
 
 enum ColorCode { empty, ok, problem, na }

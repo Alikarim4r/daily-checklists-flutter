@@ -148,6 +148,15 @@ enum ReviewStatus {
         ReviewStatus.submitted => 'بانتظار الاعتماد',
         ReviewStatus.approved => 'معتمد',
       };
+
+  String get labelEn => switch (this) {
+        ReviewStatus.draft => 'Draft',
+        ReviewStatus.submitted => 'Awaiting approval',
+        ReviewStatus.approved => 'Approved',
+      };
+
+  String labelFor(String language) =>
+      language == 'ar' ? labelAr : labelEn;
 }
 
 /// Field-app gate: require at least one readable / writable site.

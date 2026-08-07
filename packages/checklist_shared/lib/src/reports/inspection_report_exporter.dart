@@ -10,6 +10,7 @@ import '../models/enums.dart';
 import '../models/inspection.dart';
 import '../repositories/inspection_repository.dart';
 import '../utils/signature_ink.dart';
+import '../utils/storage_path_list.dart';
 
 /// PDF export matching the on-screen A4 [ChecklistFormLayout] / MOEHE paper form.
 class InspectionReportExporter {
@@ -73,6 +74,18 @@ class InspectionReportExporter {
     final ar = language == 'ar';
     final items = [...inspection.items]
       ..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
+
+    final repo = InspectionRepository(Supabase.instance.client);
+    final photoLinks = <String, String>{};
+    for (final item in items) {
+      for (final photo in item.remarkPhotos) {
+        if (photoLinks.containsKey(photo.path)) continue;
+        final url = await repo.signedUrl(photo.path, expiresIn: 7 * 24 * 3600);
+        if (url != null && url.isNotEmpty) {
+          photoLinks[photo.path] = url;
+        }
+      }
+    }
 
     final baseFont = await PdfGoogleFonts.notoSansRegular();
     final boldFont = await PdfGoogleFonts.notoSansBold();
@@ -140,7 +153,7 @@ class InspectionReportExporter {
           pw.SizedBox(height: 8),
           _metaGrid(inspection, ar, signatureImage),
           pw.SizedBox(height: 10),
-          _itemsTable(items, language, ar),
+          _itemsTable(items, language, ar, photoLinks),
           pw.SizedBox(height: 10),
           pw.Text(
             disclaimer,
@@ -664,10 +677,58 @@ class InspectionReportExporter {
     );
   }
 
+  pw.Widget _photoHyperlinkChip({
+    required ({String path, RemarkPhotoKind kind}) photo,
+    required String? url,
+    required bool ar,
+  }) {
+    final isFix = photo.kind == RemarkPhotoKind.fix;
+    final label = isFix
+        ? (ar ? 'صورة إصلاح' : 'Repair photo')
+        : (ar ? 'صورة مشكلة' : 'Issue photo');
+    final accent = isFix ? PdfColors.green700 : PdfColors.red700;
+    final chip = pw.Row(
+      mainAxisSize: pw.MainAxisSize.min,
+      children: [
+        pw.Container(
+          width: 11,
+          height: 11,
+          decoration: pw.BoxDecoration(
+            color: accent,
+            borderRadius: const pw.BorderRadius.all(pw.Radius.circular(2)),
+            border: pw.Border.all(color: accent, width: 0.6),
+          ),
+          alignment: pw.Alignment.center,
+          child: pw.Text(
+            '▣',
+            style: pw.TextStyle(
+              fontSize: 7,
+              color: PdfColors.white,
+              fontWeight: pw.FontWeight.bold,
+            ),
+          ),
+        ),
+        pw.SizedBox(width: 3),
+        pw.Text(
+          label,
+          style: pw.TextStyle(
+            fontSize: 7,
+            color: url != null ? PdfColors.blue800 : PdfColors.grey700,
+            decoration:
+                url != null ? pw.TextDecoration.underline : pw.TextDecoration.none,
+          ),
+        ),
+      ],
+    );
+    if (url == null || url.isEmpty) return chip;
+    return pw.UrlLink(destination: url, child: chip);
+  }
+
   pw.Widget _itemsTable(
     List<InspectionItem> items,
     String language,
     bool ar,
+    Map<String, String> photoLinks,
   ) {
     final descAlign = ar ? pw.TextAlign.right : pw.TextAlign.left;
     final headers = [
@@ -719,12 +780,32 @@ class InspectionReportExporter {
           _markCell(item, ChecklistResponse.na),
           pw.Container(
             alignment: ar ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
-            padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-            child: pw.Text(
-              item.actionsTaken,
-              style: const pw.TextStyle(fontSize: 8, color: PdfColors.black),
-              textAlign: descAlign,
-              textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+            padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+            child: pw.Column(
+              crossAxisAlignment: ar
+                  ? pw.CrossAxisAlignment.end
+                  : pw.CrossAxisAlignment.start,
+              children: [
+                if (item.actionsTaken.trim().isNotEmpty)
+                  pw.Text(
+                    item.actionsTaken,
+                    style: const pw.TextStyle(
+                      fontSize: 8,
+                      color: PdfColors.black,
+                    ),
+                    textAlign: descAlign,
+                    textDirection:
+                        ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+                  ),
+                for (final photo in item.remarkPhotos) ...[
+                  pw.SizedBox(height: 2),
+                  _photoHyperlinkChip(
+                    photo: photo,
+                    url: photoLinks[photo.path],
+                    ar: ar,
+                  ),
+                ],
+              ],
             ),
           ),
         ];

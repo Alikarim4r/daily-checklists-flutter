@@ -49,14 +49,7 @@ class _EntryRootState extends ConsumerState<EntryRoot> {
       title: labels.title,
       debugShowCheckedModeBanner: false,
       theme: ChecklistChrome.theme(),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: ChecklistChrome.accent,
-          brightness: Brightness.dark,
-        ),
-      ),
+      darkTheme: ChecklistChrome.darkTheme(),
       themeMode: themeMode,
       builder: (context, child) => Directionality(
         textDirection: rtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
@@ -731,7 +724,6 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen> {
         return;
       }
       await ref.read(inspectionRepositoryProvider).saveItems(current);
-      await _loadHistory(current);
       await _refreshSignaturePreview();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -858,6 +850,28 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen> {
       final orgId = widget.site.organizationId.isNotEmpty
           ? widget.site.organizationId
           : current.organizationId;
+      final siteName = language == 'ar' && widget.site.nameAr.isNotEmpty
+          ? widget.site.nameAr
+          : (widget.site.nameEn.isNotEmpty
+              ? widget.site.nameEn
+              : current.buildingCode);
+      final sourceLabel = source == ImageSource.camera ? 'Camera' : 'Gallery';
+      final stamped = await InspectionPhotoWatermark().apply(
+        imageBytes: bytes,
+        context: InspectionPhotoContext(
+          siteName: siteName,
+          buildingCode: current.buildingCode,
+          inspectionDateIso: current.dateIso,
+          inspectionTime: current.inspectionTime,
+          itemIndex: item.itemIndex,
+          itemDescription: item.descriptionFor(language),
+          inspectorName: current.inspectorName,
+          kindLabel: isIssue
+              ? (language == 'ar' ? 'مشكلة' : 'Issue')
+              : (language == 'ar' ? 'إصلاح' : 'Repair'),
+          sourceLabel: sourceLabel,
+        ),
+      );
       final kind = isIssue ? 'issue' : 'fix';
       final stamp = DateTime.now().millisecondsSinceEpoch;
       final path = await ref.read(inspectionRepositoryProvider).uploadBytes(
@@ -865,7 +879,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen> {
             siteId: widget.site.id,
             inspectionId: current.id,
             fileName: '${item.itemIndex}_${kind}_$stamp.jpg',
-            bytes: bytes,
+            bytes: stamped,
           );
       setState(() {
         if (isIssue) {
@@ -1063,6 +1077,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen> {
                             final needsIssue =
                                 item.isProblem && !item.hasIssuePhoto;
                             return _EntryItemCard(
+                              key: ValueKey(item.id ?? 'i-${item.itemIndex}'),
                               labels: L,
                               language: language,
                               item: item,
@@ -1201,6 +1216,7 @@ class _SignatureCard extends StatelessWidget {
 
 class _EntryItemCard extends StatelessWidget {
   const _EntryItemCard({
+    super.key,
     required this.labels,
     required this.language,
     required this.item,

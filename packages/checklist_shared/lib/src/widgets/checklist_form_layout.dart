@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -25,6 +26,7 @@ class ChecklistFormLayout extends ConsumerWidget {
     this.onClearIssuePhoto,
     this.onClearFixPhoto,
     this.onAddItem,
+    this.onDeleteItem,
     this.onOpenPhoto,
     this.trailingHeader,
     this.forceTableLayout = false,
@@ -45,6 +47,7 @@ class ChecklistFormLayout extends ConsumerWidget {
   final Future<void> Function(InspectionItem item, String path)? onClearIssuePhoto;
   final Future<void> Function(InspectionItem item, String path)? onClearFixPhoto;
   final Future<void> Function()? onAddItem;
+  final Future<void> Function(InspectionItem item)? onDeleteItem;
   final void Function(String storagePath)? onOpenPhoto;
   final Widget? trailingHeader;
   final bool forceTableLayout;
@@ -604,20 +607,41 @@ class ChecklistFormLayout extends ConsumerWidget {
         style: const TextStyle(fontWeight: FontWeight.w800),
       ),
     );
-    if (readOnly || !isLast || onAddItem == null) return label;
+    final canAdd = isLast && onAddItem != null;
+    final canDelete = item.isCustom && onDeleteItem != null;
+    if (readOnly || (!canAdd && !canDelete)) return label;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onSecondaryTapDown: (details) =>
-          _showAddItemMenu(context, details.globalPosition),
-      onLongPress: () => _showAddItemMenu(
+      onSecondaryTapDown: (details) => _showItemIndexMenu(
         context,
-        _globalCenterOf(context),
+        details.globalPosition,
+        item,
+        canAdd: canAdd,
+        canDelete: canDelete,
       ),
+      onLongPressStart: (details) {
+        Feedback.forLongPress(context);
+        _showItemIndexMenu(
+          context,
+          details.globalPosition,
+          item,
+          canAdd: canAdd,
+          canDelete: canDelete,
+        );
+      },
       child: Tooltip(
         message: _ar
-            ? 'زر أيمن / ضغط مطول: إضافة بند'
-            : 'Right-click / long-press: add item',
-        child: label,
+            ? (canDelete
+                ? 'زر أيمن / ضغط مطول: إضافة أو حذف بند'
+                : 'زر أيمن / ضغط مطول: إضافة بند')
+            : (canDelete
+                ? 'Right-click / long-press: add or delete item'
+                : 'Right-click / long-press: add item'),
+        child: SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: Center(child: label),
+        ),
       ),
     );
   }
@@ -630,18 +654,31 @@ class ChecklistFormLayout extends ConsumerWidget {
     return box.localToGlobal(box.size.center(Offset.zero));
   }
 
-  Future<void> _showAddItemMenu(BuildContext context, Offset global) async {
+  Future<void> _showItemIndexMenu(
+    BuildContext context,
+    Offset global,
+    InspectionItem item, {
+    required bool canAdd,
+    required bool canDelete,
+  }) async {
     final selected = await showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(global.dx, global.dy, global.dx, global.dy),
       items: [
-        PopupMenuItem(
-          value: 'add',
-          child: Text(_ar ? 'إضافة بند جديد' : 'Add new item'),
-        ),
+        if (canAdd)
+          PopupMenuItem(
+            value: 'add',
+            child: Text(_ar ? 'إضافة بند جديد' : 'Add new item'),
+          ),
+        if (canDelete)
+          PopupMenuItem(
+            value: 'delete',
+            child: Text(_ar ? 'حذف البند' : 'Delete item'),
+          ),
       ],
     );
     if (selected == 'add') await onAddItem?.call();
+    if (selected == 'delete') await onDeleteItem?.call(item);
   }
 
   Future<void> _showRemarksMenu(
@@ -804,7 +841,7 @@ class ChecklistFormLayout extends ConsumerWidget {
       }
     } else {
       body = Padding(
-        padding: EdgeInsets.all(hasRemark || photoWidgets.isNotEmpty ? 4 : 0),
+        padding: EdgeInsets.all(hasRemark || photoWidgets.isNotEmpty || canMenu ? 4 : 0),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -819,21 +856,107 @@ class ChecklistFormLayout extends ConsumerWidget {
                 key: ValueKey('remarks-${item.id ?? item.itemIndex}'),
                 initialValue: item.actionsTaken,
                 onChanged: (v) => onActionsChanged?.call(item, v),
+                onLongPressMenu: canMenu
+                    ? (global) => _showRemarksMenu(context, global, item)
+                    : null,
               ),
             ),
+            if (canMenu)
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                tooltip: _ar ? 'إضافة صورة' : 'Add photo',
+                icon: Icon(
+                  Icons.add_a_photo_outlined,
+                  size: 16,
+                  color: _okBlue,
+                ),
+                onPressed: () =>
+                    _showRemarksMenu(context, _globalCenterOf(context), item),
+              ),
           ],
         ),
       );
     }
 
+    // Do not wrap photo thumbs in the remarks long-press detector — that
+    // steals / blocks desktop clicks on thumbnails.
     if (!canMenu) return body;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onSecondaryTapDown: (details) =>
-          _showRemarksMenu(context, details.globalPosition, item),
-      onLongPress: () =>
-          _showRemarksMenu(context, _globalCenterOf(context), item),
-      child: body,
+    return body;
+  }
+
+  Future<void> _openPhotoViewer(
+    BuildContext context,
+    WidgetRef ref,
+    String path,
+  ) async {
+    onOpenPhoto?.call(path);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: Colors.black87,
+          insetPadding: const EdgeInsets.all(16),
+          child: FutureBuilder<({Uint8List? bytes, String? url})>(
+            future: () async {
+              final repo = ref.read(inspectionRepositoryProvider);
+              final bytes = await repo.downloadBytes(path);
+              if (bytes != null && bytes.isNotEmpty) {
+                return (bytes: bytes, url: null);
+              }
+              final url = await repo.signedUrl(path);
+              return (bytes: null, url: url);
+            }(),
+            builder: (context, snap) {
+              if (snap.connectionState != ConnectionState.done) {
+                return const SizedBox(
+                  width: 280,
+                  height: 280,
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              final data = snap.data;
+              final bytes = data?.bytes;
+              final url = data?.url;
+              Widget image;
+              if (bytes != null && bytes.isNotEmpty) {
+                image = Image.memory(bytes, fit: BoxFit.contain);
+              } else if (url != null && url.isNotEmpty) {
+                image = Image.network(url, fit: BoxFit.contain);
+              } else {
+                image = Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    _ar ? 'تعذّر فتح الصورة' : 'Could not open photo',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                );
+              }
+              return Stack(
+                children: [
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(
+                      maxWidth: 900,
+                      maxHeight: 700,
+                    ),
+                    child: InteractiveViewer(child: image),
+                  ),
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: IconButton(
+                      onPressed: () => Navigator.pop(dialogContext),
+                      icon: const Icon(Icons.close, color: Colors.white),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        );
+      },
     );
   }
 
@@ -848,91 +971,89 @@ class ChecklistFormLayout extends ConsumerWidget {
       future: ref.read(inspectionRepositoryProvider).signedUrl(path),
       builder: (context, snap) {
         final url = snap.data;
-        return GestureDetector(
-          onTap: () {
-            if (url == null) return;
-            onOpenPhoto?.call(path);
-            showDialog<void>(
-              context: context,
-              builder: (context) => Dialog(
-                backgroundColor: Colors.black87,
-                child: InteractiveViewer(
-                  child: Image.network(url, fit: BoxFit.contain),
-                ),
+        return MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _openPhotoViewer(context, ref, path),
+            onSecondaryTapDown: onClear == null
+                ? null
+                : (details) async {
+                    final action = await showMenu<String>(
+                      context: context,
+                      position: RelativeRect.fromLTRB(
+                        details.globalPosition.dx,
+                        details.globalPosition.dy,
+                        details.globalPosition.dx,
+                        details.globalPosition.dy,
+                      ),
+                      items: [
+                        PopupMenuItem(
+                          value: 'del',
+                          child: Text(
+                            _ar ? 'حذف هذه الصورة' : 'Delete this photo',
+                          ),
+                        ),
+                      ],
+                    );
+                    if (action == 'del') await onClear();
+                  },
+            onLongPressStart: onClear == null
+                ? null
+                : (details) async {
+                    Feedback.forLongPress(context);
+                    final action = await showMenu<String>(
+                      context: context,
+                      position: RelativeRect.fromLTRB(
+                        details.globalPosition.dx,
+                        details.globalPosition.dy,
+                        details.globalPosition.dx,
+                        details.globalPosition.dy,
+                      ),
+                      items: [
+                        PopupMenuItem(
+                          value: 'del',
+                          child: Text(
+                            _ar ? 'حذف هذه الصورة' : 'Delete this photo',
+                          ),
+                        ),
+                      ],
+                    );
+                    if (action == 'del') await onClear();
+                  },
+            child: Container(
+              width: _photoW,
+              height: _photoH,
+              decoration: BoxDecoration(
+                border: Border.all(color: border, width: 2),
+                borderRadius: BorderRadius.circular(2),
+                color: Colors.white,
               ),
-            );
-          },
-          onSecondaryTapDown: onClear == null
-              ? null
-              : (details) async {
-                  final action = await showMenu<String>(
-                    context: context,
-                    position: RelativeRect.fromLTRB(
-                      details.globalPosition.dx,
-                      details.globalPosition.dy,
-                      details.globalPosition.dx,
-                      details.globalPosition.dy,
-                    ),
-                    items: [
-                      PopupMenuItem(
-                        value: 'del',
-                        child: Text(
-                          _ar ? 'حذف هذه الصورة' : 'Delete this photo',
+              clipBehavior: Clip.antiAlias,
+              child: url == null
+                  ? Icon(Icons.image, size: 12, color: border)
+                  : Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.network(
+                          url,
+                          fit: BoxFit.cover,
+                          cacheWidth: 96,
+                          cacheHeight: 144,
+                          filterQuality: FilterQuality.low,
                         ),
-                      ),
-                    ],
-                  );
-                  if (action == 'del') await onClear();
-                },
-          onLongPress: onClear == null
-              ? null
-              : () async {
-                  final ok = await showDialog<bool>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: Text(
-                        _ar ? 'حذف هذه الصورة؟' : 'Delete this photo?',
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx, false),
-                          child: Text(_ar ? 'إلغاء' : 'Cancel'),
-                        ),
-                        FilledButton(
-                          onPressed: () => Navigator.pop(ctx, true),
-                          child: Text(_ar ? 'حذف' : 'Delete'),
+                        Positioned(
+                          right: 0,
+                          bottom: 0,
+                          child: Container(
+                            width: 7,
+                            height: 7,
+                            color: border,
+                          ),
                         ),
                       ],
                     ),
-                  );
-                  if (ok == true) await onClear();
-                },
-          child: Container(
-            width: _photoW,
-            height: _photoH,
-            decoration: BoxDecoration(
-              border: Border.all(color: border, width: 2),
-              borderRadius: BorderRadius.circular(2),
-              color: Colors.white,
             ),
-            clipBehavior: Clip.antiAlias,
-            child: url == null
-                ? Icon(Icons.image, size: 12, color: border)
-                : Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Image.network(url, fit: BoxFit.cover),
-                      Positioned(
-                        right: 0,
-                        bottom: 0,
-                        child: Container(
-                          width: 7,
-                          height: 7,
-                          color: border,
-                        ),
-                      ),
-                    ],
-                  ),
           ),
         );
       },
@@ -1033,10 +1154,12 @@ class _BlankRemarksField extends StatefulWidget {
     super.key,
     required this.initialValue,
     required this.onChanged,
+    this.onLongPressMenu,
   });
 
   final String initialValue;
   final ValueChanged<String> onChanged;
+  final ValueChanged<Offset>? onLongPressMenu;
 
   @override
   State<_BlankRemarksField> createState() => _BlankRemarksFieldState();
@@ -1075,29 +1198,41 @@ class _BlankRemarksFieldState extends State<_BlankRemarksField> {
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
-      controller: _controller,
-      focusNode: _focus,
-      style: TextStyle(
-        fontSize: 11,
-        height: 1.3,
-        color: _active ? Colors.black : Colors.transparent,
-      ),
-      maxLines: null,
-      minLines: 1,
-      cursorColor: _active ? const Color(0xFF1F4E79) : Colors.transparent,
-      onChanged: widget.onChanged,
-      decoration: InputDecoration(
-        isDense: true,
-        isCollapsed: !_active,
-        hintText: null,
-        filled: false,
-        border: InputBorder.none,
-        enabledBorder: InputBorder.none,
-        focusedBorder: InputBorder.none,
-        contentPadding: _active
-            ? const EdgeInsets.symmetric(horizontal: 2, vertical: 4)
-            : EdgeInsets.zero,
+    // Disable text-selection long-press so cell/photo menus receive it on
+    // phones (right-click still works on desktop via the parent detector).
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onLongPressStart: widget.onLongPressMenu == null
+          ? null
+          : (details) {
+              Feedback.forLongPress(context);
+              widget.onLongPressMenu!(details.globalPosition);
+            },
+      child: TextField(
+        controller: _controller,
+        focusNode: _focus,
+        enableInteractiveSelection: widget.onLongPressMenu == null,
+        style: TextStyle(
+          fontSize: 11,
+          height: 1.3,
+          color: _active ? Colors.black : Colors.transparent,
+        ),
+        maxLines: null,
+        minLines: 1,
+        cursorColor: _active ? const Color(0xFF1F4E79) : Colors.transparent,
+        onChanged: widget.onChanged,
+        decoration: InputDecoration(
+          isDense: true,
+          isCollapsed: !_active,
+          hintText: null,
+          filled: false,
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          contentPadding: _active
+              ? const EdgeInsets.symmetric(horizontal: 2, vertical: 4)
+              : EdgeInsets.zero,
+        ),
       ),
     );
   }

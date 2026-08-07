@@ -2,6 +2,9 @@ import '../data/ui_labels.dart';
 
 const supportedLanguages = ['en', 'ar', 'bn', 'hi', 'ml', 'tl', 'ta'];
 
+/// Viewer app languages (full UI localization supported).
+const viewerLanguages = ['en', 'ar'];
+
 const languageDisplayNames = {
   'en': 'English',
   'ar': 'العربية',
