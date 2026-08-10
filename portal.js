@@ -2,9 +2,16 @@
   const I18N = {
     ar: {
       brand: "الفحص اليومي",
+      titleHome: "منصة الفحص اليومي",
+      titleApps: "التطبيقات — منصة الفحص اليومي",
+      titleDownloads: "التحميلات — منصة الفحص اليومي",
+      titlePrivacy: "الخصوصية — منصة الفحص اليومي",
+      titleSupport: "الدعم — منصة الفحص اليومي",
       navAbout: "التعريف",
       navApps: "التطبيقات",
       navDownloads: "التحميلات",
+      footerPrivacy: "الخصوصية",
+      footerSupport: "الدعم",
       themeToggle: "داكن",
       langToggle: "EN",
       heroTitle: "منصة الفحص اليومي",
@@ -36,7 +43,7 @@
       openApp: "فتح التطبيق ←",
       appsHeroTitle: "بوابة التطبيقات",
       appsHeroLead:
-        "انتقل لتطبيق الويب المناسب لدورك ثم سجّل الدخول بحسابك المعتمد. الوضع التجريبي متاح بحساب التجربة.",
+        "انتقل لتطبيق الويب المناسب لدورك ثم سجّل الدخول بحسابك المعتمد.",
       openView: "دخول فحص عرض ←",
       openEntry: "دخول فحص إدخال ←",
       openAdmin: "دخول فحص إدارة ←",
@@ -45,7 +52,9 @@
       dlHeroTitle: "تحميل التطبيقات",
       dlHeroLead:
         "حمّل أندرويد وماك، أو افتح تطبيقات الويب على iPhone/iPad عبر Safari.",
+      currentRelease: "الإصدار الحالي 1.1.0 (2) — 10 أغسطس 2026",
       available: "متاح",
+      artifactPending: "بانتظار حزمة موقعة",
       webReady: "ويب متاح",
       dlAndroidBody: "ملفات APK لتطبيقات الإدخال والعرض والإدارة.",
       dlMacBody:
@@ -68,9 +77,16 @@
     },
     en: {
       brand: "Daily Checklists",
+      titleHome: "Daily Inspection Platform",
+      titleApps: "Apps — Daily Inspection Platform",
+      titleDownloads: "Downloads — Daily Inspection Platform",
+      titlePrivacy: "Privacy — Daily Inspection Platform",
+      titleSupport: "Support — Daily Inspection Platform",
       navAbout: "About",
       navApps: "Apps",
       navDownloads: "Downloads",
+      footerPrivacy: "Privacy",
+      footerSupport: "Support",
       themeToggle: "Light",
       langToggle: "ع",
       heroTitle: "Daily Inspection Platform",
@@ -102,7 +118,7 @@
       openApp: "Open app →",
       appsHeroTitle: "Apps gateway",
       appsHeroLead:
-        "Open the web app for your role, then sign in with an approved account. Trial login is available.",
+        "Open the web app for your role, then sign in with an approved account.",
       openView: "Open Viewer →",
       openEntry: "Open Entry →",
       openAdmin: "Open Admin →",
@@ -111,7 +127,9 @@
       dlHeroTitle: "Download apps",
       dlHeroLead:
         "Download Android and Mac builds, or open web apps on iPhone/iPad via Safari.",
+      currentRelease: "Current release 1.1.0 (2) — August 10, 2026",
       available: "Available",
+      artifactPending: "Signed build pending",
       webReady: "Web ready",
       dlAndroidBody: "APK files for Entry, Viewer, and Admin.",
       dlMacBody:
@@ -140,6 +158,14 @@
     document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
     document.documentElement.dataset.theme = theme === "dark" ? "dark" : "";
     const dict = I18N[lang] || I18N.ar;
+    const titleKey = {
+      home: "titleHome",
+      apps: "titleApps",
+      downloads: "titleDownloads",
+      privacy: "titlePrivacy",
+      support: "titleSupport",
+    }[document.body.dataset.page];
+    if (titleKey && dict[titleKey]) document.title = dict[titleKey];
     document.querySelectorAll("[data-i18n]").forEach((el) => {
       const key = el.getAttribute("data-i18n");
       if (dict[key]) el.textContent = dict[key];
@@ -149,6 +175,38 @@
     });
     document.querySelectorAll("[data-theme-toggle]").forEach((btn) => {
       btn.textContent = theme === "dark" ? (lang === "ar" ? "فاتح" : "Light") : dict.themeToggle;
+    });
+  };
+
+  const updateDownloadAvailability = async () => {
+    const links = [...document.querySelectorAll("[data-artifact]")];
+    if (!links.length) return;
+    const results = await Promise.all(
+      links.map(async (link) => {
+        try {
+          const response = await fetch(link.href, {
+            method: "HEAD",
+            cache: "no-store",
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          link.classList.remove("is-disabled");
+          link.removeAttribute("aria-disabled");
+          return { group: link.dataset.artifact, ready: true };
+        } catch (_) {
+          link.classList.add("is-disabled");
+          link.setAttribute("aria-disabled", "true");
+          return { group: link.dataset.artifact, ready: false };
+        }
+      }),
+    );
+    const lang = localStorage.getItem("dc-lang") || "ar";
+    const dict = I18N[lang] || I18N.ar;
+    document.querySelectorAll("[data-artifact-status]").forEach((badge) => {
+      const group = badge.dataset.artifactStatus;
+      const groupResults = results.filter((result) => result.group === group);
+      const ready = groupResults.length > 0 && groupResults.every((result) => result.ready);
+      badge.textContent = ready ? dict.available : dict.artifactPending;
+      badge.classList.toggle("badge-ready", ready);
     });
   };
 
@@ -165,7 +223,11 @@
       localStorage.setItem("dc-theme", cur === "dark" ? "light" : "dark");
       apply();
     }
+    if (langBtn || themeBtn) updateDownloadAvailability();
+    const disabledDownload = e.target.closest("[data-artifact].is-disabled");
+    if (disabledDownload) e.preventDefault();
   });
 
   apply();
+  updateDownloadAvailability();
 })();

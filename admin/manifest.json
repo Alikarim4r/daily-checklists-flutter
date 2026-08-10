@@ -5,7 +5,7 @@
     "display": "standalone",
     "background_color": "#6B2D3C",
     "theme_color": "#8B3A4A",
-    "description": "A new Flutter project.",
+    "description": "Secure administration for MOEHE inspection organizations, access, catalogs, and policies.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
