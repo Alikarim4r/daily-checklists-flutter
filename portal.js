@@ -52,7 +52,7 @@
       dlHeroTitle: "تحميل التطبيقات",
       dlHeroLead:
         "حمّل أندرويد وماك، أو افتح تطبيقات الويب على iPhone/iPad عبر Safari.",
-      currentRelease: "الإصدار الحالي 1.1.0 (2) — 10 أغسطس 2026",
+      currentRelease: "الإصدار الحالي 1.1.1 (3) — 10 أغسطس 2026",
       available: "متاح",
       artifactPending: "بانتظار حزمة موقعة",
       webReady: "ويب متاح",
@@ -127,7 +127,7 @@
       dlHeroTitle: "Download apps",
       dlHeroLead:
         "Download Android and Mac builds, or open web apps on iPhone/iPad via Safari.",
-      currentRelease: "Current release 1.1.0 (2) — August 10, 2026",
+      currentRelease: "Current release 1.1.1 (3) — August 10, 2026",
       available: "Available",
       artifactPending: "Signed build pending",
       webReady: "Web ready",
