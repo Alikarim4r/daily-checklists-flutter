@@ -2,6 +2,32 @@ import 'package:checklist_shared/checklist_shared.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('submitted reports cannot silently omit a signature', () {
+    final inspection = Inspection(
+      id: 'inspection',
+      siteId: 'site',
+      buildingCode: 'B1',
+      inspectionDate: DateTime(2026, 8, 13),
+      status: InspectionStatus.submitted,
+    );
+
+    expect(
+      () => validateInspectionReportEvidence(inspection),
+      throwsA(isA<InspectionReportEvidenceException>()),
+    );
+  });
+
+  test('draft report preview may be generated before signing', () {
+    final inspection = Inspection(
+      id: 'inspection',
+      siteId: 'site',
+      buildingCode: 'B1',
+      inspectionDate: DateTime(2026, 8, 13),
+    );
+
+    expect(() => validateInspectionReportEvidence(inspection), returnsNormally);
+  });
+
   test('photo references stay bound to item and photo order', () {
     final item12 = InspectionItem(itemIndex: 12, description: 'Second item')
       ..setPhotoPairs([

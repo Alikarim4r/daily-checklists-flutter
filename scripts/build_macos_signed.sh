@@ -38,7 +38,7 @@ fi
 DART_DEFINES=(
   --dart-define=SUPABASE_URL="$SUPABASE_URL"
   --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
-  --dart-define=APP_ENV="${APP_ENV:-production}"
+  --dart-define=APP_ENV="${RELEASE_APP_ENV:-production}"
   --dart-define=DEMO_LOGIN=false
 )
 

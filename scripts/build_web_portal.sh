@@ -32,7 +32,7 @@ build_web() {
   flutter build web --release --no-pub \
     --dart-define=SUPABASE_URL="$SUPABASE_URL" \
     --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
-    --dart-define=APP_ENV="${APP_ENV:-production}" \
+    --dart-define=APP_ENV="${RELEASE_APP_ENV:-production}" \
     --dart-define=DEMO_LOGIN=false \
     --base-href "$href"
   mkdir -p "$OUT/$dest"
@@ -47,18 +47,30 @@ build_web apps/checklist_admin admin /daily-checklists-flutter/admin/
 copy_apk() {
   local src="$1" name="$2" app_dir="$3"
   local expected actual_line actual_name actual_code sdk_root aapt_bin
+  local apksigner_bin certificate_dn
   expected="$(awk '/^version:/{print $2; exit}' "$ROOT/apps/$app_dir/pubspec.yaml")"
   sdk_root="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
   aapt_bin="$(find "$sdk_root/build-tools" -type f -name aapt 2>/dev/null | sort -V | tail -1)"
-  if [[ ! -f "$src" || -z "$aapt_bin" ]]; then
+  apksigner_bin="$(find "$sdk_root/build-tools" -type f -name apksigner 2>/dev/null | sort -V | tail -1)"
+  if [[ ! -f "$src" || -z "$aapt_bin" || -z "$apksigner_bin" ]]; then
     echo "skip apk $name (missing artifact or version inspector)"
     return
+  fi
+  if [[ -z "${JAVA_HOME:-}" && -d "/Applications/Android Studio.app/Contents/jbr/Contents/Home" ]]; then
+    export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
   fi
   actual_line="$("$aapt_bin" dump badging "$src" | head -1)"
   actual_name="$(sed -n "s/.*versionName='\\([^']*\\)'.*/\\1/p" <<<"$actual_line")"
   actual_code="$(sed -n "s/.*versionCode='\\([^']*\\)'.*/\\1/p" <<<"$actual_line")"
   if [[ "$actual_name+$actual_code" != "$expected" ]]; then
     echo "skip apk $name (artifact $actual_name+$actual_code, expected $expected)"
+    return
+  fi
+  certificate_dn="$("$apksigner_bin" verify --print-certs "$src" 2>/dev/null \
+    | sed -n 's/^Signer #1 certificate DN: //p; s/^V2 Signer: certificate DN: //p' \
+    | head -1)"
+  if [[ -z "$certificate_dn" || "$certificate_dn" == *"Android Debug"* ]]; then
+    echo "skip apk $name (not production signed)"
     return
   fi
   cp "$src" "$OUT/downloads/android/$name"
@@ -72,6 +84,7 @@ copy_apk "$ROOT/dist/android/checklist_admin/checklist_admin.apk" inspection-adm
 zip_mac() {
   local src="$1" zipname="$2" app_dir="$3" product="$4"
   local expected expected_name expected_build actual_name actual_build
+  local verify_dir app_path
   expected="$(awk '/^version:/{print $2; exit}' "$ROOT/apps/$app_dir/pubspec.yaml")"
   expected_name="${expected%%+*}"
   expected_build="${expected##*+}"
@@ -87,6 +100,18 @@ zip_mac() {
     echo "skip mac $zipname (artifact $actual_name+$actual_build, expected $expected)"
     return
   fi
+  verify_dir="$(mktemp -d)"
+  unzip -q "$src" -d "$verify_dir"
+  app_path="$verify_dir/$product.app"
+  if [[ ! -d "$app_path" ]] \
+    || ! codesign --verify --deep --strict "$app_path" >/dev/null 2>&1 \
+    || ! codesign -dvv "$app_path" 2>&1 | grep -Fq 'Authority=Developer ID Application' \
+    || ! xcrun stapler validate "$app_path" >/dev/null 2>&1; then
+    rm -rf "$verify_dir"
+    echo "skip mac $zipname (Developer ID/notarization verification failed)"
+    return
+  fi
+  rm -rf "$verify_dir"
   cp "$src" "$OUT/downloads/macos/$zipname"
   echo "mac $zipname ($expected)"
 }

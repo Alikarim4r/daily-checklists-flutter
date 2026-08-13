@@ -28,4 +28,25 @@ void main() {
     final qatar = qatarBusinessNow(DateTime.utc(2026, 8, 11, 22, 30));
     expect(qatar, DateTime(2026, 8, 12, 1, 30));
   });
+
+  test('historical snapshots label compliance as period-end', () {
+    final snapshot = OpsSnapshot(
+      period: OpsPeriod.lastMonth,
+      dateFrom: DateTime(2026, 7),
+      dateTo: DateTime(2026, 7, 31),
+      asOf: DateTime(2026, 8, 13),
+      siteCount: 1,
+      dailyCompliance: 1,
+      pendingReviewCount: 0,
+      overdueInspectionCount: 0,
+      openProblemCount: 0,
+      completionRate: 1,
+      totalInspectionsInPeriod: 1,
+      approvedInPeriod: 1,
+      sites: const [],
+      followUps: const [],
+    );
+
+    expect(snapshot.complianceDateIsToday, isFalse);
+  });
 }

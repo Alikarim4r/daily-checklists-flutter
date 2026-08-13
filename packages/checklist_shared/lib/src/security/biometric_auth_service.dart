@@ -1,6 +1,12 @@
 import 'package:flutter/foundation.dart';
 import 'package:local_auth/local_auth.dart';
 
+bool hasEnrolledBiometric({
+  required bool deviceSupported,
+  required bool canCheckBiometrics,
+  required List<BiometricType> availableBiometrics,
+}) => deviceSupported && canCheckBiometrics && availableBiometrics.isNotEmpty;
+
 /// Thin wrapper around [LocalAuthentication] with web-safe fallbacks.
 class BiometricAuthService {
   BiometricAuthService({LocalAuthentication? auth})
@@ -18,9 +24,13 @@ class BiometricAuthService {
     if (!isSupportedPlatform) return false;
     try {
       final supported = await _auth.isDeviceSupported();
-      if (!supported) return false;
       final canCheck = await _auth.canCheckBiometrics;
-      return canCheck || supported;
+      final available = await _auth.getAvailableBiometrics();
+      return hasEnrolledBiometric(
+        deviceSupported: supported,
+        canCheckBiometrics: canCheck,
+        availableBiometrics: available,
+      );
     } catch (_) {
       return false;
     }

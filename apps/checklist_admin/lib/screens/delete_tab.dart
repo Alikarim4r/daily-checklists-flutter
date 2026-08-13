@@ -22,7 +22,15 @@ class _DeleteTabState extends ConsumerState<DeleteTab> {
 
   Future<void> _load() async {
     setState(() => loading = true);
-    final list = await ref.read(inspectionRepositoryProvider).listInspections();
+    final repository = ref.read(inspectionRepositoryProvider);
+    try {
+      await repository.retryPendingMediaCleanup();
+    } catch (_) {
+      // The short-lived server authorization remains available for the next
+      // screen visit; a cleanup retry must not hide the records list.
+    }
+    final list = await repository.listInspections();
+    if (!mounted) return;
     setState(() {
       records = list;
       loading = false;

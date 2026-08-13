@@ -1,7 +1,27 @@
 import 'package:checklist_shared/checklist_shared.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:local_auth/local_auth.dart';
 
 void main() {
+  test('biometric support without enrollment never enables the lock', () {
+    expect(
+      hasEnrolledBiometric(
+        deviceSupported: true,
+        canCheckBiometrics: true,
+        availableBiometrics: const [],
+      ),
+      isFalse,
+    );
+    expect(
+      hasEnrolledBiometric(
+        deviceSupported: true,
+        canCheckBiometrics: true,
+        availableBiometrics: const [BiometricType.fingerprint],
+      ),
+      isTrue,
+    );
+  });
+
   test('brief background transitions do not relock the session', () {
     var now = DateTime(2026, 8, 10, 12);
     final policy = SessionRelockPolicy(clock: () => now);

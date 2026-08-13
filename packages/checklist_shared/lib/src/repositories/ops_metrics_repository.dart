@@ -36,7 +36,8 @@ class OpsMetricsRepository {
       throw ArgumentError('dateFrom must be on or before dateTo');
     }
     final today = DateTime(now.year, now.month, now.day);
-    final todayIso = _iso(today);
+    final complianceDate = to.isAfter(today) ? today : to;
+    final complianceDateIso = _iso(complianceDate);
 
     var sites = await _sites.listAccessibleSites(profile: profile);
     if (siteId != null && siteId.isNotEmpty) {
@@ -84,6 +85,22 @@ class OpsMetricsRepository {
       bySite.putIfAbsent(h.siteId, () => []).add(h);
     }
 
+    final visibleIds = {for (final inspection in visible) inspection.id};
+    final periodDetailed = await _listDetailedHistory(
+      ranges: [
+        for (final id in siteIds)
+          {'site_id': id, 'date_from': _iso(from), 'date_to': _iso(to)},
+      ],
+      approvedOnly: !canReview,
+    );
+    final periodDetailedBySite = <String, List<Inspection>>{};
+    for (final inspection in periodDetailed) {
+      if (!visibleIds.contains(inspection.id)) continue;
+      periodDetailedBySite
+          .putIfAbsent(inspection.siteId, () => [])
+          .add(inspection);
+    }
+
     // Open work orders must survive a period filter (for example, an issue
     // opened yesterday must still appear on the Today dashboard). Fetch the
     // latest detailed record and all required history in two batched RPCs.
@@ -118,11 +135,11 @@ class OpsMetricsRepository {
       historyBySite.putIfAbsent(inspection.siteId, () => []).add(inspection);
     }
 
-    final todayDoneSites = <String>{};
+    final complianceDateDoneSites = <String>{};
     for (final h in visible) {
-      if (h.dateIso != todayIso) continue;
+      if (h.dateIso != complianceDateIso) continue;
       if (h.awaitingReview || h.isApproved || h.isSubmitted) {
-        todayDoneSites.add(h.siteId);
+        complianceDateDoneSites.add(h.siteId);
       }
     }
 
@@ -149,11 +166,18 @@ class OpsMetricsRepository {
       var idealRate = 0.0;
       var openProblems = 0;
       var overdueCount = 0;
-      final answered = <InspectionItem>[];
+      final periodAnswered = <InspectionItem>[
+        for (final periodInspection
+            in periodDetailedBySite[site.id] ?? const <Inspection>[])
+          ...periodInspection.items.where((item) => item.response != null),
+      ];
+      final periodIdeal = periodAnswered
+          .where((item) => item.isIdealAnswer)
+          .length;
+      idealRate = periodAnswered.isEmpty
+          ? 0
+          : periodIdeal / periodAnswered.length;
       if (full != null && full.items.isNotEmpty) {
-        answered.addAll(full.items.where((i) => i.response != null));
-        final ideal = answered.where((i) => i.isIdealAnswer).length;
-        idealRate = answered.isEmpty ? 0 : ideal / answered.length;
         openProblems = full.items
             .where((i) => i.isProblem && !i.hasFixPhoto)
             .length;
@@ -230,7 +254,11 @@ class OpsMetricsRepository {
               );
             }
           }
-        } catch (_) {}
+        } catch (error) {
+          throw StateError(
+            'Failed to calculate overdue items for ${site.id}: $error',
+          );
+        }
 
         for (final item in full.items) {
           if (!(item.isProblem && !item.hasFixPhoto)) continue;
@@ -296,7 +324,9 @@ class OpsMetricsRepository {
           idealRate: idealRate,
           openProblemCount: openProblems,
           overdueCount: overdueCount,
-          hasTodaySubmission: todayDoneSites.contains(site.id),
+          hasComplianceDateSubmission: complianceDateDoneSites.contains(
+            site.id,
+          ),
         ),
       );
     }
@@ -322,7 +352,7 @@ class OpsMetricsRepository {
     final siteCount = sites.length;
     final dailyCompliance = siteCount == 0
         ? 0.0
-        : todayDoneSites.length / siteCount;
+        : complianceDateDoneSites.length / siteCount;
     final completionRate = nonDraft.isEmpty
         ? 0.0
         : approved.length / nonDraft.length;

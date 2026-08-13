@@ -12,6 +12,7 @@ class OfflineInspectionQueue {
   static const _boxName = 'checklist_offline_queue';
   static const _keyName = 'checklist.offline_queue.encryption_key.v1';
   static const _lastSyncKey = 'checklist.offline_queue.last_success.v1';
+  static const _hierarchyPrefix = '__hierarchy_cache__:';
   static const _secure = FlutterSecureStorage(
     aOptions: AndroidOptions(
       migrateOnAlgorithmChange: true,
@@ -105,11 +106,33 @@ class OfflineInspectionQueue {
     await _box.put(localId, jsonEncode(payload));
   }
 
+  Future<void> markDeferred(String localId) async {
+    final payload = _decode(_box.get(localId));
+    if (payload == null) return;
+    final meta = Map<String, dynamic>.from(
+      payload['_queue'] as Map? ?? const {},
+    );
+    meta['status'] = 'pending';
+    meta['updatedAt'] = DateTime.now().toUtc().toIso8601String();
+    meta['lastError'] = null;
+    payload['_queue'] = meta;
+    await _box.put(localId, jsonEncode(payload));
+  }
+
+  Future<void> cacheHierarchy({
+    required String userId,
+    required Map<String, dynamic> payload,
+  }) => _box.put('$_hierarchyPrefix$userId', jsonEncode(payload));
+
+  Map<String, dynamic>? cachedHierarchy(String userId) =>
+      _decode(_box.get('$_hierarchyPrefix$userId'));
+
   Future<void> remove(String localId) => _box.delete(localId);
 
   List<MapEntry<String, Map<String, dynamic>>> pending() {
     final entries = <MapEntry<String, Map<String, dynamic>>>[];
     for (final key in _box.keys) {
+      if (key is String && key.startsWith(_hierarchyPrefix)) continue;
       final value = _decode(_box.get(key));
       if (key is String && value != null) entries.add(MapEntry(key, value));
     }
@@ -123,7 +146,7 @@ class OfflineInspectionQueue {
     return entries;
   }
 
-  int get pendingCount => _box.length;
+  int get pendingCount => pending().length;
 
   int get failedCount => pending().where((entry) {
     final meta = entry.value['_queue'] as Map?;

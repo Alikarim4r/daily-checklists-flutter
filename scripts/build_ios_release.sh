@@ -42,7 +42,7 @@ flutter build ipa --release \
   --split-debug-info="$ROOT/dist/symbols/ios/$APP_DIR" \
   --dart-define=SUPABASE_URL="$SUPABASE_URL" \
   --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
-  --dart-define=APP_ENV="${APP_ENV:-production}" \
+  --dart-define=APP_ENV="${RELEASE_APP_ENV:-production}" \
   --dart-define=DEMO_LOGIN=false
 
 mkdir -p "$ROOT/dist/ios/$APP_DIR"

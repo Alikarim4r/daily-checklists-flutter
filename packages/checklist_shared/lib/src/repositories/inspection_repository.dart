@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../data/checklist_lists.dart';
@@ -721,8 +722,8 @@ class InspectionRepository {
   }
 
   Future<void> deleteInspection(Inspection inspection) async {
-    await _client.rpc(
-      'delete_checklist_inspection',
+    final result = await _client.rpc(
+      'delete_checklist_inspection_with_cleanup',
       params: {
         'p_inspection_id': inspection.id,
         'p_expected_version': inspection.version,
@@ -730,19 +731,71 @@ class InspectionRepository {
     );
 
     final paths = <String>{
+      if (result is List)
+        for (final path in result)
+          if (path != null) storagePathOf('$path'),
       if ((inspection.signaturePath ?? '').isNotEmpty)
         storagePathOf(inspection.signaturePath!),
       for (final item in inspection.items)
         for (final photo in item.remarkPhotos) storagePathOf(photo.path),
     }..removeWhere((path) => path.isEmpty);
-    if (paths.isNotEmpty) {
-      try {
-        await _client.storage.from(bucket).remove(paths.toList());
-      } catch (_) {
-        // Database deletion already succeeded. A server cleanup job can retry
-        // orphaned objects without restoring a deleted inspection.
-      }
+    try {
+      await _completeMediaCleanup(paths);
+    } catch (error) {
+      throw StateError(
+        'Inspection was deleted, but its protected media cleanup is pending: '
+        '$error',
+      );
     }
+  }
+
+  Future<void> _completeMediaCleanup(Iterable<String> rawPaths) async {
+    final paths = rawPaths
+        .map(storagePathOf)
+        .where((path) => path.isNotEmpty)
+        .toSet()
+        .toList();
+    if (paths.isEmpty) return;
+    await _client.storage.from(bucket).remove(paths);
+    await _client.rpc(
+      'complete_checklist_media_cleanup',
+      params: {'p_paths': paths},
+    );
+    for (final path in paths) {
+      _downloadByteFutures.remove(path);
+      _signedUrlFutures.remove(path);
+    }
+  }
+
+  /// Finishes protected object cleanup after a previous network interruption.
+  /// The server returns only short-lived paths requested by the current user.
+  Future<int> retryPendingMediaCleanup() async {
+    final result = await _client.rpc('list_my_pending_checklist_media_cleanup');
+    final paths = <String>{
+      if (result is List)
+        for (final value in result)
+          if (value != null) storagePathOf('$value'),
+    }..removeWhere((path) => path.isEmpty);
+    await _completeMediaCleanup(paths);
+    return paths.length;
+  }
+
+  String _contentAddressedFileName(String fileName, String contentHash) {
+    final slash = fileName.lastIndexOf('/');
+    final directory = slash < 0 ? '' : fileName.substring(0, slash + 1);
+    final name = slash < 0 ? fileName : fileName.substring(slash + 1);
+    final dot = name.lastIndexOf('.');
+    final stem = dot <= 0 ? name : name.substring(0, dot);
+    final extension = dot <= 0 ? '' : name.substring(dot);
+    return '$directory${stem}_${contentHash.substring(0, 16)}$extension';
+  }
+
+  bool _isDuplicateObjectError(Object error) {
+    final value = '$error'.toLowerCase();
+    return value.contains('already exists') ||
+        value.contains('duplicate') ||
+        value.contains('statuscode: 409') ||
+        value.contains('status code: 409');
   }
 
   Future<String> uploadBytes({
@@ -755,14 +808,26 @@ class InspectionRepository {
     String? evidenceItemId,
     String? evidenceKind,
   }) async {
-    final path = '$organizationId/$siteId/$inspectionId/$fileName';
-    await _client.storage
-        .from(bucket)
-        .uploadBinary(
-          path,
-          bytes,
-          fileOptions: FileOptions(contentType: contentType, upsert: true),
+    final contentHash = sha256.convert(bytes).toString();
+    final immutableName = _contentAddressedFileName(fileName, contentHash);
+    final path = '$organizationId/$siteId/$inspectionId/$immutableName';
+    try {
+      await _client.storage
+          .from(bucket)
+          .uploadBinary(
+            path,
+            bytes,
+            fileOptions: FileOptions(contentType: contentType, upsert: false),
+          );
+    } catch (error) {
+      if (!_isDuplicateObjectError(error)) rethrow;
+      final existing = await _client.storage.from(bucket).download(path);
+      if (sha256.convert(existing).toString() != contentHash) {
+        throw StateError(
+          'Immutable media path already contains different bytes: $path',
         );
+      }
+    }
     if (evidenceKind != null && evidenceKind.isNotEmpty) {
       try {
         await _client.rpc(

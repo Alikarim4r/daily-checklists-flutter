@@ -562,7 +562,13 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
       }
       await _load();
     } catch (e) {
-      if (mounted) setState(() => message = e.toString());
+      if (mounted) {
+        setState(
+          () => message = e is InspectionReportEvidenceException
+              ? e.messageFor(language)
+              : e.toString(),
+        );
+      }
     } finally {
       if (mounted) setState(() => loading = false);
     }
@@ -1068,9 +1074,7 @@ class _ViewerHomeState extends ConsumerState<ViewerHome> {
 
   Future<void> _persistSignatureIfNeeded(Inspection current) async {
     if (!_canEditSelected) return;
-    if (current.signaturePath != null &&
-        current.signaturePath!.isNotEmpty &&
-        !_signature.isNotEmpty) {
+    if (current.signaturePath != null && current.signaturePath!.isNotEmpty) {
       return;
     }
     if (!_signature.isNotEmpty) return;
@@ -2328,8 +2332,7 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
   Future<void> _persistSignatureIfNeeded() async {
     if (!_canEdit) return;
     if (inspection.signaturePath != null &&
-        inspection.signaturePath!.isNotEmpty &&
-        !_signature.isNotEmpty) {
+        inspection.signaturePath!.isNotEmpty) {
       return;
     }
     if (!_signature.isNotEmpty) return;
@@ -2867,9 +2870,15 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
                       }
                     } catch (e) {
                       if (context.mounted) {
-                        ScaffoldMessenger.of(
-                          context,
-                        ).showSnackBar(SnackBar(content: Text('$e')));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              e is InspectionReportEvidenceException
+                                  ? e.messageFor(widget.language)
+                                  : '$e',
+                            ),
+                          ),
+                        );
                       }
                     }
                   },

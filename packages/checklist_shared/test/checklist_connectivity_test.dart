@@ -1,5 +1,6 @@
 import 'package:checklist_shared/checklist_shared.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 void main() {
   test('transport failures are eligible for offline queue fallback', () {
@@ -29,6 +30,31 @@ void main() {
         Exception('PostgrestException: not allowed to submit (403)'),
       ),
       isFalse,
+    );
+  });
+
+  test('backend reachability uses the authoritative probe', () async {
+    final client = SupabaseClient(
+      'https://example.supabase.co',
+      'test-publishable-key',
+    );
+    expect(
+      await ChecklistConnectivity.canReachBackend(client, probe: () async {}),
+      isTrue,
+    );
+    expect(
+      await ChecklistConnectivity.canReachBackend(
+        client,
+        probe: () async => throw Exception('Failed host lookup'),
+      ),
+      isFalse,
+    );
+    expect(
+      await ChecklistConnectivity.canReachBackend(
+        client,
+        probe: () async => throw Exception('permission denied (403)'),
+      ),
+      isTrue,
     );
   });
 

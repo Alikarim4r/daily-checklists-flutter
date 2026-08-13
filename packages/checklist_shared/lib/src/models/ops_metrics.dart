@@ -85,7 +85,7 @@ class SiteKpiRow {
     required this.idealRate,
     required this.openProblemCount,
     required this.overdueCount,
-    required this.hasTodaySubmission,
+    required this.hasComplianceDateSubmission,
   });
 
   final String siteId;
@@ -98,14 +98,14 @@ class SiteKpiRow {
   final double idealRate;
   final int openProblemCount;
   final int overdueCount;
-  final bool hasTodaySubmission;
+  final bool hasComplianceDateSubmission;
 
   double get approvalRate =>
       inspectionsInPeriod == 0 ? 0 : approvedCount / inspectionsInPeriod;
 
   /// Composite score for ranking (higher is better).
   double get score {
-    final compliance = hasTodaySubmission ? 0.25 : 0.0;
+    final compliance = hasComplianceDateSubmission ? 0.25 : 0.0;
     return (idealRate * 0.45) + (approvalRate * 0.30) + compliance;
   }
 }
@@ -134,7 +134,8 @@ class OpsSnapshot {
   final DateTime asOf;
   final int siteCount;
 
-  /// Sites with submitted/approved inspection today ÷ siteCount (0..1).
+  /// Sites with submitted/approved inspection on [dateTo] (or today when the
+  /// selected end date is in the future) divided by [siteCount].
   final double dailyCompliance;
   final int pendingReviewCount;
   final int overdueInspectionCount;
@@ -147,6 +148,11 @@ class OpsSnapshot {
 
   final List<SiteKpiRow> sites;
   final List<FollowUpItem> followUps;
+
+  bool get complianceDateIsToday =>
+      dateTo.year == asOf.year &&
+      dateTo.month == asOf.month &&
+      dateTo.day == asOf.day;
 
   List<SiteKpiRow> get bestSites {
     final ranked = [...sites]..sort((a, b) => b.score.compareTo(a.score));

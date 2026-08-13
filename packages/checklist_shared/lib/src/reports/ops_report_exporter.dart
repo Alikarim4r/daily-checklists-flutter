@@ -79,7 +79,9 @@ class OpsReportExporter {
             runSpacing: 8,
             children: [
               metric(
-                ar ? 'الالتزام اليومي' : 'Daily compliance',
+                snapshot.complianceDateIsToday
+                    ? (ar ? 'الالتزام اليومي' : 'Daily compliance')
+                    : (ar ? 'التزام نهاية الفترة' : 'Period-end compliance'),
                 pct(snapshot.dailyCompliance),
                 PdfColors.green700,
               ),

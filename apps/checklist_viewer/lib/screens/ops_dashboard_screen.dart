@@ -474,7 +474,9 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
   Widget _kpiGrid(OpsSnapshot snap) {
     final cards = <_KpiCardData>[
       _KpiCardData(
-        label: ar ? 'الالتزام اليومي' : 'Daily compliance',
+        label: snap.complianceDateIsToday
+            ? (ar ? 'الالتزام اليومي' : 'Daily compliance')
+            : (ar ? 'التزام نهاية الفترة' : 'Period-end compliance'),
         value: _pct(snap.dailyCompliance),
         detail: ar
             ? '${(snap.dailyCompliance * snap.siteCount).round()}/${snap.siteCount} مواقع'

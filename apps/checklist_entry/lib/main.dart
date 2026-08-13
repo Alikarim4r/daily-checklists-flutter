@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -38,6 +39,118 @@ class EntryRoot extends ConsumerStatefulWidget {
   @override
   ConsumerState<EntryRoot> createState() => _EntryRootState();
 }
+
+Map<String, dynamic> _encodeSite(ChecklistSite site) => {
+  'id': site.id,
+  'organization_id': site.organizationId,
+  'zone_id': site.zoneId,
+  'parent_site_id': site.parentSiteId,
+  'name_en': site.nameEn,
+  'name_ar': site.nameAr,
+  'building_code': site.buildingCode,
+  'pin': site.pin,
+  'checklist_type': site.checklistType,
+  'location': site.location,
+  'is_active': site.isActive,
+  'report_logo_path': site.reportLogoPath,
+  'form_theme': site.formTheme,
+  'form_theme_accent': site.formThemeAccent,
+  '_effective_form_theme': site.effectiveFormTheme,
+  '_effective_form_theme_accent': site.effectiveFormThemeAccent,
+  '_form_theme_source': site.formThemeSource,
+};
+
+Map<String, dynamic> _encodeOrganization(Organization organization) => {
+  'id': organization.id,
+  'name_en': organization.nameEn,
+  'name_ar': organization.nameAr,
+  'is_active': organization.isActive,
+  'logo_en_path': organization.logoEnPath,
+  'logo_ar_path': organization.logoArPath,
+  'form_theme': organization.formTheme,
+  'form_theme_accent': organization.formThemeAccent,
+};
+
+Map<String, dynamic> _encodeZone(Zone zone) => {
+  'id': zone.id,
+  'organization_id': zone.organizationId,
+  'code': zone.code,
+  'name_en': zone.nameEn,
+  'name_ar': zone.nameAr,
+  'is_active': zone.isActive,
+  'sort_order': zone.sortOrder,
+  'report_logo_path': zone.reportLogoPath,
+  'form_theme': zone.formTheme,
+  'form_theme_accent': zone.formThemeAccent,
+};
+
+List<Map<String, dynamic>> _encodeOrgSections(
+  List<OrgBrowseSection> sections,
+) => [
+  for (final section in sections)
+    {
+      'organization': _encodeOrganization(section.organization),
+      'zones': [
+        for (final zone in section.zones)
+          {
+            'zone': zone.zone == null ? null : _encodeZone(zone.zone!),
+            'groups': [
+              for (final group in zone.groups)
+                {
+                  'campus': group.campus == null
+                      ? null
+                      : _encodeSite(group.campus!),
+                  'checklists': [
+                    for (final site in group.checklists) _encodeSite(site),
+                  ],
+                },
+            ],
+          },
+      ],
+    },
+];
+
+List<OrgBrowseSection> _decodeOrgSections(List<dynamic> raw) => [
+  for (final sectionRaw in raw)
+    if (sectionRaw is Map)
+      OrgBrowseSection(
+        organization: Organization.fromJson(
+          Map<String, dynamic>.from(sectionRaw['organization'] as Map),
+        ),
+        zones: [
+          for (final zoneRaw in sectionRaw['zones'] as List? ?? const [])
+            if (zoneRaw is Map)
+              ZoneBrowseSection(
+                zone: zoneRaw['zone'] is Map
+                    ? Zone.fromJson(
+                        Map<String, dynamic>.from(zoneRaw['zone'] as Map),
+                      )
+                    : null,
+                groups: [
+                  for (final groupRaw in zoneRaw['groups'] as List? ?? const [])
+                    if (groupRaw is Map)
+                      CampusChecklistGroup(
+                        campus: groupRaw['campus'] is Map
+                            ? ChecklistSite.fromJson(
+                                Map<String, dynamic>.from(
+                                  groupRaw['campus'] as Map,
+                                ),
+                              )
+                            : null,
+                        checklists: [
+                          for (final siteRaw
+                              in groupRaw['checklists'] as List? ?? const [])
+                            if (siteRaw is Map)
+                              ChecklistSite.fromJson(
+                                Map<String, dynamic>.from(siteRaw),
+                              ),
+                        ],
+                      ),
+                ],
+              ),
+        ],
+      ),
+];
 
 class _EntryRootState extends ConsumerState<EntryRoot> {
   String language = 'en';
@@ -109,6 +222,9 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
   List<WorkflowNotification> workflowNotifications = [];
   bool loading = true;
   String? message;
+  Timer? _syncRetryTimer;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  bool _syncingQueue = false;
 
   AppLabels get L => AppLabels(widget.language);
 
@@ -132,14 +248,43 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
   void initState() {
     super.initState();
     _initialize();
+    _connectivitySubscription = Connectivity().onConnectivityChanged.listen(
+      (_) => _retryQueuedWhenReachable(),
+    );
+    _syncRetryTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) => _retryQueuedWhenReachable(),
+    );
   }
 
   Future<void> _initialize() async {
+    _restoreCachedSites();
     await _loadSites();
     await _loadWorkflowNotifications();
     if (!mounted || OfflineInspectionQueue.instance.pendingCount == 0) return;
     // Retry the encrypted outbox immediately after a successful online load.
     await _syncOfflineQueue();
+  }
+
+  @override
+  void dispose() {
+    _syncRetryTimer?.cancel();
+    _connectivitySubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _retryQueuedWhenReachable() async {
+    if (!mounted ||
+        _syncingQueue ||
+        OfflineInspectionQueue.instance.pendingCount == 0) {
+      return;
+    }
+    if (!await ChecklistConnectivity.canReachBackend(
+      ref.read(supabaseClientProvider),
+    )) {
+      return;
+    }
+    await _syncOfflineQueue(silentWhenOffline: true);
   }
 
   Future<void> _loadWorkflowNotifications() async {
@@ -179,10 +324,33 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
         groups: groups,
       );
       setState(() => orgSections = sections);
+      await OfflineInspectionQueue.instance.cacheHierarchy(
+        userId: widget.profile.id,
+        payload: {'sections': _encodeOrgSections(sections)},
+      );
     } catch (e) {
-      setState(() => message = e.toString());
+      setState(() {
+        message = orgSections.isEmpty
+            ? e.toString()
+            : (widget.language == 'ar'
+                  ? 'يتم عرض آخر هيكل محفوظ حتى عودة الاتصال.'
+                  : 'Showing the last saved structure until connectivity returns.');
+      });
     } finally {
       if (mounted) setState(() => loading = false);
+    }
+  }
+
+  void _restoreCachedSites() {
+    final cached = OfflineInspectionQueue.instance.cachedHierarchy(
+      widget.profile.id,
+    );
+    final raw = cached?['sections'];
+    if (raw is! List) return;
+    try {
+      orgSections = _decodeOrgSections(raw);
+    } catch (_) {
+      // Ignore a cache written by an older incompatible application version.
     }
   }
 
@@ -199,7 +367,8 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
     );
   }
 
-  Future<void> _syncOfflineQueue() async {
+  Future<void> _syncOfflineQueue({bool silentWhenOffline = false}) async {
+    if (_syncingQueue) return;
     final pending = OfflineInspectionQueue.instance.pending();
     if (pending.isEmpty) {
       if (!mounted) return;
@@ -214,270 +383,305 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
       );
       return;
     }
-    var okCount = 0;
-    var savedDraftCount = 0;
-    final syncErrors = <String>[];
-    final draftWarnings = <String>[];
-    for (final entry in pending) {
-      try {
-        await OfflineInspectionQueue.instance.markAttempt(entry.key);
-        final payload = entry.value;
-        final id = payload['inspectionId'] as String;
-        final repository = ref.read(inspectionRepositoryProvider);
-        final sitePayload = payload['site'];
-        final site = sitePayload is Map
-            ? ChecklistSite.fromJson(Map<String, dynamic>.from(sitePayload))
-            : null;
-        final isLocalDraft = payload['isLocalDraft'] == true;
-        final Inspection full;
-        if (isLocalDraft) {
-          if (site == null) {
-            throw const FormatException(
-              'Offline draft is missing its site snapshot',
-            );
-          }
-          full = await repository.createDraft(
-            site: site,
-            date: DateTime.parse(payload['inspectionDate'] as String),
-            inspectorName: (payload['inspectorName'] as String?) ?? '',
-            inspectionTime: (payload['inspectionTime'] as String?) ?? '',
-            floorLabel: (payload['floorLabel'] as String?) ?? 'ALL',
-            language: (payload['language'] as String?) ?? widget.language,
-            clientReference: id,
-            reinspectionReason: payload['reinspectionReason'] as String?,
+    _syncingQueue = true;
+    try {
+      final reachable = await ChecklistConnectivity.canReachBackend(
+        ref.read(supabaseClientProvider),
+      );
+      if (!reachable) {
+        if (!silentWhenOffline && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                widget.language == 'ar'
+                    ? 'لا يمكن الوصول إلى الخادم الآن؛ ستبقى العناصر محفوظة.'
+                    : 'The server is unreachable; queued items remain safely stored.',
+              ),
+            ),
           );
-        } else {
-          final serverInspection = await repository.getById(id);
-          if (serverInspection == null) {
-            throw StateError('Inspection no longer exists on the server');
-          }
-          final baseVersion = (payload['baseVersion'] as num?)?.toInt();
-          final canResumeSavedCheckpoint =
-              baseVersion != null &&
-              serverInspection.version == baseVersion + 1 &&
-              queuedInspectionMatchesServer(
-                server: serverInspection,
-                payload: payload,
+        }
+        return;
+      }
+      var okCount = 0;
+      var savedDraftCount = 0;
+      final syncErrors = <String>[];
+      final draftWarnings = <String>[];
+      for (final entry in pending) {
+        try {
+          await OfflineInspectionQueue.instance.markAttempt(entry.key);
+          final payload = entry.value;
+          final id = payload['inspectionId'] as String;
+          final repository = ref.read(inspectionRepositoryProvider);
+          final sitePayload = payload['site'];
+          final site = sitePayload is Map
+              ? ChecklistSite.fromJson(Map<String, dynamic>.from(sitePayload))
+              : null;
+          final isLocalDraft = payload['isLocalDraft'] == true;
+          final Inspection full;
+          if (isLocalDraft) {
+            if (site == null) {
+              throw const FormatException(
+                'Offline draft is missing its site snapshot',
               );
-          if (baseVersion != null &&
-              baseVersion != serverInspection.version &&
-              !canResumeSavedCheckpoint) {
-            throw StateError(
-              'Sync conflict: server version ${serverInspection.version}, '
-              'offline version $baseVersion',
+            }
+            full = await repository.createDraft(
+              site: site,
+              date: DateTime.parse(payload['inspectionDate'] as String),
+              inspectorName: (payload['inspectorName'] as String?) ?? '',
+              inspectionTime: (payload['inspectionTime'] as String?) ?? '',
+              floorLabel: (payload['floorLabel'] as String?) ?? 'ALL',
+              language: (payload['language'] as String?) ?? widget.language,
+              clientReference: id,
+              reinspectionReason: payload['reinspectionReason'] as String?,
             );
-          }
-          full = serverInspection;
-
-          // The previous attempt committed save (version +1) and stopped
-          // before submit/removal. Matching every queued field proves this is
-          // our checkpoint, so resume without overwriting concurrent edits.
-          if (canResumeSavedCheckpoint) {
-            for (final path in payload['mediaToDelete'] as List? ?? const []) {
-              try {
-                await repository.deleteMedia('$path');
-              } catch (_) {
-                // Record state is already correct; lifecycle cleanup can retry.
-              }
+          } else {
+            final serverInspection = await repository.getById(id);
+            if (serverInspection == null) {
+              throw StateError('Inspection no longer exists on the server');
             }
-            if (payload['action'] == 'submit' && !full.isSubmitted) {
-              try {
-                await repository.submit(full);
-              } catch (error) {
-                if (!ChecklistSubmissionValidation.requiresDraftCorrection(
-                  error,
-                )) {
-                  rethrow;
-                }
-                // save already committed and matches the encrypted outbox.
-                // Keep the server draft, clear the queue, and ask the operator
-                // to correct the explicitly reported validation items.
-                await OfflineInspectionQueue.instance.remove(entry.key);
-                savedDraftCount++;
-                draftWarnings.add(
-                  ChecklistSubmissionValidation.messageFor(
-                    error,
-                    widget.language,
-                  ),
+            final baseVersion = (payload['baseVersion'] as num?)?.toInt();
+            final canResumeSavedCheckpoint =
+                baseVersion != null &&
+                serverInspection.version == baseVersion + 1 &&
+                queuedInspectionMatchesServer(
+                  server: serverInspection,
+                  payload: payload,
                 );
-                continue;
-              }
+            if (baseVersion != null &&
+                baseVersion != serverInspection.version &&
+                !canResumeSavedCheckpoint) {
+              throw StateError(
+                'Sync conflict: server version ${serverInspection.version}, '
+                'offline version $baseVersion',
+              );
             }
+            full = serverInspection;
+
+            // The previous attempt committed save (version +1) and stopped
+            // before submit/removal. Matching every queued field proves this is
+            // our checkpoint, so resume without overwriting concurrent edits.
+            if (canResumeSavedCheckpoint) {
+              for (final path
+                  in payload['mediaToDelete'] as List? ?? const []) {
+                try {
+                  await repository.deleteMedia('$path');
+                } catch (_) {
+                  // Record state is already correct; lifecycle cleanup can retry.
+                }
+              }
+              if (payload['action'] == 'submit' && !full.isSubmitted) {
+                try {
+                  await repository.submit(full);
+                } catch (error) {
+                  if (!ChecklistSubmissionValidation.requiresDraftCorrection(
+                    error,
+                  )) {
+                    rethrow;
+                  }
+                  // save already committed and matches the encrypted outbox.
+                  // Keep the server draft, clear the queue, and ask the operator
+                  // to correct the explicitly reported validation items.
+                  await OfflineInspectionQueue.instance.remove(entry.key);
+                  savedDraftCount++;
+                  draftWarnings.add(
+                    ChecklistSubmissionValidation.messageFor(
+                      error,
+                      widget.language,
+                    ),
+                  );
+                  continue;
+                }
+              }
+              await OfflineInspectionQueue.instance.remove(entry.key);
+              okCount++;
+              continue;
+            }
+          }
+
+          // A previous attempt may have committed submit successfully and lost
+          // connectivity before removing the outbox entry. Treat it as done.
+          if (payload['action'] == 'submit' && full.isSubmitted) {
             await OfflineInspectionQueue.instance.remove(entry.key);
             okCount++;
             continue;
           }
-        }
 
-        // A previous attempt may have committed submit successfully and lost
-        // connectivity before removing the outbox entry. Treat it as done.
-        if (payload['action'] == 'submit' && full.isSubmitted) {
-          await OfflineInspectionQueue.instance.remove(entry.key);
-          okCount++;
-          continue;
-        }
-
-        final replacements = <String, String>{};
-        final mediaRaw = payload['media'] as List? ?? const [];
-        for (final raw in mediaRaw) {
-          final media = Map<String, dynamic>.from(raw as Map);
-          final placeholder = media['placeholder'] as String?;
-          final encoded = media['bytesBase64'] as String?;
-          final fileName = media['fileName'] as String?;
-          final kind = media['kind'] as String?;
-          final itemIndex = (media['itemIndex'] as num?)?.toInt();
-          if (placeholder == null ||
-              encoded == null ||
-              fileName == null ||
-              !placeholder.startsWith('offline://')) {
-            throw const FormatException('Invalid offline media payload');
+          final replacements = <String, String>{};
+          final mediaRaw = payload['media'] as List? ?? const [];
+          for (final raw in mediaRaw) {
+            final media = Map<String, dynamic>.from(raw as Map);
+            final placeholder = media['placeholder'] as String?;
+            final encoded = media['bytesBase64'] as String?;
+            final fileName = media['fileName'] as String?;
+            final kind = media['kind'] as String?;
+            final itemIndex = (media['itemIndex'] as num?)?.toInt();
+            if (placeholder == null ||
+                encoded == null ||
+                fileName == null ||
+                !placeholder.startsWith('offline://')) {
+              throw const FormatException('Invalid offline media payload');
+            }
+            final path = await repository.uploadBytes(
+              organizationId: site?.organizationId ?? full.organizationId,
+              siteId: site?.id ?? full.siteId,
+              inspectionId: full.id,
+              fileName: fileName,
+              bytes: Uint8List.fromList(base64Decode(encoded)),
+              contentType:
+                  (media['contentType'] as String?) ??
+                  'application/octet-stream',
+              evidenceItemId: itemIndex == null || itemIndex == 0
+                  ? null
+                  : full.items
+                        .where((item) => item.itemIndex == itemIndex)
+                        .firstOrNull
+                        ?.id,
+              evidenceKind: kind == 'signature'
+                  ? 'signature'
+                  : kind == 'issue'
+                  ? 'issue_photo'
+                  : kind == 'fix'
+                  ? 'fix_photo'
+                  : null,
+            );
+            replacements[placeholder] = path;
           }
-          final path = await repository.uploadBytes(
-            organizationId: site?.organizationId ?? full.organizationId,
-            siteId: site?.id ?? full.siteId,
-            inspectionId: full.id,
-            fileName: fileName,
-            bytes: Uint8List.fromList(base64Decode(encoded)),
-            contentType:
-                (media['contentType'] as String?) ?? 'application/octet-stream',
-            evidenceItemId: itemIndex == null || itemIndex == 0
-                ? null
-                : full.items
-                      .where((item) => item.itemIndex == itemIndex)
-                      .firstOrNull
-                      ?.id,
-            evidenceKind: kind == 'signature'
-                ? 'signature'
-                : kind == 'issue'
-                ? 'issue_photo'
-                : kind == 'fix'
-                ? 'fix_photo'
-                : null,
+
+          String? replacePendingPath(String? raw) {
+            if (raw == null) return null;
+            var next = raw;
+            for (final replacement in replacements.entries) {
+              next = next.replaceAll(replacement.key, replacement.value);
+            }
+            return next;
+          }
+
+          full.inspectorName =
+              (payload['inspectorName'] as String?) ?? full.inspectorName;
+          full.inspectionTime =
+              (payload['inspectionTime'] as String?) ?? full.inspectionTime;
+          full.floorLabel =
+              (payload['floorLabel'] as String?) ?? full.floorLabel;
+          full.signaturePath = replacePendingPath(
+            (payload['signaturePath'] as String?) ?? full.signaturePath,
           );
-          replacements[placeholder] = path;
-        }
-
-        String? replacePendingPath(String? raw) {
-          if (raw == null) return null;
-          var next = raw;
-          for (final replacement in replacements.entries) {
-            next = next.replaceAll(replacement.key, replacement.value);
-          }
-          return next;
-        }
-
-        full.inspectorName =
-            (payload['inspectorName'] as String?) ?? full.inspectorName;
-        full.inspectionTime =
-            (payload['inspectionTime'] as String?) ?? full.inspectionTime;
-        full.floorLabel = (payload['floorLabel'] as String?) ?? full.floorLabel;
-        full.signaturePath = replacePendingPath(
-          (payload['signaturePath'] as String?) ?? full.signaturePath,
-        );
-        final itemsRaw = payload['items'] as List? ?? const [];
-        for (final raw in itemsRaw) {
-          final map = Map<String, dynamic>.from(raw as Map);
-          for (final field in const [
-            'image_path',
-            'issue_image_path',
-            'fix_image_path',
-          ]) {
-            map[field] = replacePendingPath(map[field] as String?);
-          }
-          final index = map['item_index'] as int?;
-          InspectionItem? match;
-          if (index != null) {
-            for (final item in full.items) {
-              if (item.itemIndex == index) {
-                match = item;
-                break;
+          final itemsRaw = payload['items'] as List? ?? const [];
+          for (final raw in itemsRaw) {
+            final map = Map<String, dynamic>.from(raw as Map);
+            for (final field in const [
+              'image_path',
+              'issue_image_path',
+              'fix_image_path',
+            ]) {
+              map[field] = replacePendingPath(map[field] as String?);
+            }
+            final index = map['item_index'] as int?;
+            InspectionItem? match;
+            if (index != null) {
+              for (final item in full.items) {
+                if (item.itemIndex == index) {
+                  match = item;
+                  break;
+                }
               }
             }
-          }
-          final queued = InspectionItem.fromJson(map);
-          if (match != null) {
-            match.response = queued.response;
-            match.actionsTaken = queued.actionsTaken;
-            match.setPhotoPairs(queued.photoPairs);
-          } else {
-            full.items.add(queued);
-          }
-        }
-        await repository.saveItems(full);
-        for (final path in payload['mediaToDelete'] as List? ?? const []) {
-          try {
-            await repository.deleteMedia('$path');
-          } catch (_) {
-            // The record is already detached from this object. Server-side
-            // lifecycle cleanup can remove an object that transiently fails.
-          }
-        }
-        if (payload['action'] == 'submit' && !full.isSubmitted) {
-          try {
-            await repository.submit(full);
-          } catch (error) {
-            if (!ChecklistSubmissionValidation.requiresDraftCorrection(error)) {
-              rethrow;
+            final queued = InspectionItem.fromJson(map);
+            if (match != null) {
+              match.response = queued.response;
+              match.actionsTaken = queued.actionsTaken;
+              match.setPhotoPairs(queued.photoPairs);
+            } else {
+              full.items.add(queued);
             }
-            await OfflineInspectionQueue.instance.remove(entry.key);
-            savedDraftCount++;
-            draftWarnings.add(
-              ChecklistSubmissionValidation.messageFor(error, widget.language),
+          }
+          await repository.saveItems(full);
+          for (final path in payload['mediaToDelete'] as List? ?? const []) {
+            try {
+              await repository.deleteMedia('$path');
+            } catch (_) {
+              // The record is already detached from this object. Server-side
+              // lifecycle cleanup can remove an object that transiently fails.
+            }
+          }
+          if (payload['action'] == 'submit' && !full.isSubmitted) {
+            try {
+              await repository.submit(full);
+            } catch (error) {
+              if (!ChecklistSubmissionValidation.requiresDraftCorrection(
+                error,
+              )) {
+                rethrow;
+              }
+              await OfflineInspectionQueue.instance.remove(entry.key);
+              savedDraftCount++;
+              draftWarnings.add(
+                ChecklistSubmissionValidation.messageFor(
+                  error,
+                  widget.language,
+                ),
+              );
+              continue;
+            }
+          }
+          await OfflineInspectionQueue.instance.remove(entry.key);
+          okCount++;
+        } catch (error, stack) {
+          if (ChecklistConnectivity.isTransportFailure(error)) {
+            await OfflineInspectionQueue.instance.markDeferred(entry.key);
+            break;
+          } else {
+            await OfflineInspectionQueue.instance.markFailure(entry.key, error);
+            await StructuredErrorReporter.capture(
+              error,
+              stack,
+              module: 'entry.offline_sync',
             );
-            continue;
+            syncErrors.add('$error');
           }
         }
-        await OfflineInspectionQueue.instance.remove(entry.key);
-        okCount++;
-      } catch (error, stack) {
-        await OfflineInspectionQueue.instance.markFailure(entry.key, error);
-        await StructuredErrorReporter.capture(
-          error,
-          stack,
-          module: 'entry.offline_sync',
+      }
+      if (okCount > 0) {
+        await OfflineInspectionQueue.instance.recordSuccessfulSync();
+      }
+      if (!mounted) return;
+      final failedCount = pending.length - okCount - savedDraftCount;
+      setState(() {
+        if (syncErrors.isNotEmpty) {
+          message = widget.language == 'ar'
+              ? 'تعذرت المزامنة: ${syncErrors.first}'
+              : 'Sync failed: ${syncErrors.first}';
+        } else if (draftWarnings.isNotEmpty) {
+          message = widget.language == 'ar'
+              ? 'حُفظت القائمة كمسودة وتحتاج إلى إكمالها: ${draftWarnings.first}'
+              : 'Saved as draft; complete it before submitting: ${draftWarnings.first}';
+        } else {
+          message = null;
+        }
+      });
+      if (failedCount > 0 || savedDraftCount > 0) {
+        await ChecklistFeedback.alert(
+          soundEnabled: ref.read(soundEnabledProvider),
+          hapticsEnabled: ref.read(hapticsEnabledProvider),
         );
-        syncErrors.add('$error');
-      }
-    }
-    if (okCount > 0) {
-      await OfflineInspectionQueue.instance.recordSuccessfulSync();
-    }
-    if (!mounted) return;
-    final failedCount = pending.length - okCount - savedDraftCount;
-    setState(() {
-      if (syncErrors.isNotEmpty) {
-        message = widget.language == 'ar'
-            ? 'تعذرت المزامنة: ${syncErrors.first}'
-            : 'Sync failed: ${syncErrors.first}';
-      } else if (draftWarnings.isNotEmpty) {
-        message = widget.language == 'ar'
-            ? 'حُفظت القائمة كمسودة وتحتاج إلى إكمالها: ${draftWarnings.first}'
-            : 'Saved as draft; complete it before submitting: ${draftWarnings.first}';
       } else {
-        message = null;
+        await ChecklistFeedback.success(
+          soundEnabled: ref.read(soundEnabledProvider),
+          hapticsEnabled: ref.read(hapticsEnabledProvider),
+        );
       }
-    });
-    if (failedCount > 0 || savedDraftCount > 0) {
-      await ChecklistFeedback.alert(
-        soundEnabled: ref.read(soundEnabledProvider),
-        hapticsEnabled: ref.read(hapticsEnabledProvider),
-      );
-    } else {
-      await ChecklistFeedback.success(
-        soundEnabled: ref.read(soundEnabledProvider),
-        hapticsEnabled: ref.read(hapticsEnabledProvider),
-      );
-    }
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          widget.language == 'ar'
-              ? 'تمت مزامنة $okCount عنصر${savedDraftCount > 0 ? '، وحُفظ $savedDraftCount كمسودة تحتاج الإكمال' : ''}${failedCount > 0 ? '، وتعذر $failedCount' : ''}'
-              : 'Synced $okCount item(s)${savedDraftCount > 0 ? '; $savedDraftCount saved as incomplete draft' : ''}${failedCount > 0 ? '; $failedCount failed' : ''}',
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            widget.language == 'ar'
+                ? 'تمت مزامنة $okCount عنصر${savedDraftCount > 0 ? '، وحُفظ $savedDraftCount كمسودة تحتاج الإكمال' : ''}${failedCount > 0 ? '، وتعذر $failedCount' : ''}'
+                : 'Synced $okCount item(s)${savedDraftCount > 0 ? '; $savedDraftCount saved as incomplete draft' : ''}${failedCount > 0 ? '; $failedCount failed' : ''}',
+          ),
         ),
-      ),
-    );
+      );
+    } finally {
+      _syncingQueue = false;
+    }
   }
 
   Future<void> _openSyncStatus() async {
@@ -1489,9 +1693,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
   Future<bool> _persistSignature() async {
     final current = inspection;
     if (current == null) return false;
-    if (current.signaturePath != null &&
-        current.signaturePath!.isNotEmpty &&
-        !_signature.isNotEmpty) {
+    if (current.signaturePath != null && current.signaturePath!.isNotEmpty) {
       return true;
     }
     if (!_signature.isNotEmpty) return false;
@@ -1523,7 +1725,8 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
               contentType: 'image/png',
               evidenceKind: 'signature',
             );
-      } catch (_) {
+      } catch (error) {
+        if (!ChecklistConnectivity.isTransportFailure(error)) rethrow;
         path = _queueMedia(
           kind: 'signature',
           itemIndex: 0,
@@ -1534,7 +1737,10 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
       }
     }
     current.signaturePath = path;
-    if (mounted) setState(() => _signaturePreviewBytes = bytes);
+    if (mounted) {
+      setState(() => _signaturePreviewBytes = bytes);
+      _signature.clear();
+    }
     return true;
   }
 
@@ -2106,7 +2312,8 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
                 evidenceItemId: item.id,
                 evidenceKind: '${kind}_photo',
               );
-        } catch (_) {
+        } catch (error) {
+          if (!ChecklistConnectivity.isTransportFailure(error)) rethrow;
           path = _queueMedia(
             kind: kind,
             itemIndex: item.itemIndex,

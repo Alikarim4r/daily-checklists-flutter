@@ -478,7 +478,20 @@ class ChecklistFormLayout extends ConsumerWidget {
         }
         final bytes = snap.data;
         if (bytes == null || bytes.isEmpty) {
-          return _metaValue(fallback, align: TextAlign.center, minHeight: 44);
+          return Tooltip(
+            message: _ar
+                ? 'تعذر تحميل التوقيع المحفوظ'
+                : 'Saved signature could not be loaded',
+            child: Container(
+              constraints: const BoxConstraints(minHeight: 44),
+              alignment: Alignment.center,
+              child: const Icon(
+                Icons.warning_amber_rounded,
+                color: Color(0xFFB91C1C),
+                size: 22,
+              ),
+            ),
+          );
         }
         final blue = recolorSignatureToBlueInk(bytes);
         return Container(
