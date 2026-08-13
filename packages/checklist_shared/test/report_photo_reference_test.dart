@@ -1,5 +1,6 @@
 import 'package:checklist_shared/checklist_shared.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 void main() {
   test('submitted reports cannot silently omit a signature', () {
@@ -50,5 +51,45 @@ void main() {
     expect(references['org/site/inspection/5_issue.jpg'], '5.1');
     expect(references['org/site/inspection/12_issue.jpg'], '12.1');
     expect(references['org/site/inspection/12_fix.jpg'], '12.2');
+  });
+
+  test('Arabic reports shape text with Arabic fonts as the primary family', () {
+    final latinRegular = pw.Font.helvetica();
+    final latinBold = pw.Font.helveticaBold();
+    final arabicRegular = pw.Font.courier();
+    final arabicBold = pw.Font.courierBold();
+
+    final theme = buildInspectionReportTheme(
+      arabic: true,
+      latinRegular: latinRegular,
+      latinBold: latinBold,
+      arabicRegular: arabicRegular,
+      arabicBold: arabicBold,
+    );
+
+    expect(theme.defaultTextStyle.font, same(arabicRegular));
+    expect(theme.defaultTextStyle.fontNormal, same(arabicRegular));
+    expect(theme.defaultTextStyle.fontBold, same(arabicBold));
+    expect(theme.header0.fontBold, same(arabicBold));
+    expect(theme.defaultTextStyle.fontFallback, contains(latinRegular));
+  });
+
+  test('English reports keep the Latin family primary', () {
+    final latinRegular = pw.Font.helvetica();
+    final latinBold = pw.Font.helveticaBold();
+    final arabicRegular = pw.Font.courier();
+    final arabicBold = pw.Font.courierBold();
+
+    final theme = buildInspectionReportTheme(
+      arabic: false,
+      latinRegular: latinRegular,
+      latinBold: latinBold,
+      arabicRegular: arabicRegular,
+      arabicBold: arabicBold,
+    );
+
+    expect(theme.defaultTextStyle.font, same(latinRegular));
+    expect(theme.defaultTextStyle.fontBold, same(latinBold));
+    expect(theme.defaultTextStyle.fontFallback, contains(arabicRegular));
   });
 }

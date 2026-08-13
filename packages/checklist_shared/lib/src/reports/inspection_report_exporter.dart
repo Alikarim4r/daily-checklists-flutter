@@ -16,6 +16,20 @@ import 'report_branding_resolver.dart';
 
 enum ReportPhotoMode { links, embedded }
 
+class InspectionReportFonts {
+  const InspectionReportFonts({
+    required this.latinRegular,
+    required this.latinBold,
+    required this.arabicRegular,
+    required this.arabicBold,
+  });
+
+  final pw.Font latinRegular;
+  final pw.Font latinBold;
+  final pw.Font arabicRegular;
+  final pw.Font arabicBold;
+}
+
 enum InspectionReportEvidenceIssue {
   missingSignature,
   unavailableSignature,
@@ -81,6 +95,49 @@ Map<String, String> buildInspectionPhotoReferences(
     }
   }
   return result;
+}
+
+/// Uses the Arabic family as the primary face for Arabic reports.
+///
+/// The PDF package performs Arabic shaping with the primary font. Keeping an
+/// Arabic font only in [pw.TextStyle.fontFallback] produces incorrect glyph
+/// selection and visibly broken words, even when every code point exists in
+/// the fallback font.
+pw.ThemeData buildInspectionReportTheme({
+  required bool arabic,
+  required pw.Font latinRegular,
+  required pw.Font latinBold,
+  required pw.Font arabicRegular,
+  required pw.Font arabicBold,
+}) {
+  final primaryRegular = arabic ? arabicRegular : latinRegular;
+  final primaryBold = arabic ? arabicBold : latinBold;
+  final fallback = arabic
+      ? <pw.Font>[latinRegular, latinBold]
+      : <pw.Font>[arabicRegular, arabicBold];
+
+  return pw.ThemeData.withFont(
+    base: primaryRegular,
+    bold: primaryBold,
+    fontFallback: fallback,
+  ).copyWith(
+    defaultTextStyle: pw.TextStyle(
+      font: primaryRegular,
+      fontNormal: primaryRegular,
+      fontBold: primaryBold,
+      fontFallback: fallback,
+      fontSize: 9,
+      color: PdfColors.black,
+    ),
+    header0: pw.TextStyle(
+      font: primaryBold,
+      fontNormal: primaryRegular,
+      fontBold: primaryBold,
+      fontFallback: fallback,
+      fontSize: 13,
+      color: PdfColors.black,
+    ),
+  );
 }
 
 /// PDF export matching the on-screen A4 [ChecklistFormLayout] / MOEHE paper form.
@@ -177,6 +234,7 @@ class InspectionReportExporter {
     ReportBrandingBytes? branding,
     FormPaperTheme? paperTheme,
     ReportPhotoMode photoMode = ReportPhotoMode.links,
+    InspectionReportFonts? fonts,
   }) async {
     validateInspectionReportEvidence(inspection);
     final ar = language == 'ar';
@@ -226,7 +284,9 @@ class InspectionReportExporter {
     final items = [...inspection.items]
       ..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
 
-    final repo = InspectionRepository(Supabase.instance.client);
+    InspectionRepository? repository;
+    InspectionRepository repo() =>
+        repository ??= InspectionRepository(Supabase.instance.client);
     final photoLinks = <String, String>{};
     final photoReferences = buildInspectionPhotoReferences(items);
     final embeddedPhotos = <String, Uint8List>{};
@@ -234,7 +294,10 @@ class InspectionReportExporter {
       for (final photo in item.remarkPhotos) {
         if (photoLinks.containsKey(photo.path)) continue;
         final reference = photoReferences[photo.path];
-        final url = await repo.signedUrl(photo.path, expiresIn: 7 * 24 * 3600);
+        final url = await repo().signedUrl(
+          photo.path,
+          expiresIn: 7 * 24 * 3600,
+        );
         if (url == null || url.isEmpty) {
           throw InspectionReportEvidenceException(
             InspectionReportEvidenceIssue.unavailablePhoto,
@@ -243,7 +306,7 @@ class InspectionReportExporter {
         }
         photoLinks[photo.path] = url;
         if (photoMode == ReportPhotoMode.embedded) {
-          final bytes = await repo.downloadBytes(photo.path);
+          final bytes = await repo().downloadBytes(photo.path);
           if (bytes == null || bytes.isEmpty) {
             throw InspectionReportEvidenceException(
               InspectionReportEvidenceIssue.unavailablePhoto,
@@ -262,26 +325,21 @@ class InspectionReportExporter {
       }
     }
 
-    final baseFont = await PdfGoogleFonts.notoSansRegular();
-    final boldFont = await PdfGoogleFonts.notoSansBold();
-    final arabicFont = await PdfGoogleFonts.notoNaskhArabicRegular();
-    final theme =
-        pw.ThemeData.withFont(
-          base: baseFont,
-          bold: boldFont,
-          fontFallback: [arabicFont],
-        ).copyWith(
-          defaultTextStyle: pw.TextStyle(
-            font: baseFont,
-            fontSize: 9,
-            color: PdfColors.black,
-          ),
-          header0: pw.TextStyle(
-            font: boldFont,
-            fontSize: 13,
-            color: PdfColors.black,
-          ),
+    final resolvedFonts =
+        fonts ??
+        InspectionReportFonts(
+          latinRegular: await PdfGoogleFonts.notoSansRegular(),
+          latinBold: await PdfGoogleFonts.notoSansBold(),
+          arabicRegular: await PdfGoogleFonts.notoNaskhArabicRegular(),
+          arabicBold: await PdfGoogleFonts.notoNaskhArabicBold(),
         );
+    final theme = buildInspectionReportTheme(
+      arabic: ar,
+      latinRegular: resolvedFonts.latinRegular,
+      latinBold: resolvedFonts.latinBold,
+      arabicRegular: resolvedFonts.arabicRegular,
+      arabicBold: resolvedFonts.arabicBold,
+    );
 
     final brand =
         branding ??
@@ -307,9 +365,7 @@ class InspectionReportExporter {
     final sigPath = inspection.signaturePath;
     if (sigPath != null && sigPath.isNotEmpty) {
       try {
-        final raw = await InspectionRepository(
-          Supabase.instance.client,
-        ).downloadBytes(sigPath, forceRefresh: true);
+        final raw = await repo().downloadBytes(sigPath, forceRefresh: true);
         if (raw == null || raw.isEmpty) {
           throw const InspectionReportEvidenceException(
             InspectionReportEvidenceIssue.unavailableSignature,
@@ -538,6 +594,8 @@ class InspectionReportExporter {
           )
         : pw.Text(
             orgName.isNotEmpty ? orgName : 'ORG',
+            textAlign: ar ? pw.TextAlign.right : pw.TextAlign.left,
+            textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
             style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 12),
           );
 
@@ -1018,7 +1076,7 @@ class InspectionReportExporter {
   }
 
   /// Fixed data-row height so empty / photo rows match.
-  static const _itemRowH = 28.0;
+  static const _itemRowH = 36.0;
 
   /// Preferred photo icon width before shrink (≥ 1 cm).
   static const _photoMinWidthCm = 72.0 / 2.54; // ≈ 28.35 pt
@@ -1383,6 +1441,8 @@ class InspectionReportExporter {
           pw.SizedBox(width: 108, height: 36),
         pw.Text(
           credit,
+          textAlign: ar ? pw.TextAlign.right : pw.TextAlign.left,
+          textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
           style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
         ),
         if (right != null)
