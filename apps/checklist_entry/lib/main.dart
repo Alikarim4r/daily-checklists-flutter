@@ -279,11 +279,11 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
         OfflineInspectionQueue.instance.pendingCount == 0) {
       return;
     }
-    if (!await ChecklistConnectivity.canReachBackend(
-      ref.read(supabaseClientProvider),
-    )) {
+    final client = ref.read(supabaseClientProvider);
+    if (!await ChecklistConnectivity.canReachBackend(client)) {
       return;
     }
+    if (!mounted) return;
     await _syncOfflineQueue(silentWhenOffline: true);
   }
 
@@ -383,11 +383,16 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
       );
       return;
     }
+    // ConsumerState.ref cannot be used after disposal. Resolve every provider
+    // before the first network await so a navigation/lifecycle change during a
+    // long sync cannot turn a recoverable queue operation into a widget error.
+    final client = ref.read(supabaseClientProvider);
+    final repository = ref.read(inspectionRepositoryProvider);
+    final soundEnabled = ref.read(soundEnabledProvider);
+    final hapticsEnabled = ref.read(hapticsEnabledProvider);
     _syncingQueue = true;
     try {
-      final reachable = await ChecklistConnectivity.canReachBackend(
-        ref.read(supabaseClientProvider),
-      );
+      final reachable = await ChecklistConnectivity.canReachBackend(client);
       if (!reachable) {
         if (!silentWhenOffline && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -404,6 +409,9 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
       }
       var okCount = 0;
       var savedDraftCount = 0;
+      var finalizedCount = 0;
+      var failedCount = 0;
+      var deferredCount = 0;
       final syncErrors = <String>[];
       final draftWarnings = <String>[];
       for (final entry in pending) {
@@ -411,7 +419,6 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
           await OfflineInspectionQueue.instance.markAttempt(entry.key);
           final payload = entry.value;
           final id = payload['inspectionId'] as String;
-          final repository = ref.read(inspectionRepositoryProvider);
           final sitePayload = payload['site'];
           final site = sitePayload is Map
               ? ChecklistSite.fromJson(Map<String, dynamic>.from(sitePayload))
@@ -439,20 +446,23 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
             if (serverInspection == null) {
               throw StateError('Inspection no longer exists on the server');
             }
-            final baseVersion = (payload['baseVersion'] as num?)?.toInt();
-            final canResumeSavedCheckpoint =
-                baseVersion != null &&
-                serverInspection.version == baseVersion + 1 &&
-                queuedInspectionMatchesServer(
-                  server: serverInspection,
-                  payload: payload,
-                );
-            if (baseVersion != null &&
-                baseVersion != serverInspection.version &&
-                !canResumeSavedCheckpoint) {
+            final resolution = resolveOfflineSync(
+              server: serverInspection,
+              payload: payload,
+            );
+            if (resolution == OfflineSyncResolution.discardFinalizedSnapshot) {
+              // Submit/approval already won on the server. This is the common
+              // crash-recovery case: the network dropped before the local
+              // outbox entry could be removed. Never overwrite a final record.
+              await OfflineInspectionQueue.instance.remove(entry.key);
+              finalizedCount++;
+              continue;
+            }
+            if (resolution == OfflineSyncResolution.conflict) {
+              final baseVersion = (payload['baseVersion'] as num?)?.toInt();
               throw StateError(
                 'Sync conflict: server version ${serverInspection.version}, '
-                'offline version $baseVersion',
+                'offline version ${baseVersion ?? 'unknown'}',
               );
             }
             full = serverInspection;
@@ -460,7 +470,7 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
             // The previous attempt committed save (version +1) and stopped
             // before submit/removal. Matching every queued field proves this is
             // our checkpoint, so resume without overwriting concurrent edits.
-            if (canResumeSavedCheckpoint) {
+            if (resolution == OfflineSyncResolution.resumeSavedCheckpoint) {
               for (final path
                   in payload['mediaToDelete'] as List? ?? const []) {
                 try {
@@ -628,6 +638,7 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
         } catch (error, stack) {
           if (ChecklistConnectivity.isTransportFailure(error)) {
             await OfflineInspectionQueue.instance.markDeferred(entry.key);
+            deferredCount++;
             break;
           } else {
             await OfflineInspectionQueue.instance.markFailure(entry.key, error);
@@ -637,14 +648,14 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
               module: 'entry.offline_sync',
             );
             syncErrors.add('$error');
+            failedCount++;
           }
         }
       }
-      if (okCount > 0) {
+      if (okCount > 0 || finalizedCount > 0) {
         await OfflineInspectionQueue.instance.recordSuccessfulSync();
       }
       if (!mounted) return;
-      final failedCount = pending.length - okCount - savedDraftCount;
       setState(() {
         if (syncErrors.isNotEmpty) {
           message = widget.language == 'ar'
@@ -660,13 +671,13 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
       });
       if (failedCount > 0 || savedDraftCount > 0) {
         await ChecklistFeedback.alert(
-          soundEnabled: ref.read(soundEnabledProvider),
-          hapticsEnabled: ref.read(hapticsEnabledProvider),
+          soundEnabled: soundEnabled,
+          hapticsEnabled: hapticsEnabled,
         );
-      } else {
+      } else if (deferredCount == 0) {
         await ChecklistFeedback.success(
-          soundEnabled: ref.read(soundEnabledProvider),
-          hapticsEnabled: ref.read(hapticsEnabledProvider),
+          soundEnabled: soundEnabled,
+          hapticsEnabled: hapticsEnabled,
         );
       }
       if (!mounted) return;
@@ -674,8 +685,8 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
         SnackBar(
           content: Text(
             widget.language == 'ar'
-                ? 'تمت مزامنة $okCount عنصر${savedDraftCount > 0 ? '، وحُفظ $savedDraftCount كمسودة تحتاج الإكمال' : ''}${failedCount > 0 ? '، وتعذر $failedCount' : ''}'
-                : 'Synced $okCount item(s)${savedDraftCount > 0 ? '; $savedDraftCount saved as incomplete draft' : ''}${failedCount > 0 ? '; $failedCount failed' : ''}',
+                ? 'تمت مزامنة $okCount عنصر${finalizedCount > 0 ? '، وتنظيف $finalizedCount عملية مكتملة قديمة' : ''}${savedDraftCount > 0 ? '، وحُفظ $savedDraftCount كمسودة تحتاج الإكمال' : ''}${failedCount > 0 ? '، وتعذر $failedCount' : ''}${deferredCount > 0 ? '، والباقي محفوظ حتى عودة الاتصال' : ''}'
+                : 'Synced $okCount item(s)${finalizedCount > 0 ? '; cleared $finalizedCount stale finalized operation(s)' : ''}${savedDraftCount > 0 ? '; $savedDraftCount saved as incomplete draft' : ''}${failedCount > 0 ? '; $failedCount failed' : ''}${deferredCount > 0 ? '; remaining work is safely queued until online' : ''}',
           ),
         ),
       );
@@ -2356,6 +2367,106 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
     }
   }
 
+  Future<({Uint8List? bytes, String? url})> _loadEvidencePhoto(
+    String path,
+  ) async {
+    if (path.startsWith('offline://')) {
+      final encoded = _pendingMedia[path]?['bytesBase64'] as String?;
+      if (encoded == null || encoded.isEmpty) {
+        return (bytes: null, url: null);
+      }
+      return (bytes: Uint8List.fromList(base64Decode(encoded)), url: null);
+    }
+    final repository = ref.read(inspectionRepositoryProvider);
+    final bytes = await repository.downloadBytes(path, forceRefresh: true);
+    if (bytes != null && bytes.isNotEmpty) {
+      return (bytes: bytes, url: null);
+    }
+    return (bytes: null, url: await repository.signedUrl(path));
+  }
+
+  Future<void> _openEvidencePhoto(String path) async {
+    if (!mounted || path.trim().isEmpty) return;
+    final photoFuture = _loadEvidencePhoto(path);
+    await showDialog<void>(
+      context: context,
+      useRootNavigator: true,
+      barrierDismissible: true,
+      builder: (dialogContext) => Dialog(
+        backgroundColor: Colors.black87,
+        insetPadding: const EdgeInsets.all(16),
+        child: FutureBuilder<({Uint8List? bytes, String? url})>(
+          future: photoFuture,
+          builder: (context, snapshot) {
+            Widget content;
+            if (snapshot.connectionState != ConnectionState.done) {
+              content = const Center(child: CircularProgressIndicator());
+            } else if (snapshot.hasError ||
+                (snapshot.data?.bytes == null &&
+                    (snapshot.data?.url ?? '').isEmpty)) {
+              content = Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    language == 'ar'
+                        ? 'تعذّر فتح الصورة. تحقق من الاتصال ثم أعد المحاولة.'
+                        : 'Could not open the photo. Check the connection and retry.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ),
+              );
+            } else {
+              final data = snapshot.data!;
+              final image = data.bytes != null
+                  ? Image.memory(data.bytes!, fit: BoxFit.contain)
+                  : Image.network(
+                      data.url!,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, _, _) => Center(
+                        child: Text(
+                          language == 'ar'
+                              ? 'تعذّر تحميل الصورة'
+                              : 'Could not load photo',
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ),
+                    );
+              content = InteractiveViewer(
+                minScale: 0.5,
+                maxScale: 5,
+                child: Center(child: image),
+              );
+            }
+            return ConstrainedBox(
+              constraints: const BoxConstraints(
+                minWidth: 280,
+                minHeight: 280,
+                maxWidth: 900,
+                maxHeight: 700,
+              ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  content,
+                  PositionedDirectional(
+                    top: 4,
+                    end: 4,
+                    child: IconButton.filledTonal(
+                      tooltip: language == 'ar' ? 'إغلاق' : 'Close',
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   /// Desktop and web use the browser/system file picker. This avoids camera
   /// capture constraints that are inconsistent across browsers and desktops.
   Future<ImageSource?> _choosePhotoSource() async {
@@ -2663,6 +2774,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
                                   isIssue: false,
                                   pairId: pairId,
                                 ),
+                                onOpenPhoto: _openEvidencePhoto,
                                 onClearIssue: (path, pairId) async {
                                   if (!_canRemoveEvidenceInEntry(path)) {
                                     _showStoredEvidenceDeleteDenied();
@@ -2690,28 +2802,67 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
                                   }
                                 },
                                 onClearFix: (path, pairId) async {
-                                  if (!_canRemoveEvidenceInEntry(path)) {
-                                    _showStoredEvidenceDeleteDenied();
-                                    return;
-                                  }
-                                  _removePendingMedia(path);
-                                  _queueMediaDeletion(path);
+                                  final pendingPath = _canRemoveEvidenceInEntry(
+                                    path,
+                                  );
+                                  final pendingMedia = pendingPath
+                                      ? _pendingMedia[path]
+                                      : null;
+                                  if (pendingPath) _removePendingMedia(path);
                                   setState(() {
                                     item.removeFixImage(path, pairId: pairId);
                                   });
                                   final current = inspection;
                                   if (current != null) {
-                                    if (_isLocalInspection(current) ||
-                                        !await _isOnline()) {
-                                      await _enqueueOffline(
-                                        current,
-                                        action: 'save',
-                                      );
-                                    } else {
-                                      await ref
-                                          .read(inspectionRepositoryProvider)
-                                          .saveItems(current);
-                                      await _deletePendingMedia();
+                                    try {
+                                      if (_isLocalInspection(current) ||
+                                          !await _isOnline()) {
+                                        await _enqueueOffline(
+                                          current,
+                                          action: 'save',
+                                        );
+                                      } else {
+                                        await ref
+                                            .read(inspectionRepositoryProvider)
+                                            .saveItems(current);
+                                      }
+                                    } catch (error, stack) {
+                                      if (ChecklistConnectivity.isTransportFailure(
+                                        error,
+                                      )) {
+                                        await _enqueueOffline(
+                                          current,
+                                          action: 'save',
+                                        );
+                                      } else {
+                                        // Restore the visible relationship if
+                                        // the server rejected the edit. Stored
+                                        // evidence bytes remain immutable.
+                                        setState(() {
+                                          if (pendingMedia != null) {
+                                            _pendingMedia[path] = pendingMedia;
+                                          }
+                                          item.setFixForPair(pairId, path);
+                                        });
+                                        await StructuredErrorReporter.capture(
+                                          error,
+                                          stack,
+                                          module: 'entry.fix_photo_remove',
+                                        );
+                                        if (context.mounted) {
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                language == 'ar'
+                                                    ? 'تعذّرت إزالة صورة الإصلاح. أعد المحاولة.'
+                                                    : 'Could not remove the fix photo. Please retry.',
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                      }
                                     }
                                   }
                                 },
@@ -2849,6 +3000,7 @@ class _EntryItemCard extends StatelessWidget {
     required this.onActions,
     required this.onPickIssue,
     required this.onPickFix,
+    required this.onOpenPhoto,
     required this.onClearIssue,
     required this.onClearFix,
   });
@@ -2866,8 +3018,9 @@ class _EntryItemCard extends StatelessWidget {
   final ValueChanged<String> onActions;
   final Future<void> Function([String? pairId]) onPickIssue;
   final Future<void> Function([String? pairId]) onPickFix;
-  final void Function(String path, String pairId) onClearIssue;
-  final void Function(String path, String pairId) onClearFix;
+  final Future<void> Function(String path) onOpenPhoto;
+  final Future<void> Function(String path, String pairId) onClearIssue;
+  final Future<void> Function(String path, String pairId) onClearFix;
 
   bool get _ar => language == 'ar';
 
@@ -2985,15 +3138,13 @@ class _EntryItemCard extends StatelessWidget {
                 canDeleteIssue:
                     item.photoPairs[i].issuePath?.startsWith('offline://') ==
                     true,
-                canDeleteFix:
-                    item.photoPairs[i].fixPath?.startsWith('offline://') ==
-                    true,
+                onOpenPhoto: onOpenPhoto,
                 onPickFix: () => onPickFix(item.photoPairs[i].id),
-                onClearIssue: () => onClearIssue(
+                onClearIssue: () async => onClearIssue(
                   item.photoPairs[i].issuePath!,
                   item.photoPairs[i].id,
                 ),
-                onClearFix: () => onClearFix(
+                onClearFix: () async => onClearFix(
                   item.photoPairs[i].fixPath!,
                   item.photoPairs[i].id,
                 ),
@@ -3053,7 +3204,7 @@ class _EntryPhotoPairRow extends StatelessWidget {
     required this.readOnly,
     required this.labels,
     required this.canDeleteIssue,
-    required this.canDeleteFix,
+    required this.onOpenPhoto,
     required this.onPickFix,
     required this.onClearIssue,
     required this.onClearFix,
@@ -3065,13 +3216,13 @@ class _EntryPhotoPairRow extends StatelessWidget {
   final bool readOnly;
   final AppLabels labels;
   final bool canDeleteIssue;
-  final bool canDeleteFix;
-  final VoidCallback onPickFix;
-  final VoidCallback onClearIssue;
-  final VoidCallback onClearFix;
+  final Future<void> Function(String path) onOpenPhoto;
+  final Future<void> Function() onPickFix;
+  final Future<void> Function() onClearIssue;
+  final Future<void> Function() onClearFix;
 
   Future<void> _showIssueActions(BuildContext context) async {
-    if (readOnly || !pair.hasIssue) return;
+    if (!pair.hasIssue) return;
     final action = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
@@ -3079,13 +3230,18 @@ class _EntryPhotoPairRow extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (!pair.hasFix)
+            ListTile(
+              leading: const Icon(Icons.open_in_full_outlined),
+              title: Text(arabic ? 'فتح الصورة' : 'Open photo'),
+              onTap: () => Navigator.pop(ctx, 'open'),
+            ),
+            if (!readOnly && !pair.hasFix)
               ListTile(
                 leading: const Icon(Icons.build_circle_outlined),
                 title: Text(arabic ? 'إضافة صورة إصلاح' : 'Add fix photo'),
                 onTap: () => Navigator.pop(ctx, 'fix'),
               ),
-            if (canDeleteIssue)
+            if (!readOnly && canDeleteIssue)
               ListTile(
                 leading: const Icon(Icons.delete_outline),
                 title: Text(arabic ? 'حذف صورة المشكلة' : 'Delete issue photo'),
@@ -3096,8 +3252,38 @@ class _EntryPhotoPairRow extends StatelessWidget {
         ),
       ),
     );
-    if (action == 'fix') onPickFix();
-    if (action == 'del') onClearIssue();
+    if (action == 'open') await onOpenPhoto(pair.issuePath!);
+    if (action == 'fix') await onPickFix();
+    if (action == 'del') await onClearIssue();
+  }
+
+  Future<void> _showFixActions(BuildContext context) async {
+    if (!pair.hasFix) return;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.open_in_full_outlined),
+              title: Text(arabic ? 'فتح الصورة' : 'Open photo'),
+              onTap: () => Navigator.pop(ctx, 'open'),
+            ),
+            if (!readOnly)
+              ListTile(
+                leading: const Icon(Icons.remove_circle_outline),
+                title: Text(arabic ? 'إزالة صورة الإصلاح' : 'Remove fix photo'),
+                onTap: () => Navigator.pop(ctx, 'remove'),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (action == 'open') await onOpenPhoto(pair.fixPath!);
+    if (action == 'remove') await onClearFix();
   }
 
   @override
@@ -3122,10 +3308,7 @@ class _EntryPhotoPairRow extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
             child: InkWell(
               borderRadius: BorderRadius.circular(8),
-              onTap:
-                  readOnly || !pair.hasIssue || (pair.hasFix && !canDeleteIssue)
-                  ? null
-                  : () => _showIssueActions(context),
+              onTap: pair.hasIssue ? () => _showIssueActions(context) : null,
               child: Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 8,
@@ -3144,17 +3327,13 @@ class _EntryPhotoPairRow extends StatelessWidget {
                     Expanded(
                       child: Text(
                         pair.hasIssue
-                            ? (pair.hasFix && !canDeleteIssue
+                            ? (readOnly || pair.hasFix
                                   ? (arabic
-                                        ? '${labels.issuePhoto} ✓ — دليل محفوظ ومحمي'
-                                        : '${labels.issuePhoto} ✓ — saved and protected')
-                                  : canDeleteIssue
-                                  ? (arabic
-                                        ? '${labels.issuePhoto} ✓ — اضغط للإصلاح أو الحذف'
-                                        : '${labels.issuePhoto} ✓ — tap for fix/delete')
+                                        ? '${labels.issuePhoto} ✓ — اضغط للفتح'
+                                        : '${labels.issuePhoto} ✓ — tap to open')
                                   : (arabic
-                                        ? '${labels.issuePhoto} ✓ — اضغط لإضافة الإصلاح'
-                                        : '${labels.issuePhoto} ✓ — tap to add fix'))
+                                        ? '${labels.issuePhoto} ✓ — فتح أو إضافة إصلاح'
+                                        : '${labels.issuePhoto} ✓ — open or add fix'))
                             : labels.issuePhoto,
                         style: TextStyle(
                           fontSize: 12,
@@ -3177,32 +3356,7 @@ class _EntryPhotoPairRow extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
               child: InkWell(
                 borderRadius: BorderRadius.circular(8),
-                onTap: readOnly || !canDeleteFix
-                    ? null
-                    : () async {
-                        final action = await showModalBottomSheet<String>(
-                          context: context,
-                          showDragHandle: true,
-                          builder: (ctx) => SafeArea(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                ListTile(
-                                  leading: const Icon(Icons.delete_outline),
-                                  title: Text(
-                                    arabic
-                                        ? 'حذف صورة الإصلاح'
-                                        : 'Delete fix photo',
-                                  ),
-                                  onTap: () => Navigator.pop(ctx, 'del'),
-                                ),
-                                const SizedBox(height: 8),
-                              ],
-                            ),
-                          ),
-                        );
-                        if (action == 'del') onClearFix();
-                      },
+                onTap: () => _showFixActions(context),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8,
@@ -3218,7 +3372,13 @@ class _EntryPhotoPairRow extends StatelessWidget {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          '${labels.repairPhoto} ✓',
+                          readOnly
+                              ? (arabic
+                                    ? '${labels.repairPhoto} ✓ — اضغط للفتح'
+                                    : '${labels.repairPhoto} ✓ — tap to open')
+                              : (arabic
+                                    ? '${labels.repairPhoto} ✓ — فتح أو إزالة'
+                                    : '${labels.repairPhoto} ✓ — open or remove'),
                           style: const TextStyle(
                             fontSize: 12,
                             color: Color(0xFF15803D),

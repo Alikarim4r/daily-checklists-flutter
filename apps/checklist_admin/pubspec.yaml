@@ -1,7 +1,7 @@
 name: checklist_admin
 description: MOEHE Facility Daily Inspection — admin permissions and corrections.
 publish_to: "none"
-version: 1.3.2+9
+version: 1.3.3+10
 
 environment:
   sdk: ^3.12.2
