@@ -596,6 +596,32 @@ class InspectionRepository {
     inspection.version = (nextVersion as num).toInt();
   }
 
+  /// Detaches one fix photo from an editable draft while the server keeps the
+  /// immutable evidence object and audit ledger intact.
+  Future<void> detachFixPhoto({
+    required Inspection inspection,
+    required InspectionItem item,
+    required String storagePath,
+  }) async {
+    final itemId = item.id;
+    if (itemId == null || itemId.isEmpty) {
+      throw StateError('Cannot detach a fix photo from an unsaved item');
+    }
+    final nextVersion = await _client.rpc(
+      'detach_checklist_fix_photo',
+      params: {
+        'p_inspection_id': inspection.id,
+        'p_item_id': itemId,
+        'p_storage_path': storagePathOf(storagePath),
+        'p_image_path': item.imagePath,
+        'p_issue_image_path': item.issueImagePath,
+        'p_fix_image_path': item.fixImagePath,
+        'p_expected_version': inspection.version,
+      },
+    );
+    inspection.version = (nextVersion as num).toInt();
+  }
+
   Future<void> deleteInspectionItem(
     Inspection inspection,
     String itemId,
