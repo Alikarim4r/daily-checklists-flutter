@@ -239,8 +239,8 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                 ),
                 InkWell(
                   onTap: () =>
-                      launchUrl(Uri.parse('mailto:Support@AliMind.com')),
-                  child: const Text('Support@AliMind.com'),
+                      launchUrl(Uri.parse('mailto:Support@alielhassan.com')),
+                  child: const Text('Support@alielhassan.com'),
                 ),
                 if (advancedItems.isNotEmpty) ...[
                   const SizedBox(height: 20),
