@@ -2802,9 +2802,27 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
                                   }
                                 },
                                 onClearFix: (path, pairId) async {
+                                  final current = inspection;
+                                  if (current == null) return;
                                   final pendingPath = _canRemoveEvidenceInEntry(
                                     path,
                                   );
+                                  if (!pendingPath && !await _isOnline()) {
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            language == 'ar'
+                                                ? 'إزالة صورة إصلاح محفوظة تتطلب اتصالاً بالخادم.'
+                                                : 'Removing a stored fix photo requires a server connection.',
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                    return;
+                                  }
                                   final pendingMedia = pendingPath
                                       ? _pendingMedia[path]
                                       : null;
@@ -2812,9 +2830,11 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
                                   setState(() {
                                     item.removeFixImage(path, pairId: pairId);
                                   });
-                                  final current = inspection;
-                                  if (current != null) {
-                                    try {
+                                  try {
+                                    final repository = ref.read(
+                                      inspectionRepositoryProvider,
+                                    );
+                                    if (pendingPath) {
                                       if (_isLocalInspection(current) ||
                                           !await _isOnline()) {
                                         await _enqueueOffline(
@@ -2822,47 +2842,43 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
                                           action: 'save',
                                         );
                                       } else {
-                                        await ref
-                                            .read(inspectionRepositoryProvider)
-                                            .saveItems(current);
+                                        await repository.saveItems(current);
                                       }
-                                    } catch (error, stack) {
-                                      if (ChecklistConnectivity.isTransportFailure(
-                                        error,
-                                      )) {
-                                        await _enqueueOffline(
-                                          current,
-                                          action: 'save',
-                                        );
-                                      } else {
-                                        // Restore the visible relationship if
-                                        // the server rejected the edit. Stored
-                                        // evidence bytes remain immutable.
-                                        setState(() {
-                                          if (pendingMedia != null) {
-                                            _pendingMedia[path] = pendingMedia;
-                                          }
-                                          item.setFixForPair(pairId, path);
-                                        });
-                                        await StructuredErrorReporter.capture(
-                                          error,
-                                          stack,
-                                          module: 'entry.fix_photo_remove',
-                                        );
-                                        if (context.mounted) {
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text(
-                                                language == 'ar'
-                                                    ? 'تعذّرت إزالة صورة الإصلاح. أعد المحاولة.'
-                                                    : 'Could not remove the fix photo. Please retry.',
-                                              ),
-                                            ),
-                                          );
+                                    } else {
+                                      await repository.detachFixPhoto(
+                                        inspection: current,
+                                        item: item,
+                                        storagePath: path,
+                                      );
+                                    }
+                                  } catch (error, stack) {
+                                    // Restore the visible relationship if the
+                                    // controlled server edit cannot complete.
+                                    if (mounted) {
+                                      setState(() {
+                                        if (pendingMedia != null) {
+                                          _pendingMedia[path] = pendingMedia;
                                         }
-                                      }
+                                        item.setFixForPair(pairId, path);
+                                      });
+                                    }
+                                    await StructuredErrorReporter.capture(
+                                      error,
+                                      stack,
+                                      module: 'entry.fix_photo_remove',
+                                    );
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            language == 'ar'
+                                                ? 'تعذّرت إزالة صورة الإصلاح. تحقق من الاتصال وأعد المحاولة.'
+                                                : 'Could not remove the fix photo. Check the connection and retry.',
+                                          ),
+                                        ),
+                                      );
                                     }
                                   }
                                 },
