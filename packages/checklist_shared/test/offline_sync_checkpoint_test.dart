@@ -56,4 +56,41 @@ void main() {
       isFalse,
     );
   });
+
+  test('discards a stale snapshot after the inspection is finalized', () {
+    final server = serverInspection()
+      ..status = InspectionStatus.submitted
+      ..reviewStatus = ReviewStatus.approved
+      ..version = 13;
+    final payload = queuedPayload()
+      ..['baseVersion'] = 4
+      ..['action'] = 'submit';
+
+    expect(
+      resolveOfflineSync(server: server, payload: payload),
+      OfflineSyncResolution.discardFinalizedSnapshot,
+    );
+  });
+
+  test('resumes an exact checkpoint after multiple workflow version bumps', () {
+    final server = serverInspection()..version = 11;
+    final payload = queuedPayload()..['baseVersion'] = 7;
+
+    expect(
+      resolveOfflineSync(server: server, payload: payload),
+      OfflineSyncResolution.resumeSavedCheckpoint,
+    );
+  });
+
+  test('keeps a genuine draft conflict for explicit review', () {
+    final server = serverInspection()
+      ..version = 6
+      ..items.first.actionsTaken = 'Newer server value';
+    final payload = queuedPayload()..['baseVersion'] = 2;
+
+    expect(
+      resolveOfflineSync(server: server, payload: payload),
+      OfflineSyncResolution.conflict,
+    );
+  });
 }

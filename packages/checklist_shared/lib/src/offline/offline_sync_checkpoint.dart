@@ -1,6 +1,49 @@
 import '../models/enums.dart';
 import '../models/inspection.dart';
 
+/// Safe outcome for reconciling one encrypted outbox snapshot with the
+/// authoritative inspection currently stored on the server.
+enum OfflineSyncResolution {
+  /// Server version still matches the snapshot; apply the queued changes.
+  applyQueuedChanges,
+
+  /// A previous attempt saved these exact values but stopped before clearing
+  /// the outbox (or before completing submit). Resume from that checkpoint.
+  resumeSavedCheckpoint,
+
+  /// The inspection has already been submitted/approved. A lingering local
+  /// autosave or submit entry is obsolete and must not overwrite final data.
+  discardFinalizedSnapshot,
+
+  /// Both sides changed and there is no proof that the queued snapshot is the
+  /// source of the server update. Keep the entry for explicit review.
+  conflict,
+}
+
+OfflineSyncResolution resolveOfflineSync({
+  required Inspection server,
+  required Map<String, dynamic> payload,
+}) {
+  if (server.isSubmitted || server.isApproved) {
+    return OfflineSyncResolution.discardFinalizedSnapshot;
+  }
+
+  final baseVersion = (payload['baseVersion'] as num?)?.toInt();
+  if (baseVersion == null || baseVersion == server.version) {
+    return OfflineSyncResolution.applyQueuedChanges;
+  }
+
+  // Workflow transitions can increase the version more than once after a
+  // successful save. Exact field equality is stronger evidence than assuming
+  // that the checkpoint must be exactly baseVersion + 1.
+  if (server.version > baseVersion &&
+      queuedInspectionMatchesServer(server: server, payload: payload)) {
+    return OfflineSyncResolution.resumeSavedCheckpoint;
+  }
+
+  return OfflineSyncResolution.conflict;
+}
+
 /// Confirms that an optimistic-lock version bump came from a previous outbox
 /// attempt which saved successfully but stopped before the final submit.
 bool queuedInspectionMatchesServer({
