@@ -35,9 +35,18 @@ Uint8List recolorSignatureToBlueInk(
         // Keep stroke strong — less wash-out to white for a real ink look.
         final cover = ((250 - lum) / 250).clamp(0.65, 1.0) * (a / 255.0);
         final strength = cover.clamp(0.7, 1.0);
-        final sr = (inkR * strength + 255 * (1 - strength)).round().clamp(0, 255);
-        final sg = (inkG * strength + 255 * (1 - strength)).round().clamp(0, 255);
-        final sb = (inkB * strength + 255 * (1 - strength)).round().clamp(0, 255);
+        final sr = (inkR * strength + 255 * (1 - strength)).round().clamp(
+          0,
+          255,
+        );
+        final sg = (inkG * strength + 255 * (1 - strength)).round().clamp(
+          0,
+          255,
+        );
+        final sb = (inkB * strength + 255 * (1 - strength)).round().clamp(
+          0,
+          255,
+        );
         final outA = a < 120 ? 230 : 255;
         out.setPixelRgba(x, y, sr, sg, sb, outA);
       }

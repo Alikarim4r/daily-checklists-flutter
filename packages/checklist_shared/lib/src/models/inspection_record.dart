@@ -27,11 +27,11 @@ class InspectionRecord {
     this.submittedBy,
     this.sourceRecordId,
     this.raw = const {},
-  })  : responses = responses ?? {},
-        remarks = remarks ?? {},
-        images = images ?? {},
-        customItems = customItems ?? [],
-        customItemTexts = customItemTexts ?? {};
+  }) : responses = responses ?? {},
+       remarks = remarks ?? {},
+       images = images ?? {},
+       customItems = customItems ?? [],
+       customItemTexts = customItemTexts ?? {};
 
   final String id;
   final String buildingId;
@@ -59,10 +59,7 @@ class InspectionRecord {
   final String? sourceRecordId;
   final Map<String, dynamic> raw;
 
-  factory InspectionRecord.fromFirestore(
-    String id,
-    Map<String, dynamic> data,
-  ) {
+  factory InspectionRecord.fromFirestore(String id, Map<String, dynamic> data) {
     final responsesRaw = data['responses'];
     final remarksRaw = data['remarks'];
     final customTextsRaw = data['customItemTexts'];
@@ -111,12 +108,8 @@ class InspectionRecord {
       'inspectionDate': inspectionDate,
       'inspectionTime': inspectionTime,
       // Keep string keys — Firestore/Dart codec casts map keys to String.
-      'responses': {
-        for (final e in responses.entries) e.key: e.value,
-      },
-      'remarks': {
-        for (final e in remarks.entries) e.key: e.value,
-      },
+      'responses': {for (final e in responses.entries) e.key: e.value},
+      'remarks': {for (final e in remarks.entries) e.key: e.value},
       'images': imagesPayload,
       'imageUrlsList': imagesPayload,
       'signature': signature,
@@ -157,9 +150,7 @@ class InspectionRecord {
     final out = <Map<String, dynamic>>[];
     for (final item in raw) {
       if (item is! Map) continue;
-      out.add({
-        for (final e in item.entries) '${e.key}': e.value,
-      });
+      out.add({for (final e in item.entries) '${e.key}': e.value});
     }
     return out;
   }

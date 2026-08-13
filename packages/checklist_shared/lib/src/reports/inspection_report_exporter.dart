@@ -1,6 +1,5 @@
-import 'dart:typed_data';
-
 import 'package:flutter/services.dart';
+import 'package:image/image.dart' as img;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
@@ -9,35 +8,83 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/enums.dart';
 import '../models/inspection.dart';
 import '../repositories/inspection_repository.dart';
+import '../theme/form_paper_theme.dart';
 import '../utils/signature_ink.dart';
 import '../utils/storage_path_list.dart';
+import 'report_branding.dart';
+import 'report_branding_resolver.dart';
+
+enum ReportPhotoMode { links, embedded }
+
+/// Stable references derived only from checklist item/photo order. They do not
+/// depend on PDF pagination, paper size, signed URLs, or storage file names.
+Map<String, String> buildInspectionPhotoReferences(
+  Iterable<InspectionItem> items,
+) {
+  final result = <String, String>{};
+  final ordered = [...items]
+    ..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
+  for (final item in ordered) {
+    var number = 0;
+    for (final photo in item.remarkPhotos) {
+      number++;
+      result[photo.path] = '${item.itemIndex}.$number';
+    }
+  }
+  return result;
+}
 
 /// PDF export matching the on-screen A4 [ChecklistFormLayout] / MOEHE paper form.
 class InspectionReportExporter {
-  const InspectionReportExporter();
+  InspectionReportExporter();
 
-  static const _gold = PdfColor.fromInt(0xFFE8C547);
-  static const _border = PdfColors.black;
   static const _okBlue = PdfColor.fromInt(0xFF3B82F6);
   static const _problemRed = PdfColor.fromInt(0xFFEF4444);
+  static const _fixGreen = PdfColor.fromInt(0xFF28A745);
   static const _emptyGray = PdfColor.fromInt(0xFFCBD5E1);
+
+  PdfColor _gold = const PdfColor.fromInt(0xFFE8C547);
+  PdfColor _border = PdfColors.black;
+  PdfColor _accentText = PdfColors.black;
+
+  static PdfColor _pdfColor(Color c) =>
+      PdfColor.fromInt(FormPaperTheme.asArgb32(c));
 
   /// Build A4 form PDF and open the system share/save sheet.
   ///
   /// Avoids [Printing.layoutPdf] — sandboxed macOS without print entitlement
   /// and some Android OEMs show "This application does not support printing".
-  Future<void> export(Inspection inspection, {String language = 'en'}) async {
-    final bytes = await buildPdfBytes(inspection, language: language);
-    final filename =
-        'inspection_${inspection.buildingCode}_${inspection.dateIso}.pdf';
+  Future<void> export(
+    Inspection inspection, {
+    String language = 'en',
+    FormPaperTheme? paperTheme,
+    ReportPhotoMode photoMode = ReportPhotoMode.links,
+  }) async {
+    final bytes = await buildPdfBytes(
+      inspection,
+      language: language,
+      paperTheme: paperTheme,
+      photoMode: photoMode,
+    );
+    final stableName = inspection.referenceNo.isEmpty
+        ? '${inspection.buildingCode}_${inspection.dateIso}'
+        : inspection.referenceNo;
+    final filename = 'inspection_$stableName.pdf';
     await Printing.sharePdf(bytes: bytes, filename: filename);
   }
 
   /// Optional: system print dialog (requires macOS print entitlement).
-  Future<void> print(Inspection inspection, {String language = 'en'}) async {
-    final bytes = await buildPdfBytes(inspection, language: language);
-    final name =
-        'inspection_${inspection.buildingCode}_${inspection.dateIso}';
+  Future<void> print(
+    Inspection inspection, {
+    String language = 'en',
+    ReportPhotoMode photoMode = ReportPhotoMode.links,
+  }) async {
+    final bytes = await buildPdfBytes(
+      inspection,
+      language: language,
+      photoMode: photoMode,
+    );
+    final name = 'inspection_${inspection.buildingCode}_${inspection.dateIso}';
     try {
       final info = await Printing.info();
       if (!info.canPrint) {
@@ -58,8 +105,16 @@ class InspectionReportExporter {
   }
 
   /// Share/save without opening the print dialog (optional callers).
-  Future<void> share(Inspection inspection, {String language = 'en'}) async {
-    final bytes = await buildPdfBytes(inspection, language: language);
+  Future<void> share(
+    Inspection inspection, {
+    String language = 'en',
+    ReportPhotoMode photoMode = ReportPhotoMode.links,
+  }) async {
+    final bytes = await buildPdfBytes(
+      inspection,
+      language: language,
+      photoMode: photoMode,
+    );
     await Printing.sharePdf(
       bytes: bytes,
       filename:
@@ -70,13 +125,61 @@ class InspectionReportExporter {
   Future<Uint8List> buildPdfBytes(
     Inspection inspection, {
     String language = 'en',
+    ReportBrandingBytes? branding,
+    FormPaperTheme? paperTheme,
+    ReportPhotoMode photoMode = ReportPhotoMode.links,
   }) async {
     final ar = language == 'ar';
+    var resolvedPaperTheme = paperTheme ?? inspection.paperTheme;
+    // Older/offline instances may not carry migration 022's resolved theme.
+    if (paperTheme == null && inspection.resolvedFormTheme == null) {
+      try {
+        final rows = await Supabase.instance.client.rpc(
+          'resolve_checklist_form_themes',
+          params: {
+            'p_site_ids': [inspection.siteId],
+          },
+        );
+        if ((rows as List).isNotEmpty) {
+          final resolved = Map<String, dynamic>.from(rows.first as Map);
+          resolvedPaperTheme = FormPaperTheme.resolve(
+            themeDb: resolved['theme_key'] as String?,
+            accentHex: resolved['accent_hex'] as String?,
+          );
+        }
+      } catch (_) {
+        // Compatibility fallback for deployments still applying migration 022.
+      }
+    }
+    if (paperTheme == null &&
+        inspection.resolvedFormTheme == null &&
+        inspection.formTheme == FormThemeKey.inherit.dbValue &&
+        inspection.parentSiteId != null) {
+      final parent = await Supabase.instance.client
+          .from('sites')
+          .select('form_theme, form_theme_accent')
+          .eq('id', inspection.parentSiteId!)
+          .maybeSingle();
+      if (parent != null) {
+        resolvedPaperTheme = FormPaperTheme.resolve(
+          themeDb: inspection.formTheme,
+          accentHex: inspection.formThemeAccent,
+          parentThemeDb: parent['form_theme'] as String?,
+          parentAccentHex: parent['form_theme_accent'] as String?,
+        );
+      }
+    }
+    final paper = resolvedPaperTheme;
+    _gold = _pdfColor(paper.accent);
+    _border = _pdfColor(paper.border);
+    _accentText = _pdfColor(paper.accentText);
     final items = [...inspection.items]
       ..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
 
     final repo = InspectionRepository(Supabase.instance.client);
     final photoLinks = <String, String>{};
+    final photoReferences = buildInspectionPhotoReferences(items);
+    final embeddedPhotos = <String, Uint8List>{};
     for (final item in items) {
       for (final photo in item.remarkPhotos) {
         if (photoLinks.containsKey(photo.path)) continue;
@@ -84,45 +187,64 @@ class InspectionReportExporter {
         if (url != null && url.isNotEmpty) {
           photoLinks[photo.path] = url;
         }
+        if (photoMode == ReportPhotoMode.embedded) {
+          final bytes = await repo.downloadBytes(photo.path);
+          if (bytes != null && bytes.isNotEmpty) {
+            final optimized = _optimizeReportPhoto(bytes);
+            if (optimized != null) embeddedPhotos[photo.path] = optimized;
+          }
+        }
       }
     }
 
     final baseFont = await PdfGoogleFonts.notoSansRegular();
     final boldFont = await PdfGoogleFonts.notoSansBold();
     final arabicFont = await PdfGoogleFonts.notoNaskhArabicRegular();
-    final theme = pw.ThemeData.withFont(
-      base: baseFont,
-      bold: boldFont,
-      fontFallback: [arabicFont],
-    ).copyWith(
-      defaultTextStyle: pw.TextStyle(
-        font: baseFont,
-        fontSize: 9,
-        color: PdfColors.black,
-      ),
-      header0: pw.TextStyle(
-        font: boldFont,
-        fontSize: 13,
-        color: PdfColors.black,
-      ),
-    );
+    final theme =
+        pw.ThemeData.withFont(
+          base: baseFont,
+          bold: boldFont,
+          fontFallback: [arabicFont],
+        ).copyWith(
+          defaultTextStyle: pw.TextStyle(
+            font: baseFont,
+            fontSize: 9,
+            color: PdfColors.black,
+          ),
+          header0: pw.TextStyle(
+            font: boldFont,
+            fontSize: 13,
+            color: PdfColors.black,
+          ),
+        );
 
-    final moeheLogo = await _loadImage(
-      'packages/checklist_shared/assets/branding/moehe_logo.png',
-    );
-    final waseefLogo = await _loadImage(
-      'packages/checklist_shared/assets/branding/logo_waseef.png',
-    );
-    final footerLogo = await _loadImage(
-      'packages/checklist_shared/assets/branding/logo_footer2.png',
-    );
+    final brand =
+        branding ??
+        await ReportBrandingResolver(
+          Supabase.instance.client,
+        ).resolveForSite(siteId: inspection.siteId, language: language);
+
+    pw.MemoryImage? moeheLogo;
+    pw.MemoryImage? waseefLogo;
+    pw.MemoryImage? footerLogo;
+    if (brand.orgHeaderLogo != null) {
+      moeheLogo = pw.MemoryImage(Uint8List.fromList(brand.orgHeaderLogo!));
+    }
+    if (brand.siteFooterLogo != null) {
+      waseefLogo = pw.MemoryImage(Uint8List.fromList(brand.siteFooterLogo!));
+    }
+    if (brand.zoneFooterLogo != null) {
+      footerLogo = pw.MemoryImage(Uint8List.fromList(brand.zoneFooterLogo!));
+    }
+    final orgName = brand.orgNameFor(language);
 
     pw.MemoryImage? signatureImage;
     final sigPath = inspection.signaturePath;
     if (sigPath != null && sigPath.isNotEmpty) {
       try {
-        final raw = await InspectionRepository(Supabase.instance.client)
-            .downloadBytes(sigPath);
+        final raw = await InspectionRepository(
+          Supabase.instance.client,
+        ).downloadBytes(sigPath, forceRefresh: true);
         if (raw != null && raw.isNotEmpty) {
           final blue = recolorSignatureToBlueInk(Uint8List.fromList(raw));
           signatureImage = pw.MemoryImage(blue);
@@ -143,17 +265,18 @@ class InspectionReportExporter {
         theme: theme,
         footer: (context) => _pageFooter(
           ar: ar,
-          elegancia: waseefLogo,
-          waseef: footerLogo,
+          siteLogo: waseefLogo,
+          zoneLogo: footerLogo,
+          orgName: orgName,
         ),
         build: (context) => [
-          _header(inspection, ar, moeheLogo),
+          _header(inspection, ar, moeheLogo, orgName),
           pw.SizedBox(height: 6),
-          _titleBanner(ar),
+          _titleBanner(inspection, ar),
           pw.SizedBox(height: 8),
           _metaGrid(inspection, ar, signatureImage),
           pw.SizedBox(height: 10),
-          _itemsTable(items, language, ar, photoLinks),
+          _itemsTable(items, language, ar, photoLinks, photoReferences),
           pw.SizedBox(height: 10),
           pw.Text(
             disclaimer,
@@ -165,38 +288,182 @@ class InspectionReportExporter {
             ),
             textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
           ),
+          if (photoMode == ReportPhotoMode.embedded &&
+              embeddedPhotos.isNotEmpty) ...[
+            pw.NewPage(),
+            ..._photoEvidencePages(
+              items: items,
+              language: language,
+              ar: ar,
+              photoReferences: photoReferences,
+              embeddedPhotos: embeddedPhotos,
+            ),
+          ],
         ],
       ),
     );
     return doc.save();
   }
 
-  Future<pw.MemoryImage?> _loadImage(String assetPath) async {
+  Uint8List? _optimizeReportPhoto(Uint8List bytes) {
     try {
-      final data = await rootBundle.load(assetPath);
-      return pw.MemoryImage(data.buffer.asUint8List());
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return null;
+      const maxSide = 1400;
+      final longest = decoded.width > decoded.height
+          ? decoded.width
+          : decoded.height;
+      final resized = longest > maxSide
+          ? img.copyResize(
+              decoded,
+              width: decoded.width >= decoded.height ? maxSide : null,
+              height: decoded.height > decoded.width ? maxSide : null,
+              interpolation: img.Interpolation.average,
+            )
+          : decoded;
+      return Uint8List.fromList(img.encodeJpg(resized, quality: 80));
     } catch (_) {
       return null;
     }
   }
 
+  List<pw.Widget> _photoEvidencePages({
+    required List<InspectionItem> items,
+    required String language,
+    required bool ar,
+    required Map<String, String> photoReferences,
+    required Map<String, Uint8List> embeddedPhotos,
+  }) {
+    final widgets = <pw.Widget>[
+      pw.Container(
+        width: double.infinity,
+        padding: const pw.EdgeInsets.symmetric(vertical: 7, horizontal: 8),
+        color: _gold,
+        child: pw.Text(
+          ar ? 'أدلة الصور ومراجعها' : 'Photo Evidence & References',
+          textAlign: ar ? pw.TextAlign.right : pw.TextAlign.left,
+          textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+          style: pw.TextStyle(
+            color: _accentText,
+            fontSize: 13,
+            fontWeight: pw.FontWeight.bold,
+          ),
+        ),
+      ),
+      pw.SizedBox(height: 10),
+    ];
+    for (final item in items) {
+      for (final photo in item.remarkPhotos) {
+        final bytes = embeddedPhotos[photo.path];
+        if (bytes == null) continue;
+        final reference = photoReferences[photo.path] ?? '${item.itemIndex}';
+        widgets.add(
+          pw.Container(
+            height: 176,
+            margin: const pw.EdgeInsets.only(bottom: 10),
+            padding: const pw.EdgeInsets.all(7),
+            decoration: pw.BoxDecoration(
+              border: pw.Border.all(color: _border, width: 0.8),
+              borderRadius: const pw.BorderRadius.all(pw.Radius.circular(3)),
+            ),
+            child: pw.Row(
+              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+              children: ar
+                  ? [
+                      _photoEvidenceDetails(
+                        item: item,
+                        language: language,
+                        ar: ar,
+                        reference: reference,
+                        isFix: photo.kind == RemarkPhotoKind.fix,
+                      ),
+                      pw.SizedBox(width: 8),
+                      _embeddedPhoto(bytes),
+                    ]
+                  : [
+                      _embeddedPhoto(bytes),
+                      pw.SizedBox(width: 8),
+                      _photoEvidenceDetails(
+                        item: item,
+                        language: language,
+                        ar: ar,
+                        reference: reference,
+                        isFix: photo.kind == RemarkPhotoKind.fix,
+                      ),
+                    ],
+            ),
+          ),
+        );
+      }
+    }
+    return widgets;
+  }
+
+  pw.Widget _embeddedPhoto(Uint8List bytes) => pw.SizedBox(
+    width: 250,
+    child: pw.Image(pw.MemoryImage(bytes), fit: pw.BoxFit.contain),
+  );
+
+  pw.Widget _photoEvidenceDetails({
+    required InspectionItem item,
+    required String language,
+    required bool ar,
+    required String reference,
+    required bool isFix,
+  }) => pw.Expanded(
+    child: pw.Column(
+      crossAxisAlignment: ar
+          ? pw.CrossAxisAlignment.end
+          : pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(
+          ar ? 'مرجع الصورة: $reference' : 'Photo Ref: $reference',
+          textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+          style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold),
+        ),
+        pw.SizedBox(height: 5),
+        pw.Text(
+          ar
+              ? 'البند ${item.itemIndex} — ${isFix ? 'دليل الإصلاح' : 'دليل المشكلة'}'
+              : 'Item ${item.itemIndex} — ${isFix ? 'Fix evidence' : 'Issue evidence'}',
+          textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+          style: const pw.TextStyle(fontSize: 8.5),
+        ),
+        pw.SizedBox(height: 5),
+        pw.Text(
+          item.descriptionFor(language),
+          textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+          textAlign: ar ? pw.TextAlign.right : pw.TextAlign.left,
+          maxLines: 6,
+          overflow: pw.TextOverflow.clip,
+          style: const pw.TextStyle(fontSize: 8, lineSpacing: 1.2),
+        ),
+      ],
+    ),
+  );
+
   pw.Widget _header(
     Inspection inspection,
     bool ar,
     pw.MemoryImage? logo,
+    String orgName,
   ) {
     final siteName = ar
         ? (inspection.siteNameAr.isNotEmpty
-            ? inspection.siteNameAr
-            : inspection.buildingCode)
+              ? inspection.siteNameAr
+              : inspection.buildingCode)
         : (inspection.siteNameEn.isNotEmpty
-            ? inspection.siteNameEn
-            : inspection.buildingCode);
+              ? inspection.siteNameEn
+              : inspection.buildingCode);
 
     final logoWidget = logo != null
-        ? pw.Image(logo, height: 36)
+        ? pw.SizedBox(
+            width: 158,
+            height: 54,
+            child: pw.Image(logo, fit: pw.BoxFit.contain),
+          )
         : pw.Text(
-            'MOEHE',
+            orgName.isNotEmpty ? orgName : 'ORG',
             style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 12),
           );
 
@@ -204,13 +471,14 @@ class InspectionReportExporter {
     final titles = pw.ConstrainedBox(
       constraints: const pw.BoxConstraints(maxWidth: 340),
       child: pw.Column(
-        crossAxisAlignment:
-            ar ? pw.CrossAxisAlignment.end : pw.CrossAxisAlignment.start,
+        crossAxisAlignment: ar
+            ? pw.CrossAxisAlignment.end
+            : pw.CrossAxisAlignment.start,
         children: [
           pw.Text(
             ar
-                ? 'خدمة الإدارة المتكاملة للمرافق لصالح وزارة التربية والتعليم والتعليم العالي'
-                : 'Integrated Facilities Management Service for MOEHE',
+                ? 'خدمة الإدارة المتكاملة للمرافق لصالح $orgName'
+                : 'Integrated Facilities Management Service for $orgName',
             style: pw.TextStyle(
               fontSize: 8.5,
               fontWeight: pw.FontWeight.bold,
@@ -238,7 +506,7 @@ class InspectionReportExporter {
 
     return pw.Container(
       padding: const pw.EdgeInsets.only(bottom: 6),
-      decoration: const pw.BoxDecoration(
+      decoration: pw.BoxDecoration(
         border: pw.Border(bottom: pw.BorderSide(color: _border, width: 1)),
       ),
       child: pw.Row(
@@ -266,7 +534,14 @@ class InspectionReportExporter {
     );
   }
 
-  pw.Widget _titleBanner(bool ar) {
+  pw.Widget _titleBanner(Inspection inspection, bool ar) {
+    final reference = inspection.referenceNo.trim();
+    final templateVersion = inspection.templateVersionSnapshot;
+    final identity = [
+      if (reference.isNotEmpty) reference,
+      if (templateVersion != null)
+        ar ? 'إصدار القائمة $templateVersion' : 'Checklist v$templateVersion',
+    ].join('  •  ');
     return pw.Container(
       width: double.infinity,
       padding: const pw.EdgeInsets.symmetric(vertical: 7),
@@ -274,15 +549,30 @@ class InspectionReportExporter {
         color: _gold,
         border: pw.Border.all(color: _border, width: 0.9),
       ),
-      child: pw.Text(
-        ar ? 'تقرير الفحص اليومي للمرافق' : 'Daily Facilities Inspection Report',
-        textAlign: pw.TextAlign.center,
-        style: pw.TextStyle(
-          fontSize: 13,
-          fontWeight: pw.FontWeight.bold,
-          color: PdfColors.black,
-        ),
-        textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+      child: pw.Column(
+        children: [
+          pw.Text(
+            ar
+                ? 'تقرير الفحص اليومي للمرافق'
+                : 'Daily Facilities Inspection Report',
+            textAlign: pw.TextAlign.center,
+            style: pw.TextStyle(
+              fontSize: 13,
+              fontWeight: pw.FontWeight.bold,
+              color: _accentText,
+            ),
+            textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+          ),
+          if (identity.isNotEmpty) ...[
+            pw.SizedBox(height: 2),
+            pw.Text(
+              identity,
+              textAlign: pw.TextAlign.center,
+              style: pw.TextStyle(fontSize: 7.5, color: _accentText),
+              textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -310,23 +600,21 @@ class InspectionReportExporter {
     const double labelW = 78;
     const double inspLabelW = 92;
     const double dateLabelW = 38;
-    const double dateBlockW = 108;
-    const double bldgNoW = 28;
+    const double dateBlockW = 100;
     const double floorLabelW = 50;
 
     pw.TextStyle labelStyle() => pw.TextStyle(
-          fontSize: 7.5,
-          fontWeight: pw.FontWeight.bold,
-          color: PdfColors.black,
-        );
+      fontSize: 7.5,
+      fontWeight: pw.FontWeight.bold,
+      color: _accentText,
+    );
     pw.TextStyle valueStyle() => pw.TextStyle(
-          fontSize: 8.5,
-          fontWeight: pw.FontWeight.bold,
-          color: PdfColors.black,
-        );
+      fontSize: 8.5,
+      fontWeight: pw.FontWeight.bold,
+      color: PdfColors.black,
+    );
 
-    pw.Border cellBorderAll() =>
-        pw.Border.all(color: _border, width: 0.75);
+    pw.Border cellBorderAll() => pw.Border.all(color: _border, width: 0.75);
 
     pw.Widget box({
       required double height,
@@ -340,10 +628,7 @@ class InspectionReportExporter {
         height: height,
         alignment: align ?? startAlign,
         padding: const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-        decoration: pw.BoxDecoration(
-          color: bg,
-          border: cellBorderAll(),
-        ),
+        decoration: pw.BoxDecoration(color: bg, border: cellBorderAll()),
         child: child,
       );
     }
@@ -380,8 +665,8 @@ class InspectionReportExporter {
         align: a == pw.TextAlign.center
             ? pw.Alignment.center
             : (a == pw.TextAlign.right
-                ? pw.Alignment.centerRight
-                : pw.Alignment.centerLeft),
+                  ? pw.Alignment.centerRight
+                  : pw.Alignment.centerLeft),
         child: pw.Text(
           text,
           textAlign: a,
@@ -397,11 +682,7 @@ class InspectionReportExporter {
     final locationHalf = pw.Expanded(
       child: pw.Row(
         children: pair(
-          goldLabel(
-            ar ? 'الموقع:' : 'Location:',
-            width: labelW,
-            height: rowH,
-          ),
+          goldLabel(ar ? 'الموقع:' : 'Location:', width: labelW, height: rowH),
           pw.Expanded(
             child: val(inspection.locationLabel, height: rowH, forceLtr: !ar),
           ),
@@ -442,6 +723,7 @@ class InspectionReportExporter {
         children: ar
             ? [
                 pw.Expanded(
+                  flex: 2,
                   child: val(
                     inspection.floorLabel,
                     height: halfH,
@@ -454,12 +736,14 @@ class InspectionReportExporter {
                   width: floorLabelW,
                   height: halfH,
                 ),
-                val(
-                  inspection.bldgNo,
-                  width: bldgNoW,
-                  height: halfH,
-                  align: pw.TextAlign.center,
-                  forceLtr: true,
+                pw.Expanded(
+                  flex: 3,
+                  child: val(
+                    inspection.bldgNo,
+                    height: halfH,
+                    align: pw.TextAlign.center,
+                    forceLtr: true,
+                  ),
                 ),
                 goldLabel(
                   ar ? 'رقم المبنى' : 'Bldg. No.',
@@ -473,11 +757,14 @@ class InspectionReportExporter {
                   width: labelW,
                   height: halfH,
                 ),
-                val(
-                  inspection.bldgNo,
-                  width: bldgNoW,
-                  height: halfH,
-                  align: pw.TextAlign.center,
+                pw.Expanded(
+                  flex: 3,
+                  child: val(
+                    inspection.bldgNo,
+                    height: halfH,
+                    align: pw.TextAlign.center,
+                    forceLtr: true,
+                  ),
                 ),
                 goldLabel(
                   ar ? 'الطابق' : 'Floor no.',
@@ -485,6 +772,7 @@ class InspectionReportExporter {
                   height: halfH,
                 ),
                 pw.Expanded(
+                  flex: 2,
                   child: val(
                     inspection.floorLabel,
                     height: halfH,
@@ -495,9 +783,7 @@ class InspectionReportExporter {
       ),
     );
 
-    final leftHalf = pw.Expanded(
-      child: pw.Column(children: [pinRow, bldgRow]),
-    );
+    final leftHalf = pw.Expanded(child: pw.Column(children: [pinRow, bldgRow]));
 
     final dateBlock = pw.SizedBox(
       width: dateBlockW,
@@ -554,22 +840,12 @@ class InspectionReportExporter {
     final signatureValue = pw.Expanded(
       child: pw.Container(
         height: sigH,
+        padding: const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 2),
         decoration: pw.BoxDecoration(border: cellBorderAll()),
-        child: pw.Stack(
-          children: [
-            if (signatureImage != null)
-              pw.Positioned(
-                left: -7,
-                top: -6,
-                right: -10,
-                bottom: -5,
-                child: pw.Image(
-                  signatureImage,
-                  fit: pw.BoxFit.contain,
-                ),
-              ),
-          ],
-        ),
+        alignment: pw.Alignment.center,
+        child: signatureImage == null
+            ? pw.SizedBox()
+            : pw.Image(signatureImage, fit: pw.BoxFit.contain),
       ),
     );
 
@@ -587,18 +863,14 @@ class InspectionReportExporter {
         pw.SizedBox(
           height: rowH,
           child: pw.Row(
-            children: ar
-                ? [nameHalf, locationHalf]
-                : [locationHalf, nameHalf],
+            children: ar ? [nameHalf, locationHalf] : [locationHalf, nameHalf],
           ),
         ),
         pw.SizedBox(
           height: sigH,
           child: pw.Row(
             crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-            children: ar
-                ? [rightHalf, leftHalf]
-                : [leftHalf, rightHalf],
+            children: ar ? [rightHalf, leftHalf] : [leftHalf, rightHalf],
           ),
         ),
       ],
@@ -618,18 +890,12 @@ class InspectionReportExporter {
   pw.Widget _markCell(InspectionItem item, ChecklistResponse column) {
     final selected = item.response?.shortCode == column.shortCode;
     if (!selected) {
-      return pw.Container(
-        alignment: pw.Alignment.center,
-        padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-        child: pw.SizedBox(width: 14, height: 14),
-      );
+      return _fixedRowCell(child: pw.SizedBox(width: 14, height: 14));
     }
     final color = _markColor(item, column);
     // Draw the tick geometrically — Unicode ✓ is missing in Noto and renders as ⊞.
     // PdfGraphics uses PDF coords (origin bottom-left, Y up) — invert Y vs Flutter.
-    return pw.Container(
-      alignment: pw.Alignment.center,
-      padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+    return _fixedRowCell(
       child: pw.SizedBox(
         width: 14,
         height: 14,
@@ -670,58 +936,221 @@ class InspectionReportExporter {
         style: pw.TextStyle(
           fontSize: fontSize,
           fontWeight: pw.FontWeight.bold,
-          color: PdfColors.black,
+          color: PdfColors.white,
         ),
         textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
       ),
     );
   }
 
-  pw.Widget _photoHyperlinkChip({
+  /// Fixed data-row height so empty / photo rows match.
+  static const _itemRowH = 28.0;
+
+  /// Preferred photo icon width before shrink (≥ 1 cm).
+  static const _photoMinWidthCm = 72.0 / 2.54; // ≈ 28.35 pt
+
+  /// A4 content width after MultiPage left/right margins (24+24).
+  double get _tableContentWidth => PdfPageFormat.a4.width - 48;
+
+  /// Remarks column width from table flex (3.2 / 8 of leftover after fixed cols).
+  double get _remarksColWidth {
+    const fixedCols = 30.0 * 4; // item + Yes/No/NA
+    const flexSum = 4.8 + 3.2;
+    return (_tableContentWidth - fixedCols) * (3.2 / flexSum);
+  }
+
+  /// Icon-only photo chip (hyperlink on the icon). Sized to fit remarks cell.
+  pw.Widget _photoIconLink({
     required ({String path, RemarkPhotoKind kind}) photo,
     required String? url,
-    required bool ar,
+    required String reference,
+    required double width,
+    required double height,
   }) {
     final isFix = photo.kind == RemarkPhotoKind.fix;
-    final label = isFix
-        ? (ar ? 'صورة إصلاح' : 'Repair photo')
-        : (ar ? 'صورة مشكلة' : 'Issue photo');
-    final accent = isFix ? PdfColors.green700 : PdfColors.red700;
-    final chip = pw.Row(
-      mainAxisSize: pw.MainAxisSize.min,
-      children: [
-        pw.Container(
-          width: 11,
-          height: 11,
-          decoration: pw.BoxDecoration(
-            color: accent,
-            borderRadius: const pw.BorderRadius.all(pw.Radius.circular(2)),
-            border: pw.Border.all(color: accent, width: 0.6),
+    final accent = isFix ? _fixGreen : _problemRed;
+    final w = width.clamp(3.0, 200.0);
+    final h = height.clamp(3.0, 200.0);
+    final icon = pw.Container(
+      width: w,
+      height: h,
+      decoration: pw.BoxDecoration(
+        color: PdfColors.white,
+        border: pw.Border.all(color: accent, width: 0.9),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(1.2)),
+      ),
+      alignment: pw.Alignment.center,
+      child: pw.Column(
+        mainAxisAlignment: pw.MainAxisAlignment.center,
+        children: [
+          pw.Container(
+            width: w * 0.42,
+            height: (h * 0.16).clamp(1.0, 6.0),
+            decoration: pw.BoxDecoration(
+              color: accent,
+              borderRadius: const pw.BorderRadius.all(pw.Radius.circular(0.8)),
+            ),
           ),
-          alignment: pw.Alignment.center,
-          child: pw.Text(
-            '▣',
+          pw.SizedBox(height: (h * 0.05).clamp(0.4, 2.0)),
+          pw.Container(
+            width: w * 0.55,
+            height: (h * 0.42).clamp(2.0, 14.0),
+            decoration: pw.BoxDecoration(
+              border: pw.Border.all(color: accent, width: 0.7),
+              borderRadius: const pw.BorderRadius.all(pw.Radius.circular(1)),
+            ),
+            alignment: pw.Alignment.center,
+            child: pw.Container(
+              width: (w * 0.2).clamp(1.5, 8.0),
+              height: (w * 0.2).clamp(1.5, 8.0),
+              decoration: pw.BoxDecoration(
+                shape: pw.BoxShape.circle,
+                border: pw.Border.all(color: accent, width: 0.6),
+              ),
+            ),
+          ),
+          pw.SizedBox(height: 0.5),
+          pw.Text(
+            reference,
             style: pw.TextStyle(
-              fontSize: 7,
-              color: PdfColors.white,
+              color: accent,
+              fontSize: (h * 0.16).clamp(3.2, 5.2),
               fontWeight: pw.FontWeight.bold,
             ),
           ),
-        ),
-        pw.SizedBox(width: 3),
-        pw.Text(
-          label,
-          style: pw.TextStyle(
-            fontSize: 7,
-            color: url != null ? PdfColors.blue800 : PdfColors.grey700,
-            decoration:
-                url != null ? pw.TextDecoration.underline : pw.TextDecoration.none,
-          ),
-        ),
-      ],
+        ],
+      ),
     );
-    if (url == null || url.isEmpty) return chip;
-    return pw.UrlLink(destination: url, child: chip);
+    if (url == null || url.isEmpty) return icon;
+    return pw.UrlLink(destination: url, child: icon);
+  }
+
+  /// Lays out remark photos as issue↔fix pairs inside [boxW]×[boxH].
+  ///
+  /// Tight gap inside a pair; wider gap between pairs. Width defaults to ≥1cm;
+  /// shrinks only when count exceeds the cell.
+  pw.Widget _remarksPhotosRow({
+    required List<({String path, RemarkPhotoKind kind, String pairId})> photos,
+    required Map<String, String> photoLinks,
+    required Map<String, String> photoReferences,
+    required double boxW,
+    required double boxH,
+    required bool hasText,
+    required bool ar,
+  }) {
+    if (photos.isEmpty || boxW <= 0 || boxH <= 0) return pw.SizedBox();
+    const pairGap = 0.8;
+    const betweenGap = 3.0;
+    final n = photos.length;
+    var betweenCount = 0;
+    for (var i = 1; i < photos.length; i++) {
+      if (photos[i].pairId != photos[i - 1].pairId) betweenCount++;
+    }
+    final innerGaps = (n - 1 - betweenCount).clamp(0, 1000) * pairGap;
+    final gaps = innerGaps + betweenGap * betweenCount;
+    final fitW = ((boxW - gaps) / n).clamp(3.0, boxW);
+    final w = fitW < _photoMinWidthCm ? fitW : _photoMinWidthCm;
+    final photoBandH = hasText ? (boxH * 0.55).clamp(6.0, boxH) : boxH;
+    final h = photoBandH.clamp(5.0, boxH);
+
+    return pw.SizedBox(
+      width: boxW,
+      height: h,
+      child: pw.Row(
+        mainAxisAlignment: ar
+            ? pw.MainAxisAlignment.end
+            : pw.MainAxisAlignment.start,
+        children: [
+          for (var i = 0; i < photos.length; i++) ...[
+            if (i > 0)
+              pw.SizedBox(
+                width: photos[i].pairId == photos[i - 1].pairId
+                    ? pairGap
+                    : betweenGap,
+              ),
+            _photoIconLink(
+              photo: (path: photos[i].path, kind: photos[i].kind),
+              url: photoLinks[photos[i].path],
+              reference: photoReferences[photos[i].path] ?? '',
+              width: w,
+              height: h,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _fixedRowCell({
+    required pw.Widget child,
+    pw.Alignment alignment = pw.Alignment.center,
+    pw.EdgeInsets padding = const pw.EdgeInsets.symmetric(
+      vertical: 4,
+      horizontal: 2,
+    ),
+  }) {
+    return pw.Container(
+      height: _itemRowH,
+      alignment: alignment,
+      padding: padding,
+      child: child,
+    );
+  }
+
+  pw.Widget _remarksCellContent({
+    required InspectionItem item,
+    required Map<String, String> photoLinks,
+    required Map<String, String> photoReferences,
+    required bool ar,
+    required pw.TextAlign descAlign,
+  }) {
+    final text = item.actionsTaken.trim();
+    final hasText = text.isNotEmpty;
+    final photos = item.remarkPhotos;
+    // Inner size of the fixed remarks box (cell padding accounted for).
+    const padX = 6.0;
+    const padY = 4.0;
+    final boxW = (_remarksColWidth - padX).clamp(40.0, _remarksColWidth);
+    final boxH = (_itemRowH - padY).clamp(12.0, _itemRowH);
+
+    return pw.SizedBox(
+      width: boxW,
+      height: boxH,
+      child: pw.Column(
+        crossAxisAlignment: ar
+            ? pw.CrossAxisAlignment.end
+            : pw.CrossAxisAlignment.start,
+        mainAxisAlignment: pw.MainAxisAlignment.center,
+        children: [
+          if (photos.isNotEmpty)
+            _remarksPhotosRow(
+              photos: photos,
+              photoLinks: photoLinks,
+              photoReferences: photoReferences,
+              boxW: boxW,
+              boxH: hasText ? boxH : boxH,
+              hasText: hasText,
+              ar: ar,
+            ),
+          if (photos.isNotEmpty && hasText) pw.SizedBox(height: 1),
+          if (hasText)
+            pw.Expanded(
+              child: pw.Text(
+                text,
+                style: const pw.TextStyle(
+                  fontSize: 6.5,
+                  color: PdfColors.black,
+                  lineSpacing: 1.05,
+                ),
+                textAlign: descAlign,
+                textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+                maxLines: photos.isEmpty ? 3 : 2,
+                overflow: pw.TextOverflow.clip,
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   pw.Widget _itemsTable(
@@ -729,6 +1158,7 @@ class InspectionReportExporter {
     String language,
     bool ar,
     Map<String, String> photoLinks,
+    Map<String, String> photoReferences,
   ) {
     final descAlign = ar ? pw.TextAlign.right : pw.TextAlign.left;
     final headers = [
@@ -748,67 +1178,48 @@ class InspectionReportExporter {
     ];
 
     List<pw.Widget> rowCells(InspectionItem item) => [
-          pw.Container(
-            alignment: pw.Alignment.center,
-            padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-            child: pw.Text(
-              '${item.itemIndex}',
-              textAlign: pw.TextAlign.center,
-              style: pw.TextStyle(
-                fontSize: 9,
-                fontWeight: pw.FontWeight.bold,
-                color: PdfColors.black,
-              ),
-            ),
+      _fixedRowCell(
+        child: pw.Text(
+          '${item.itemIndex}',
+          textAlign: pw.TextAlign.center,
+          style: pw.TextStyle(
+            fontSize: 9,
+            fontWeight: pw.FontWeight.bold,
+            color: PdfColors.black,
           ),
-          pw.Container(
-            alignment: ar ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
-            padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-            child: pw.Text(
-              item.descriptionFor(language),
-              style: const pw.TextStyle(
-                fontSize: 8,
-                lineSpacing: 1.15,
-                color: PdfColors.black,
-              ),
-              textAlign: descAlign,
-              textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
-            ),
+        ),
+      ),
+      _fixedRowCell(
+        alignment: ar ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
+        padding: const pw.EdgeInsets.symmetric(vertical: 3, horizontal: 4),
+        child: pw.Text(
+          item.descriptionFor(language),
+          style: const pw.TextStyle(
+            fontSize: 7.5,
+            lineSpacing: 1.05,
+            color: PdfColors.black,
           ),
-          _markCell(item, ChecklistResponse.yes),
-          _markCell(item, ChecklistResponse.no),
-          _markCell(item, ChecklistResponse.na),
-          pw.Container(
-            alignment: ar ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
-            padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-            child: pw.Column(
-              crossAxisAlignment: ar
-                  ? pw.CrossAxisAlignment.end
-                  : pw.CrossAxisAlignment.start,
-              children: [
-                if (item.actionsTaken.trim().isNotEmpty)
-                  pw.Text(
-                    item.actionsTaken,
-                    style: const pw.TextStyle(
-                      fontSize: 8,
-                      color: PdfColors.black,
-                    ),
-                    textAlign: descAlign,
-                    textDirection:
-                        ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
-                  ),
-                for (final photo in item.remarkPhotos) ...[
-                  pw.SizedBox(height: 2),
-                  _photoHyperlinkChip(
-                    photo: photo,
-                    url: photoLinks[photo.path],
-                    ar: ar,
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ];
+          textAlign: descAlign,
+          textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
+          maxLines: 3,
+          overflow: pw.TextOverflow.clip,
+        ),
+      ),
+      _markCell(item, ChecklistResponse.yes),
+      _markCell(item, ChecklistResponse.no),
+      _markCell(item, ChecklistResponse.na),
+      _fixedRowCell(
+        alignment: ar ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
+        padding: const pw.EdgeInsets.symmetric(vertical: 2, horizontal: 3),
+        child: _remarksCellContent(
+          item: item,
+          photoLinks: photoLinks,
+          photoReferences: photoReferences,
+          ar: ar,
+          descAlign: descAlign,
+        ),
+      ),
+    ];
 
     // Arabic: mirror columns (actions … item).
     final headerRow = ar ? headers.reversed.toList() : headers;
@@ -845,17 +1256,23 @@ class InspectionReportExporter {
     );
   }
 
-  /// Sticky page footer: partner logos always at bottom of every page.
+  /// Sticky page footer: site + zone logos (swap corners by language).
   pw.Widget _pageFooter({
     required bool ar,
-    required pw.MemoryImage? elegancia,
-    required pw.MemoryImage? waseef,
+    required pw.MemoryImage? siteLogo,
+    required pw.MemoryImage? zoneLogo,
+    required String orgName,
   }) {
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.stretch,
       children: [
         pw.SizedBox(height: 8),
-        _footerLogos(elegancia, waseef),
+        _footerLogos(
+          ar: ar,
+          siteLogo: siteLogo,
+          zoneLogo: zoneLogo,
+          orgName: orgName,
+        ),
         pw.SizedBox(height: 4),
         pw.Align(
           alignment: ar ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
@@ -868,27 +1285,40 @@ class InspectionReportExporter {
     );
   }
 
-  pw.Widget _footerLogos(
-    pw.MemoryImage? elegancia,
-    pw.MemoryImage? waseef,
-  ) {
-    // Matches on-screen form: elegancia (left) · © · Waseef (right).
+  pw.Widget _footerLogos({
+    required bool ar,
+    required pw.MemoryImage? siteLogo,
+    required pw.MemoryImage? zoneLogo,
+    required String orgName,
+  }) {
+    // Absolute page corners (LTR row): EN site=left zone=right; AR zone=left site=right.
+    final left = ar ? zoneLogo : siteLogo;
+    final right = ar ? siteLogo : zoneLogo;
+    final credit = orgName.trim().isEmpty ? '© Facilities' : '© $orgName';
     return pw.Row(
       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
       crossAxisAlignment: pw.CrossAxisAlignment.center,
       children: [
-        if (elegancia != null)
-          pw.Image(elegancia, height: 22)
+        if (left != null)
+          pw.SizedBox(
+            width: 108,
+            height: 36,
+            child: pw.Image(left, fit: pw.BoxFit.contain),
+          )
         else
-          pw.SizedBox(width: 90, height: 22),
+          pw.SizedBox(width: 108, height: 36),
         pw.Text(
-          '© MOEHE Facilities',
+          credit,
           style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
         ),
-        if (waseef != null)
-          pw.Image(waseef, height: 30)
+        if (right != null)
+          pw.SizedBox(
+            width: 108,
+            height: 36,
+            child: pw.Image(right, fit: pw.BoxFit.contain),
+          )
         else
-          pw.SizedBox(width: 70, height: 30),
+          pw.SizedBox(width: 108, height: 36),
       ],
     );
   }

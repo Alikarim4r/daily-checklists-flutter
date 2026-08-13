@@ -7,6 +7,7 @@ import '../data/checklist_lists.dart';
 import '../models/enums.dart';
 import '../models/inspection.dart';
 import '../models/profile.dart';
+import '../theme/form_theme_resolution.dart';
 import '../utils/storage_path_list.dart';
 import 'catalog_repository.dart';
 
@@ -16,7 +17,194 @@ class InspectionRepository {
   final SupabaseClient _client;
   static const bucket = 'checklist-media';
 
-  ChecklistCatalogRepository get _catalog => ChecklistCatalogRepository(_client);
+  ChecklistCatalogRepository get _catalog =>
+      ChecklistCatalogRepository(_client);
+
+  /// Adds the resolved organization/zone/campus/site/template theme in one
+  /// batch so list screens never issue one request per inspection.
+  Future<void> _attachResolvedThemeData(
+    List<Map<String, dynamic>> inspectionRows,
+  ) async {
+    final rowsBySiteId = <String, List<Map<String, dynamic>>>{};
+    for (final row in inspectionRows) {
+      final siteId = row['site_id'] as String?;
+      if (siteId == null || siteId.isEmpty) continue;
+      rowsBySiteId.putIfAbsent(siteId, () => []).add(row);
+    }
+    if (rowsBySiteId.isEmpty) return;
+    final unresolvedSiteIds = rowsBySiteId.keys.toSet();
+
+    try {
+      final raw = await _client.rpc(
+        'resolve_checklist_form_themes',
+        params: {'p_site_ids': rowsBySiteId.keys.toList()},
+      );
+      for (final value in raw as List) {
+        final resolved = Map<String, dynamic>.from(value as Map);
+        final siteId = resolved['site_id'] as String?;
+        if (siteId == null) continue;
+        final theme = resolved['theme_key'] as String?;
+        if (theme == null || theme.trim().isEmpty || theme == 'inherit') {
+          continue;
+        }
+        for (final row in rowsBySiteId[siteId] ?? const []) {
+          row['_resolved_form_theme'] = theme;
+          row['_resolved_form_theme_accent'] = resolved['accent_hex'];
+          row['_form_theme_source'] = resolved['source_scope'];
+        }
+        unresolvedSiteIds.remove(siteId);
+      }
+      if (unresolvedSiteIds.isEmpty) return;
+    } catch (_) {
+      // Resolve locally below if the RPC is unavailable during a rollout.
+    }
+
+    await _attachLocallyResolvedThemeData(rowsBySiteId, unresolvedSiteIds);
+  }
+
+  Future<List<Map<String, dynamic>>> _safeThemeRows({
+    required String table,
+    required String columns,
+    required String filterColumn,
+    required Iterable<String> values,
+  }) async {
+    final ids = values.where((value) => value.isNotEmpty).toSet().toList();
+    if (ids.isEmpty) return const [];
+    try {
+      final rows = await _client
+          .from(table)
+          .select(columns)
+          .inFilter(filterColumn, ids);
+      return [
+        for (final row in rows as List) Map<String, dynamic>.from(row as Map),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  FormThemeScopeValue? _themeCandidate(
+    Map<String, dynamic>? row,
+    String source,
+  ) {
+    final theme = (row?['form_theme'] as String?)?.trim();
+    if (theme == null || theme.isEmpty || theme == 'inherit') return null;
+    return FormThemeScopeValue(
+      theme: theme,
+      accent: row?['form_theme_accent'] as String?,
+      source: source,
+    );
+  }
+
+  Future<void> _attachLocallyResolvedThemeData(
+    Map<String, List<Map<String, dynamic>>> rowsBySiteId,
+    Set<String> unresolvedSiteIds,
+  ) async {
+    final parentIds = <String>{};
+    final organizationIds = <String>{};
+    final templateCodes = <String>{};
+    for (final siteId in unresolvedSiteIds) {
+      final row = rowsBySiteId[siteId]?.firstOrNull;
+      final site = row?['sites'];
+      if (site is! Map) continue;
+      final parentId = site['parent_site_id'] as String?;
+      if (parentId != null && parentId.isNotEmpty) parentIds.add(parentId);
+      final organizationId = site['organization_id'] as String?;
+      if (organizationId != null && organizationId.isNotEmpty) {
+        organizationIds.add(organizationId);
+      }
+      final checklistType = site['checklist_type'] as String?;
+      if (checklistType != null && checklistType.isNotEmpty) {
+        templateCodes.add(checklistType);
+      }
+    }
+    final parentRows = await _safeThemeRows(
+      table: 'sites',
+      columns: 'id, zone_id, form_theme, form_theme_accent',
+      filterColumn: 'id',
+      values: parentIds,
+    );
+    final parentsById = <String, Map<String, dynamic>>{
+      for (final row in parentRows)
+        if (row['id'] is String) row['id'] as String: row,
+    };
+
+    final zoneIds = <String>{};
+    for (final siteId in unresolvedSiteIds) {
+      final site = rowsBySiteId[siteId]?.firstOrNull?['sites'];
+      if (site is! Map) continue;
+      final directZoneId = site['zone_id'] as String?;
+      final parent = parentsById[site['parent_site_id'] as String?];
+      final effectiveZoneId = directZoneId ?? parent?['zone_id'] as String?;
+      if (effectiveZoneId != null && effectiveZoneId.isNotEmpty) {
+        zoneIds.add(effectiveZoneId);
+      }
+    }
+
+    final zoneRows = await _safeThemeRows(
+      table: 'zones',
+      columns: 'id, form_theme, form_theme_accent',
+      filterColumn: 'id',
+      values: zoneIds,
+    );
+    final organizationRows = await _safeThemeRows(
+      table: 'organizations',
+      columns: 'id, form_theme, form_theme_accent',
+      filterColumn: 'id',
+      values: organizationIds,
+    );
+    final templateRows = await _safeThemeRows(
+      table: 'checklist_templates',
+      columns: 'code, form_theme, form_theme_accent',
+      filterColumn: 'code',
+      values: templateCodes,
+    );
+    final zonesById = <String, Map<String, dynamic>>{
+      for (final row in zoneRows)
+        if (row['id'] is String) row['id'] as String: row,
+    };
+    final organizationsById = <String, Map<String, dynamic>>{
+      for (final row in organizationRows)
+        if (row['id'] is String) row['id'] as String: row,
+    };
+    final templatesByCode = <String, Map<String, dynamic>>{
+      for (final row in templateRows)
+        if (row['code'] is String) row['code'] as String: row,
+    };
+
+    for (final siteId in unresolvedSiteIds) {
+      final rows = rowsBySiteId[siteId] ?? const [];
+      if (rows.isEmpty) continue;
+      final siteValue = rows.first['sites'];
+      if (siteValue is! Map) continue;
+      final site = Map<String, dynamic>.from(siteValue);
+      final parent = parentsById[site['parent_site_id'] as String?];
+      final zoneId =
+          site['zone_id'] as String? ?? parent?['zone_id'] as String?;
+      final templateCode = site['checklist_type'] as String?;
+      final organizationId = site['organization_id'] as String?;
+      final resolved = resolveFormThemeHierarchy(
+        site: _themeCandidate(site, 'site'),
+        campus: _themeCandidate(parent, 'campus'),
+        zone: _themeCandidate(zonesById[zoneId], 'zone'),
+        template: _themeCandidate(templatesByCode[templateCode], 'template'),
+        organization: _themeCandidate(
+          organizationsById[organizationId],
+          'organization',
+        ),
+      );
+
+      for (final row in rows) {
+        row['_resolved_form_theme'] = resolved.theme;
+        row['_resolved_form_theme_accent'] = resolved.accent;
+        row['_form_theme_source'] = resolved.source;
+        if (parent != null) {
+          row['_parent_form_theme'] = parent['form_theme'];
+          row['_parent_form_theme_accent'] = parent['form_theme_accent'];
+        }
+      }
+    }
+  }
 
   Future<List<Inspection>> listInspections({
     String? siteId,
@@ -25,8 +213,10 @@ class InspectionRepository {
     ReviewStatus? reviewStatus,
     List<ReviewStatus>? reviewStatuses,
   }) async {
-    var q = _client.from('checklist_inspections').select(
-          '*, sites(name_en, name_ar, pin, organization_id)',
+    var q = _client
+        .from('checklist_inspections')
+        .select(
+          '*, sites(name_en, name_ar, pin, organization_id, checklist_type, parent_site_id, zone_id, form_theme, form_theme_accent)',
         );
     if (siteId != null && siteId.isNotEmpty) q = q.eq('site_id', siteId);
     if (date != null) {
@@ -44,9 +234,11 @@ class InspectionRepository {
       );
     }
     final rows = await q.order('inspection_date', ascending: false);
-    return (rows as List)
-        .map((e) => Inspection.fromJson(Map<String, dynamic>.from(e as Map)))
-        .toList();
+    final maps = [
+      for (final row in rows as List) Map<String, dynamic>.from(row as Map),
+    ];
+    await _attachResolvedThemeData(maps);
+    return maps.map(Inspection.fromJson).toList();
   }
 
   /// Recent inspections for a site (with items) used for overdue streak calc.
@@ -63,22 +255,28 @@ class InspectionRepository {
     final rows = await _client
         .from('checklist_inspections')
         .select(
-          '*, sites(name_en, name_ar, pin, organization_id, checklist_type)',
+          '*, sites(name_en, name_ar, pin, organization_id, checklist_type, parent_site_id, zone_id, form_theme, form_theme_accent)',
         )
         .eq('site_id', siteId)
         .gte('inspection_date', fromIso)
         .lte('inspection_date', toIso)
-        .order('inspection_date', ascending: false);
+        .order('inspection_date', ascending: false)
+        .order('created_at', ascending: false);
+    final maps = [
+      for (final row in rows as List) Map<String, dynamic>.from(row as Map),
+    ];
+    await _attachResolvedThemeData(maps);
     final list = <Inspection>[];
-    for (final e in rows as List) {
-      final map = Map<String, dynamic>.from(e as Map);
+    for (final map in maps) {
       final site = map['sites'] as Map<String, dynamic>?;
       final checklistType =
           (site?['checklist_type'] as String?)?.trim().isNotEmpty == true
-              ? site!['checklist_type'] as String
-              : 'DEFAULT';
-      final items = await listItems(map['id'] as String,
-          checklistType: checklistType);
+          ? site!['checklist_type'] as String
+          : 'DEFAULT';
+      final items = await listItems(
+        map['id'] as String,
+        checklistType: checklistType,
+      );
       list.add(Inspection.fromJson(map, items: items));
     }
     return list;
@@ -88,21 +286,20 @@ class InspectionRepository {
     final row = await _client
         .from('checklist_inspections')
         .select(
-          '*, sites(name_en, name_ar, pin, organization_id, checklist_type)',
+          '*, sites(name_en, name_ar, pin, organization_id, checklist_type, parent_site_id, zone_id, form_theme, form_theme_accent)',
         )
         .eq('id', id)
         .maybeSingle();
     if (row == null) return null;
-    final site = row['sites'] as Map<String, dynamic>?;
+    final map = Map<String, dynamic>.from(row);
+    await _attachResolvedThemeData([map]);
+    final site = map['sites'] as Map<String, dynamic>?;
     final checklistType =
         (site?['checklist_type'] as String?)?.trim().isNotEmpty == true
-            ? site!['checklist_type'] as String
-            : 'DEFAULT';
+        ? site!['checklist_type'] as String
+        : 'DEFAULT';
     final items = await listItems(id, checklistType: checklistType);
-    return Inspection.fromJson(
-      Map<String, dynamic>.from(row),
-      items: items,
-    );
+    return Inspection.fromJson(map, items: items);
   }
 
   Future<List<InspectionItem>> listItems(
@@ -115,18 +312,55 @@ class InspectionRepository {
         .select()
         .eq('inspection_id', inspectionId)
         .order('item_index', ascending: true);
-    final items = (rows as List)
-        .map(
-          (e) => InspectionItem.fromJson(Map<String, dynamic>.from(e as Map)),
-        )
-        .toList()
-      ..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
+    final items =
+        (rows as List)
+            .map(
+              (e) =>
+                  InspectionItem.fromJson(Map<String, dynamic>.from(e as Map)),
+            )
+            .toList()
+          ..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
     _applyCatalogIdeals(
       items,
       checklistType,
       forceIdealResponse: forceIdealResponse,
     );
     return items;
+  }
+
+  /// Loads item snapshots for a list screen in one database round-trip.
+  ///
+  /// The viewer previously called [getById] for every visible inspection,
+  /// producing an N+1 request pattern and a noticeable pause on desktop.
+  Future<Map<String, List<InspectionItem>>> listItemsForInspections({
+    required Iterable<String> inspectionIds,
+    Map<String, String> checklistTypeByInspectionId = const {},
+  }) async {
+    final ids = inspectionIds.where((id) => id.isNotEmpty).toSet().toList();
+    if (ids.isEmpty) return const {};
+
+    final rows = await _client
+        .from('checklist_inspection_items')
+        .select()
+        .inFilter('inspection_id', ids)
+        .order('inspection_id')
+        .order('item_index');
+    final grouped = <String, List<InspectionItem>>{
+      for (final id in ids) id: <InspectionItem>[],
+    };
+    for (final value in rows as List) {
+      final row = Map<String, dynamic>.from(value as Map);
+      final inspectionId = row['inspection_id'] as String?;
+      if (inspectionId == null) continue;
+      grouped
+          .putIfAbsent(inspectionId, () => <InspectionItem>[])
+          .add(InspectionItem.fromJson(row));
+    }
+    for (final entry in grouped.entries) {
+      entry.value.sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
+      _applyCatalogIdeals(entry.value, checklistTypeByInspectionId[entry.key]);
+    }
+    return grouped;
   }
 
   /// Align stored rows with catalog ideals.
@@ -144,9 +378,7 @@ class InspectionRepository {
   }) {
     final type = checklistType?.trim();
     final Map<int, InspectionItem> templates;
-    if (type != null &&
-        type.isNotEmpty &&
-        kChecklistLists.containsKey(type)) {
+    if (type != null && type.isNotEmpty && kChecklistLists.containsKey(type)) {
       templates = {
         for (final t in templateItemsFor(type, 'en')) t.itemIndex: t,
       };
@@ -156,8 +388,16 @@ class InspectionRepository {
 
     for (final item in items) {
       final template = templates[item.itemIndex];
-      if (template != null) {
+      final sameCatalogText =
+          template != null &&
+          item.description.trim() == template.description.trim() &&
+          ((item.descriptionAr ?? '').trim().isEmpty ||
+              (template.descriptionAr ?? '').trim().isEmpty ||
+              (item.descriptionAr ?? '').trim() ==
+                  (template.descriptionAr ?? '').trim());
+      if (template != null && (forceIdealResponse || sameCatalogText)) {
         item.defaultAnswer = template.defaultAnswer.toUpperCase();
+        item.localizedDescriptions.addAll(template.localizedDescriptions);
       } else {
         item.defaultAnswer = item.defaultAnswer.toUpperCase();
       }
@@ -171,23 +411,37 @@ class InspectionRepository {
   }) async {
     final iso =
         '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-    final row = await _client
+    final rows = await _client
         .from('checklist_inspections')
         .select(
-          '*, sites(name_en, name_ar, pin, organization_id, checklist_type)',
+          '*, sites(name_en, name_ar, pin, organization_id, checklist_type, parent_site_id, zone_id, form_theme, form_theme_accent)',
         )
         .eq('site_id', siteId)
         .eq('inspection_date', iso)
-        .maybeSingle();
-    if (row == null) return null;
+        .order('created_at', ascending: false);
+    final list = [
+      for (final row in rows as List) Map<String, dynamic>.from(row as Map),
+    ];
+    if (list.isEmpty) return null;
+    await _attachResolvedThemeData(list);
+    // Prefer an open draft, then most recent submitted/approved.
+    Map<String, dynamic> row = list.first;
+    for (final r in list) {
+      final status =
+          (r['review_status'] as String?) ?? (r['status'] as String?);
+      if (status == 'draft' || status == 'returned') {
+        row = r;
+        break;
+      }
+    }
     final id = row['id'] as String;
     final site = row['sites'] as Map<String, dynamic>?;
     final checklistType =
         (site?['checklist_type'] as String?)?.trim().isNotEmpty == true
-            ? site!['checklist_type'] as String
-            : 'DEFAULT';
+        ? site!['checklist_type'] as String
+        : 'DEFAULT';
     final items = await listItems(id, checklistType: checklistType);
-    return Inspection.fromJson(Map<String, dynamic>.from(row), items: items);
+    return Inspection.fromJson(row, items: items);
   }
 
   /// Most recent inspection for [siteId] strictly before [beforeDate].
@@ -200,22 +454,59 @@ class InspectionRepository {
     final row = await _client
         .from('checklist_inspections')
         .select(
-          '*, sites(name_en, name_ar, pin, organization_id, checklist_type)',
+          '*, sites(name_en, name_ar, pin, organization_id, checklist_type, parent_site_id, zone_id, form_theme, form_theme_accent)',
         )
         .eq('site_id', siteId)
         .lt('inspection_date', beforeIso)
         .order('inspection_date', ascending: false)
+        .order('created_at', ascending: false)
         .limit(1)
         .maybeSingle();
     if (row == null) return null;
-    final site = row['sites'] as Map<String, dynamic>?;
+    final map = Map<String, dynamic>.from(row);
+    await _attachResolvedThemeData([map]);
+    final site = map['sites'] as Map<String, dynamic>?;
     final checklistType =
         (site?['checklist_type'] as String?)?.trim().isNotEmpty == true
-            ? site!['checklist_type'] as String
-            : 'DEFAULT';
-    final items =
-        await listItems(row['id'] as String, checklistType: checklistType);
-    return Inspection.fromJson(Map<String, dynamic>.from(row), items: items);
+        ? site!['checklist_type'] as String
+        : 'DEFAULT';
+    final items = await listItems(
+      map['id'] as String,
+      checklistType: checklistType,
+    );
+    return Inspection.fromJson(map, items: items);
+  }
+
+  /// Latest inspection for [siteId] other than [excludeInspectionId]
+  /// (includes same calendar day — used to carry open WOs into a new list).
+  Future<Inspection?> getLatestOtherForSite({
+    required String siteId,
+    required String excludeInspectionId,
+  }) async {
+    final row = await _client
+        .from('checklist_inspections')
+        .select(
+          '*, sites(name_en, name_ar, pin, organization_id, checklist_type, parent_site_id, zone_id, form_theme, form_theme_accent)',
+        )
+        .eq('site_id', siteId)
+        .neq('id', excludeInspectionId)
+        .order('inspection_date', ascending: false)
+        .order('created_at', ascending: false)
+        .limit(1)
+        .maybeSingle();
+    if (row == null) return null;
+    final map = Map<String, dynamic>.from(row);
+    await _attachResolvedThemeData([map]);
+    final site = map['sites'] as Map<String, dynamic>?;
+    final checklistType =
+        (site?['checklist_type'] as String?)?.trim().isNotEmpty == true
+        ? site!['checklist_type'] as String
+        : 'DEFAULT';
+    final items = await listItems(
+      map['id'] as String,
+      checklistType: checklistType,
+    );
+    return Inspection.fromJson(map, items: items);
   }
 
   List<InspectionItem> templateItemsFor(String checklistType, String language) {
@@ -228,8 +519,14 @@ class InspectionRepository {
           itemIndex: raw['id'] as int,
           description: (raw['en'] ?? '') as String,
           descriptionAr: raw['ar'] as String?,
+          localizedDescriptions: {
+            for (final code in const ['bn', 'hi', 'ml', 'tl', 'ta'])
+              if ((raw[code] as String?)?.trim().isNotEmpty == true)
+                code: (raw[code] as String).trim(),
+          },
           defaultAnswer: '${raw['default'] ?? 'Y'}',
           response: null,
+          overdueAfterDays: (raw['overdue_days'] as num?)?.toInt() ?? 3,
         ),
     ];
   }
@@ -252,92 +549,170 @@ class InspectionRepository {
     required String inspectionTime,
     String floorLabel = 'ALL',
     String language = 'en',
+    String? clientReference,
+    String? reinspectionReason,
   }) async {
-    final userId = _client.auth.currentUser?.id;
     final iso =
         '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-    final inserted = await _client
-        .from('checklist_inspections')
-        .insert({
-          'site_id': site.id,
-          'building_code': site.buildingCode,
-          'inspection_date': iso,
-          'inspection_time': inspectionTime,
-          'floor_label': floorLabel,
-          'location_label': site.location,
-          'inspector_name': inspectorName,
-          'inspector_user_id': userId,
-          'status': InspectionStatus.draft.dbValue,
-          'review_status': ReviewStatus.draft.dbValue,
-        })
-        .select('*, sites(name_en, name_ar, pin, organization_id)')
-        .single();
-
-    final inspectionId = inserted['id'] as String;
-    final items = await resolveItemsForSite(site: site, language: language);
-    if (items.isNotEmpty) {
-      await _client.from('checklist_inspection_items').insert([
-        for (final item in items) item.toInsertJson(inspectionId),
-      ]);
-    }
+    final params = {
+      'p_site_id': site.id,
+      'p_inspection_date': iso,
+      'p_inspector_name': inspectorName,
+      'p_inspection_time': inspectionTime,
+      'p_floor_label': floorLabel,
+      // Migration 020 resolves immutable item metadata from the
+      // server catalog. Keep this parameter for RPC compatibility.
+      'p_items': const <Map<String, dynamic>>[],
+      'p_client_reference': clientReference,
+      'p_reinspection_reason': ?reinspectionReason,
+    };
+    final inspectionId =
+        await _client.rpc(
+              reinspectionReason == null
+                  ? 'create_checklist_inspection_draft'
+                  : 'create_checklist_reinspection_draft',
+              params: params,
+            )
+            as String;
     return (await getById(inspectionId))!;
   }
 
   Future<void> saveItems(Inspection inspection) async {
-    for (final item in inspection.items) {
-      if (item.id == null) {
-        await _client
-            .from('checklist_inspection_items')
-            .insert(item.toInsertJson(inspection.id));
-      } else {
-        await _client
-            .from('checklist_inspection_items')
-            .update(item.toUpdateJson())
-            .eq('id', item.id!);
-      }
-    }
-    await _client.from('checklist_inspections').update({
-      'inspector_name': inspection.inspectorName,
-      'inspection_time': inspection.inspectionTime,
-      'floor_label': inspection.floorLabel,
-      'signature_path': inspection.signaturePath,
-    }).eq('id', inspection.id);
-  }
-
-  Future<void> deleteInspectionItem(String itemId) async {
-    await _client
-        .from('checklist_inspection_items')
-        .delete()
-        .eq('id', itemId);
-  }
-
-  Future<void> submit(String inspectionId) async {
-    final userId = _client.auth.currentUser?.id;
-    await _client.from('checklist_inspections').update({
-      'status': InspectionStatus.submitted.dbValue,
-      'review_status': ReviewStatus.submitted.dbValue,
-      'submitted_at': DateTime.now().toUtc().toIso8601String(),
-      'submitted_by': userId,
-    }).eq('id', inspectionId);
-  }
-
-  Future<void> approveInspection(String inspectionId) async {
-    await _client.rpc(
-      'admin_approve_inspection',
-      params: {'p_inspection_id': inspectionId},
+    final nextVersion = await _client.rpc(
+      'save_checklist_inspection',
+      params: {
+        'p_inspection_id': inspection.id,
+        'p_expected_version': inspection.version,
+        'p_header': {
+          'inspector_name': inspection.inspectorName,
+          'inspection_time': inspection.inspectionTime,
+          'floor_label': inspection.floorLabel,
+          'signature_path': inspection.signaturePath,
+        },
+        'p_items': [for (final item in inspection.items) item.toRpcJson()],
+      },
     );
+    inspection.version = (nextVersion as num).toInt();
+  }
+
+  Future<void> deleteInspectionItem(
+    Inspection inspection,
+    String itemId,
+  ) async {
+    final nextVersion = await _client.rpc(
+      'delete_checklist_inspection_item',
+      params: {'p_item_id': itemId, 'p_expected_version': inspection.version},
+    );
+    inspection.version = (nextVersion as num).toInt();
+  }
+
+  Future<void> submit(Inspection inspection) async {
+    final nextVersion = await _client.rpc(
+      'submit_checklist_inspection',
+      params: {
+        'p_inspection_id': inspection.id,
+        'p_expected_version': inspection.version,
+      },
+    );
+    inspection.version = (nextVersion as num).toInt();
+  }
+
+  Future<void> approveInspection(Inspection inspection) async {
+    final nextVersion = await _client.rpc(
+      'admin_approve_inspection',
+      params: {
+        'p_inspection_id': inspection.id,
+        'p_expected_version': inspection.version,
+      },
+    );
+    inspection.version = (nextVersion as num).toInt();
+  }
+
+  Future<void> returnInspection({
+    required Inspection inspection,
+    required String reason,
+  }) async {
+    final nextVersion = await _client.rpc(
+      'manager_return_checklist_inspection',
+      params: {
+        'p_inspection_id': inspection.id,
+        'p_expected_version': inspection.version,
+        'p_reason': reason,
+      },
+    );
+    inspection.version = (nextVersion as num).toInt();
+  }
+
+  Future<void> rejectInspection({
+    required Inspection inspection,
+    required String reason,
+  }) async {
+    final nextVersion = await _client.rpc(
+      'manager_reject_checklist_inspection',
+      params: {
+        'p_inspection_id': inspection.id,
+        'p_expected_version': inspection.version,
+        'p_reason': reason,
+      },
+    );
+    inspection.version = (nextVersion as num).toInt();
+  }
+
+  Future<void> cancelInspectionAsOwner({
+    required Inspection inspection,
+    required String reason,
+  }) async {
+    final nextVersion = await _client.rpc(
+      'owner_cancel_checklist_inspection',
+      params: {
+        'p_inspection_id': inspection.id,
+        'p_expected_version': inspection.version,
+        'p_reason': reason,
+      },
+    );
+    inspection.version = (nextVersion as num).toInt();
+  }
+
+  /// Corrects a draft/submitted inspection date through the owner-only RPC.
+  /// The caller should reload the inspection afterward because its date field
+  /// is immutable in the local model by design.
+  Future<int> changeInspectionDateAsOwner({
+    required Inspection inspection,
+    required DateTime newDate,
+    required String reason,
+  }) async {
+    final iso =
+        '${newDate.year.toString().padLeft(4, '0')}-'
+        '${newDate.month.toString().padLeft(2, '0')}-'
+        '${newDate.day.toString().padLeft(2, '0')}';
+    final nextVersion = await _client.rpc(
+      'owner_change_inspection_date',
+      params: {
+        'p_inspection_id': inspection.id,
+        'p_expected_version': inspection.version,
+        'p_new_date': iso,
+        'p_reason': reason,
+      },
+    );
+    inspection.version = (nextVersion as num).toInt();
+    return inspection.version;
   }
 
   Future<List<Inspection>> listPendingReview({String? siteId}) async {
-    var q = _client.from('checklist_inspections').select(
-          '*, sites(name_en, name_ar, pin, organization_id)',
+    var q = _client
+        .from('checklist_inspections')
+        .select(
+          '*, sites(name_en, name_ar, pin, organization_id, checklist_type, parent_site_id, zone_id, form_theme, form_theme_accent)',
         );
     q = q.eq('review_status', ReviewStatus.submitted.dbValue);
     if (siteId != null && siteId.isNotEmpty) q = q.eq('site_id', siteId);
     final rows = await q.order('inspection_date', ascending: false);
+    final maps = [
+      for (final row in rows as List) Map<String, dynamic>.from(row as Map),
+    ];
+    await _attachResolvedThemeData(maps);
     final list = <Inspection>[];
-    for (final e in rows as List) {
-      final map = Map<String, dynamic>.from(e as Map);
+    for (final map in maps) {
       final id = map['id'] as String;
       final items = await listItems(id);
       list.add(Inspection.fromJson(map, items: items));
@@ -345,8 +720,29 @@ class InspectionRepository {
     return list;
   }
 
-  Future<void> deleteInspection(String id) async {
-    await _client.from('checklist_inspections').delete().eq('id', id);
+  Future<void> deleteInspection(Inspection inspection) async {
+    await _client.rpc(
+      'delete_checklist_inspection',
+      params: {
+        'p_inspection_id': inspection.id,
+        'p_expected_version': inspection.version,
+      },
+    );
+
+    final paths = <String>{
+      if ((inspection.signaturePath ?? '').isNotEmpty)
+        storagePathOf(inspection.signaturePath!),
+      for (final item in inspection.items)
+        for (final photo in item.remarkPhotos) storagePathOf(photo.path),
+    }..removeWhere((path) => path.isEmpty);
+    if (paths.isNotEmpty) {
+      try {
+        await _client.storage.from(bucket).remove(paths.toList());
+      } catch (_) {
+        // Database deletion already succeeded. A server cleanup job can retry
+        // orphaned objects without restoring a deleted inspection.
+      }
+    }
   }
 
   Future<String> uploadBytes({
@@ -356,32 +752,75 @@ class InspectionRepository {
     required String fileName,
     required Uint8List bytes,
     String contentType = 'image/jpeg',
+    String? evidenceItemId,
+    String? evidenceKind,
   }) async {
     final path = '$organizationId/$siteId/$inspectionId/$fileName';
-    await _client.storage.from(bucket).uploadBinary(
+    await _client.storage
+        .from(bucket)
+        .uploadBinary(
           path,
           bytes,
           fileOptions: FileOptions(contentType: contentType, upsert: true),
         );
+    if (evidenceKind != null && evidenceKind.isNotEmpty) {
+      try {
+        await _client.rpc(
+          'register_checklist_media_evidence',
+          params: {
+            'p_inspection_id': inspectionId,
+            'p_item_id': evidenceItemId,
+            'p_storage_path': path,
+            'p_media_kind': evidenceKind,
+          },
+        );
+      } catch (_) {
+        // Do not leave evidence in storage without its authoritative metadata
+        // relationship. A retry can safely upload the same deterministic path.
+        try {
+          await _client.storage.from(bucket).remove([path]);
+        } catch (_) {}
+        rethrow;
+      }
+    }
+    _downloadByteFutures.remove(path);
+    _signedUrlFutures.remove(path);
     return path;
   }
 
+  Future<void> deleteMedia(String path) async {
+    final storagePath = storagePathOf(path);
+    if (storagePath.isEmpty || storagePath.startsWith('offline://')) return;
+    await _client.storage.from(bucket).remove([storagePath]);
+    _downloadByteFutures.remove(storagePath);
+    clearSignedUrlCache();
+  }
+
   final Map<String, ({Future<String?> future, DateTime expiresAt})>
-      _signedUrlFutures = {};
+  _signedUrlFutures = {};
 
   Future<String?> signedUrl(String path, {int expiresIn = 3600}) {
     final storagePath = storagePathOf(path);
+    if (storagePath.isEmpty || storagePath.startsWith('offline://')) {
+      return Future.value(null);
+    }
     final hit = _signedUrlFutures[storagePath];
     if (hit != null && hit.expiresAt.isAfter(DateTime.now())) {
       return hit.future;
     }
     final keepFor = Duration(seconds: math.max(60, expiresIn - 120));
-    final future = () async {
+    late final Future<String?> future;
+    future = () async {
       try {
         return await _client.storage
             .from(bucket)
             .createSignedUrl(storagePath, expiresIn);
       } catch (_) {
+        // A transient network/RLS failure must not hide media for the full
+        // cache lifetime. Let the next frame/reload retry immediately.
+        if (_signedUrlFutures[storagePath]?.future == future) {
+          _signedUrlFutures.remove(storagePath);
+        }
         return null;
       }
     }();
@@ -394,11 +833,34 @@ class InspectionRepository {
 
   void clearSignedUrlCache() => _signedUrlFutures.clear();
 
-  Future<Uint8List?> downloadBytes(String path) async {
-    try {
-      return await _client.storage.from(bucket).download(storagePathOf(path));
-    } catch (_) {
-      return null;
+  final Map<String, ({Future<Uint8List?> future, DateTime expiresAt})>
+  _downloadByteFutures = {};
+
+  Future<Uint8List?> downloadBytes(String path, {bool forceRefresh = false}) {
+    final storagePath = storagePathOf(path);
+    if (storagePath.isEmpty || storagePath.startsWith('offline://')) {
+      return Future.value(null);
     }
+    if (forceRefresh) _downloadByteFutures.remove(storagePath);
+    final hit = _downloadByteFutures[storagePath];
+    if (hit != null && hit.expiresAt.isAfter(DateTime.now())) {
+      return hit.future;
+    }
+    late final Future<Uint8List?> future;
+    future = () async {
+      try {
+        return await _client.storage.from(bucket).download(storagePath);
+      } catch (_) {
+        if (_downloadByteFutures[storagePath]?.future == future) {
+          _downloadByteFutures.remove(storagePath);
+        }
+        return null;
+      }
+    }();
+    _downloadByteFutures[storagePath] = (
+      future: future,
+      expiresAt: DateTime.now().add(const Duration(minutes: 5)),
+    );
+    return future;
   }
 }

@@ -28,8 +28,9 @@ class _ReviewsTabState extends ConsumerState<ReviewsTab> {
       message = null;
     });
     try {
-      final list =
-          await ref.read(inspectionRepositoryProvider).listPendingReview();
+      final list = await ref
+          .read(inspectionRepositoryProvider)
+          .listPendingReview();
       setState(() => rows = list);
     } catch (e) {
       setState(() => message = '$e');
@@ -41,10 +42,8 @@ class _ReviewsTabState extends ConsumerState<ReviewsTab> {
   Future<void> _open(Inspection inspection) async {
     final updated = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (context) => _ReviewEditScreen(
-          profile: widget.profile,
-          inspection: inspection,
-        ),
+        builder: (context) =>
+            _ReviewEditScreen(profile: widget.profile, inspection: inspection),
       ),
     );
     if (updated == true) await _load();
@@ -54,7 +53,9 @@ class _ReviewsTabState extends ConsumerState<ReviewsTab> {
   Widget build(BuildContext context) {
     if (loading) return const Center(child: CircularProgressIndicator());
     if (message != null) {
-      return Center(child: Text(message!, style: const TextStyle(color: Colors.red)));
+      return Center(
+        child: Text(message!, style: const TextStyle(color: Colors.red)),
+      );
     }
     if (rows.isEmpty) {
       return const Center(child: Text('لا توجد فحوصات بانتظار الاعتماد'));
@@ -84,10 +85,7 @@ class _ReviewsTabState extends ConsumerState<ReviewsTab> {
 }
 
 class _ReviewEditScreen extends ConsumerStatefulWidget {
-  const _ReviewEditScreen({
-    required this.profile,
-    required this.inspection,
-  });
+  const _ReviewEditScreen({required this.profile, required this.inspection});
 
   final Profile profile;
   final Inspection inspection;
@@ -111,15 +109,15 @@ class _ReviewEditScreenState extends ConsumerState<_ReviewEditScreen> {
     try {
       await ref.read(inspectionRepositoryProvider).saveItems(inspection);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم الحفظ')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('تم الحفظ')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
       }
     } finally {
       if (mounted) setState(() => saving = false);
@@ -132,13 +130,13 @@ class _ReviewEditScreenState extends ConsumerState<_ReviewEditScreen> {
       await ref.read(inspectionRepositoryProvider).saveItems(inspection);
       await ref
           .read(inspectionRepositoryProvider)
-          .approveInspection(inspection.id);
+          .approveInspection(inspection);
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
       }
     } finally {
       if (mounted) setState(() => saving = false);
@@ -170,8 +168,7 @@ class _ReviewEditScreenState extends ConsumerState<_ReviewEditScreen> {
           forceTableLayout: MediaQuery.sizeOf(context).width >= 800,
           onInspectorChanged: (v) =>
               setState(() => inspection.inspectorName = v),
-          onTimeChanged: (v) =>
-              setState(() => inspection.inspectionTime = v),
+          onTimeChanged: (v) => setState(() => inspection.inspectionTime = v),
           onFloorChanged: (v) => setState(() => inspection.floorLabel = v),
           onResponseChanged: (item, value) => setState(() {
             item.response = value;

@@ -11,21 +11,23 @@ class MediaEntry {
   final String type;
   final String? name;
 
-  bool get isRemote =>
-      url.startsWith('http://') || url.startsWith('https://');
+  bool get isRemote => url.startsWith('http://') || url.startsWith('https://');
 
   Map<String, dynamic> toMap() => {
-        'url': url,
-        'timestamp': timestamp ?? DateTime.now().millisecondsSinceEpoch,
-        'type': type,
-        'name': name ?? 'media',
-      };
+    'url': url,
+    'timestamp': timestamp ?? DateTime.now().millisecondsSinceEpoch,
+    'type': type,
+    'name': name ?? 'media',
+  };
 
   factory MediaEntry.fromDynamic(dynamic value, {int index = 0}) {
     if (value is String) {
-      final isVideo = value.startsWith('data:video') ||
-          RegExp(r'\.(mp4|webm|ogg|mov|m4v)(\?|#|$)', caseSensitive: false)
-              .hasMatch(value);
+      final isVideo =
+          value.startsWith('data:video') ||
+          RegExp(
+            r'\.(mp4|webm|ogg|mov|m4v)(\?|#|$)',
+            caseSensitive: false,
+          ).hasMatch(value);
       return MediaEntry(
         url: value,
         timestamp: DateTime.now().millisecondsSinceEpoch + index,
@@ -45,8 +47,10 @@ class MediaEntry {
       } else if (explicit.startsWith('image')) {
         mediaType = 'image';
       } else if (mediaUrl.startsWith('data:video') ||
-          RegExp(r'\.(mp4|webm|mov|m4v)(\?|#|$)', caseSensitive: false)
-              .hasMatch(mediaUrl)) {
+          RegExp(
+            r'\.(mp4|webm|mov|m4v)(\?|#|$)',
+            caseSensitive: false,
+          ).hasMatch(mediaUrl)) {
         mediaType = 'video';
       }
       final ts = map['timestamp'];
@@ -55,13 +59,17 @@ class MediaEntry {
         timestamp: ts is num
             ? ts.toInt()
             : int.tryParse('$ts') ??
-                DateTime.now().millisecondsSinceEpoch + index,
+                  DateTime.now().millisecondsSinceEpoch + index,
         type: mediaType,
-        name: map['name']?.toString() ??
+        name:
+            map['name']?.toString() ??
             'media_${DateTime.now().millisecondsSinceEpoch}_$index',
       );
     }
-    return MediaEntry(url: '', timestamp: DateTime.now().millisecondsSinceEpoch);
+    return MediaEntry(
+      url: '',
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+    );
   }
 }
 
@@ -75,9 +83,9 @@ class ItemMedia {
       ItemMedia(issue: issue ?? this.issue, fix: fix ?? this.fix);
 
   Map<String, dynamic> toMap() => {
-        'issue': issue.map((e) => e.toMap()).toList(),
-        'fix': fix.map((e) => e.toMap()).toList(),
-      };
+    'issue': issue.map((e) => e.toMap()).toList(),
+    'fix': fix.map((e) => e.toMap()).toList(),
+  };
 
   factory ItemMedia.fromDynamic(dynamic value) {
     if (value is Map &&
@@ -112,9 +120,7 @@ Map<String, ItemMedia> normalizeImagesMap(dynamic value) {
 }
 
 Map<String, dynamic> imagesMapToFirestore(Map<String, ItemMedia> images) {
-  return {
-    for (final e in images.entries) e.key: e.value.toMap(),
-  };
+  return {for (final e in images.entries) e.key: e.value.toMap()};
 }
 
 String buildDailyRecordId(String buildingId, String date) =>

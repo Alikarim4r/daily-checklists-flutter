@@ -1,13 +1,21 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:signature/signature.dart';
 
 import '../models/enums.dart';
 import '../models/inspection.dart';
 import '../providers/providers.dart';
+import '../theme/checklist_brand.dart';
+import '../theme/form_paper_theme.dart';
+import '../utils/photo_pair.dart';
+import '../utils/signature_ink.dart';
 import '../utils/storage_path_list.dart';
+import 'checklist_branding_widgets.dart';
+import 'checklist_signature_pad.dart';
 
 /// Paper form matching ViewerEditV2.html + MOEHE Daily Checklist PDF.
 class ChecklistFormLayout extends ConsumerWidget {
@@ -28,38 +36,67 @@ class ChecklistFormLayout extends ConsumerWidget {
     this.onAddItem,
     this.onDeleteItem,
     this.onOpenPhoto,
+    this.signatureController,
+    this.signaturePreviewBytes,
+    this.onClearSignature,
     this.trailingHeader,
     this.forceTableLayout = false,
     this.overdueItemIndexes = const {},
+    this.issueOpenTooltipsByPath = const {},
+    this.paperTheme,
   });
 
   final Inspection inspection;
   final String language;
   final bool readOnly;
   final void Function(InspectionItem item, ChecklistResponse? value)?
-      onResponseChanged;
+  onResponseChanged;
   final void Function(InspectionItem item, String value)? onActionsChanged;
   final ValueChanged<String>? onInspectorChanged;
   final ValueChanged<String>? onTimeChanged;
   final ValueChanged<String>? onFloorChanged;
-  final Future<void> Function(InspectionItem item)? onPickIssuePhoto;
-  final Future<void> Function(InspectionItem item)? onPickFixPhoto;
-  final Future<void> Function(InspectionItem item, String path)? onClearIssuePhoto;
-  final Future<void> Function(InspectionItem item, String path)? onClearFixPhoto;
+  final Future<void> Function(InspectionItem item, [String? pairId])?
+  onPickIssuePhoto;
+  final Future<void> Function(InspectionItem item, [String? pairId])?
+  onPickFixPhoto;
+  final Future<void> Function(
+    InspectionItem item,
+    String path, [
+    String? pairId,
+  ])?
+  onClearIssuePhoto;
+  final Future<void> Function(
+    InspectionItem item,
+    String path, [
+    String? pairId,
+  ])?
+  onClearFixPhoto;
   final Future<void> Function()? onAddItem;
   final Future<void> Function(InspectionItem item)? onDeleteItem;
   final void Function(String storagePath)? onOpenPhoto;
+  final SignatureController? signatureController;
+  final Uint8List? signaturePreviewBytes;
+  final VoidCallback? onClearSignature;
   final Widget? trailingHeader;
   final bool forceTableLayout;
+
   /// Item indexes flagged overdue by org policy (ongoing problem streak).
   final Set<int> overdueItemIndexes;
 
-  static const _gold = Color(0xFFE8C547);
-  static const _border = Color(0xFF000000);
+  /// Hover text for unfixed issue photos (keyed by storage path).
+  final Map<String, String> issueOpenTooltipsByPath;
+  final FormPaperTheme? paperTheme;
+
+  FormPaperTheme get _effectivePaperTheme =>
+      paperTheme ?? inspection.paperTheme;
+  Color get _gold => _effectivePaperTheme.accent;
+  Color get _border => _effectivePaperTheme.border;
+  Color get _accentText => _effectivePaperTheme.accentText;
   static const _okBlue = Color(0xFF3B82F6);
   static const _problemRed = Color(0xFFEF4444);
   static const _fixGreen = Color(0xFF28A745);
   static const _emptyGray = Color(0xFFCBD5E1);
+
   /// ≈ 6 mm at 96 dpi — keeps remarks text-first.
   static const _photoW = 23.0;
   static const _photoH = 36.0;
@@ -77,133 +114,73 @@ class ChecklistFormLayout extends ConsumerWidget {
       // Leave Yes/No/NA empty until the inspector answers.
     }
 
+    // Paper light Theme (stable singleton) keeps form ink readable under dark
+    // chrome without recreating ThemeData on every rebuild.
     return Directionality(
       textDirection: _ar ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-      child: Container(
-        color: Colors.white,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _headerRow(),
-            const SizedBox(height: 8),
-            _titleBanner(),
-            const SizedBox(height: 10),
-            _metaGrid(ref),
-            if (trailingHeader != null) ...[
-              const SizedBox(height: 8),
-              trailingHeader!,
-            ],
-            const SizedBox(height: 12),
-            _table(context, ref, items),
-            const SizedBox(height: 14),
-            Text(
-              _ar
-                  ? 'توفر هذه القائمة المتطلبات الأساسية للفحوصات اليومية لخدمات البنية. عند تسجيل «لا» لأي بند أعلاه، يجب اتخاذ إجراء فوري لمعالجة المشكلة لضمان استمرار التشغيل الآمن.'
-                  : 'This checklist provides the basic requirements for hard services operations daily checks. Should a "No" be recorded for any of the above checklist items, immediate action to be taken to address the issues, to have safe, continued operation.',
-              textAlign: _ar ? TextAlign.right : TextAlign.left,
-              style: const TextStyle(fontSize: 10.5, height: 1.4),
+      child: Theme(
+        data: ChecklistChrome.paperFormTheme,
+        child: DefaultTextStyle(
+          style: const TextStyle(
+            color: Colors.black,
+            fontSize: 12,
+            height: 1.3,
+            decoration: TextDecoration.none,
+          ),
+          child: Container(
+            color: Colors.white,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _headerRow(),
+                const SizedBox(height: 8),
+                _titleBanner(),
+                const SizedBox(height: 10),
+                _metaGrid(ref),
+                if (trailingHeader != null) ...[
+                  const SizedBox(height: 8),
+                  trailingHeader!,
+                ],
+                const SizedBox(height: 12),
+                _table(context, ref, items),
+                const SizedBox(height: 14),
+                Text(
+                  _ar
+                      ? 'توفر هذه القائمة المتطلبات الأساسية للفحوصات اليومية لخدمات البنية. عند تسجيل «لا» لأي بند أعلاه، يجب اتخاذ إجراء فوري لمعالجة المشكلة لضمان استمرار التشغيل الآمن.'
+                      : 'This checklist provides the basic requirements for hard services operations daily checks. Should a "No" be recorded for any of the above checklist items, immediate action to be taken to address the issues, to have safe, continued operation.',
+                  textAlign: _ar ? TextAlign.right : TextAlign.left,
+                  style: const TextStyle(
+                    fontSize: 10.5,
+                    height: 1.4,
+                    color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                _footerLogos(),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: _ar ? Alignment.centerRight : Alignment.centerLeft,
+                  child: const Text(
+                    'Classification - Public',
+                    style: TextStyle(fontSize: 9.5, color: Colors.black54),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 14),
-            _footerLogos(),
-            const SizedBox(height: 8),
-            Align(
-              alignment: _ar ? Alignment.centerRight : Alignment.centerLeft,
-              child: const Text(
-                'Classification - Public',
-                style: TextStyle(fontSize: 9.5, color: Colors.black54),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  /// Logo stays on its institutional side; titles hug the opposite edge (not center).
+  /// Org-resolved logo + titles (MOEHE assets only when that org has no custom logo).
   Widget _headerRow() {
-    final titles = ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 420),
-      child: Column(
-        crossAxisAlignment:
-            _ar ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-        children: [
-          Text(
-            _ar
-                ? 'خدمة الإدارة المتكاملة للمرافق لصالح وزارة التربية والتعليم والتعليم العالي'
-                : 'Integrated Facilities Management Service for MOEHE',
-            style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
-              color: Colors.black,
-              height: 1.25,
-            ),
-            textAlign: _ar ? TextAlign.right : TextAlign.left,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            _ar
-                ? 'قائمة الفحص اليومي للمرافق - ${inspection.siteNameAr.isNotEmpty ? inspection.siteNameAr : inspection.buildingCode}'
-                : 'Facilities Daily Inspection Checklist - ${inspection.siteNameEn.isNotEmpty ? inspection.siteNameEn : inspection.buildingCode}',
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w800,
-              color: Colors.black,
-              height: 1.25,
-            ),
-            textAlign: _ar ? TextAlign.right : TextAlign.left,
-          ),
-        ],
-      ),
-    );
-    final logo = Image.asset(
-      'assets/branding/moehe_logo.png',
-      package: 'checklist_shared',
-      height: 40,
-      fit: BoxFit.contain,
-      errorBuilder: (_, __, ___) => const SizedBox(
-        height: 40,
-        width: 120,
-        child: Center(
-          child: Text(
-            'MOEHE',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-        ),
-      ),
-    );
-
-    // LTR row so logo/title edges are absolute, not re-mirrored by parent RTL.
-    return Directionality(
-      textDirection: ui.TextDirection.ltr,
-      child: Container(
-        padding: const EdgeInsets.only(bottom: 8),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: _border, width: 1)),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: _ar
-              ? [
-                  logo,
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: titles,
-                    ),
-                  ),
-                ]
-              : [
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: titles,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  logo,
-                ],
-        ),
-      ),
+    return ResolvedOrgHeader(
+      siteId: inspection.siteId,
+      language: language,
+      siteNameAr: inspection.siteNameAr,
+      siteNameEn: inspection.siteNameEn,
+      buildingCode: inspection.buildingCode,
     );
   }
 
@@ -215,14 +192,39 @@ class ChecklistFormLayout extends ConsumerWidget {
         color: _gold,
         border: Border.all(color: _border),
       ),
-      child: Text(
-        _ar ? 'تقرير الفحص اليومي للمرافق' : 'Daily Facilities Inspection Report',
-        textAlign: TextAlign.center,
-        style: const TextStyle(
-          fontSize: 16,
-          fontWeight: FontWeight.w800,
-          letterSpacing: 0.4,
-        ),
+      child: Column(
+        children: [
+          Text(
+            _ar
+                ? 'تقرير الفحص اليومي للمرافق'
+                : 'Daily Facilities Inspection Report',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.4,
+              color: _accentText,
+            ),
+          ),
+          if (inspection.referenceNo.isNotEmpty ||
+              inspection.templateVersionSnapshot != null) ...[
+            const SizedBox(height: 2),
+            Text(
+              [
+                if (inspection.referenceNo.isNotEmpty) inspection.referenceNo,
+                if (inspection.templateVersionSnapshot != null)
+                  _ar
+                      ? 'إصدار القائمة ${inspection.templateVersionSnapshot}'
+                      : 'Checklist v${inspection.templateVersionSnapshot}',
+              ].join('  •  '),
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                color: _accentText,
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -250,9 +252,7 @@ class ChecklistFormLayout extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       _metaLabel(_ar ? 'الموقع:' : 'Location:'),
-                      Expanded(
-                        child: _metaValue(inspection.locationLabel),
-                      ),
+                      Expanded(child: _metaValue(inspection.locationLabel)),
                     ],
                   ),
                 ),
@@ -292,7 +292,13 @@ class ChecklistFormLayout extends ConsumerWidget {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             _metaLabel(_ar ? 'رقم القسيمة:' : 'Pin No.'),
-                            Expanded(child: _metaValue(pin)),
+                            Expanded(
+                              child: _metaValue(
+                                pin,
+                                maxLines: 1,
+                                fitToWidth: true,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -302,35 +308,27 @@ class ChecklistFormLayout extends ConsumerWidget {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             _metaLabel(_ar ? 'رقم المبنى:' : 'Bldg. No.'),
-                            SizedBox(
-                              width: 36,
+                            Expanded(
+                              flex: 3,
                               child: _metaValue(
                                 inspection.bldgNo,
                                 align: TextAlign.center,
+                                maxLines: 1,
+                                fitToWidth: true,
                               ),
                             ),
                             _vRule(),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 4,
-                              ),
-                              child: Align(
-                                alignment: AlignmentDirectional.centerStart,
-                                child: Text(
-                                  _ar ? 'الطابق:' : 'Floor no.',
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
+                            _metaLabel(
+                              _ar ? 'الطابق:' : 'Floor no.',
+                              width: 64,
                             ),
                             Expanded(
+                              flex: 2,
                               child: _metaValue(
                                 inspection.floorLabel,
                                 onChanged: onFloorChanged,
                                 align: TextAlign.center,
+                                maxLines: 1,
                               ),
                             ),
                           ],
@@ -348,29 +346,52 @@ class ChecklistFormLayout extends ConsumerWidget {
                       _metaLabel(
                         _ar ? 'توقيع المفتش:' : 'Inspector Signature:',
                         width: _inspectorLabelW,
+                        action:
+                            !readOnly &&
+                                onClearSignature != null &&
+                                (inspection.signaturePath == null ||
+                                    inspection.signaturePath!.startsWith(
+                                      'offline://',
+                                    ))
+                            ? IconButton(
+                                key: const ValueKey(
+                                  'clear-inspector-signature',
+                                ),
+                                tooltip: _ar
+                                    ? 'مسح التوقيع'
+                                    : 'Clear signature',
+                                visualDensity: VisualDensity.compact,
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(
+                                  minWidth: 28,
+                                  minHeight: 28,
+                                ),
+                                color: _accentText,
+                                icon: const Icon(Icons.clear, size: 16),
+                                onPressed: onClearSignature,
+                              )
+                            : null,
                       ),
-                      Expanded(
-                        child: _signatureCell(ref, signatureLabel),
-                      ),
+                      Expanded(child: _signatureCell(ref, signatureLabel)),
                       _vRule(),
                       SizedBox(
-                        width: 148,
+                        width: 120,
                         child: Column(
                           children: [
                             Expanded(
                               child: Row(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.stretch,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   _metaLabel(
                                     _ar ? 'التاريخ:' : 'Date',
-                                    width: 48,
+                                    width: 44,
                                   ),
                                   Expanded(
                                     child: _metaValue(
                                       _formatMetaDate(
                                         inspection.inspectionDate,
                                       ),
+                                      maxLines: 1,
                                     ),
                                   ),
                                 ],
@@ -379,17 +400,17 @@ class ChecklistFormLayout extends ConsumerWidget {
                             _hRule(),
                             Expanded(
                               child: Row(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.stretch,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   _metaLabel(
                                     _ar ? 'الوقت:' : 'Time:',
-                                    width: 48,
+                                    width: 44,
                                   ),
                                   Expanded(
                                     child: _metaValue(
                                       inspection.inspectionTime,
                                       onChanged: onTimeChanged,
+                                      maxLines: 1,
                                     ),
                                   ),
                                 ],
@@ -410,27 +431,66 @@ class ChecklistFormLayout extends ConsumerWidget {
   }
 
   Widget _signatureCell(WidgetRef ref, String fallback) {
+    // A saved signature always wins over an empty editor. Previously editable
+    // Viewer records returned the drawing pad first, hiding the stored
+    // signature even though signature_path and the Storage object were valid.
+    if (signaturePreviewBytes != null && signaturePreviewBytes!.isNotEmpty) {
+      return Container(
+        constraints: const BoxConstraints(minHeight: 44),
+        padding: const EdgeInsets.all(2),
+        alignment: Alignment.center,
+        child: Image.memory(
+          signaturePreviewBytes!,
+          fit: BoxFit.fill,
+          width: double.infinity,
+          height: 40,
+        ),
+      );
+    }
+
     final path = inspection.signaturePath;
     if (path == null || path.isEmpty) {
+      if (!readOnly && signatureController != null) {
+        return Padding(
+          padding: const EdgeInsets.all(2),
+          child: ChecklistSignaturePad(
+            controller: signatureController!,
+            height: 60,
+            borderRadius: 2,
+            borderColor: Colors.transparent,
+            semanticLabel: _ar ? 'منطقة التوقيع' : 'Signature drawing area',
+          ),
+        );
+      }
       return _metaValue('', align: TextAlign.center, minHeight: 44);
     }
-    return FutureBuilder<String?>(
-      future: ref.read(inspectionRepositoryProvider).signedUrl(path),
+    return FutureBuilder<Uint8List?>(
+      future: ref.read(inspectionRepositoryProvider).downloadBytes(path),
       builder: (context, snap) {
-        final url = snap.data;
-        if (url == null || url.isEmpty) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          );
+        }
+        final bytes = snap.data;
+        if (bytes == null || bytes.isEmpty) {
           return _metaValue(fallback, align: TextAlign.center, minHeight: 44);
         }
+        final blue = recolorSignatureToBlueInk(bytes);
         return Container(
           constraints: const BoxConstraints(minHeight: 44),
           padding: const EdgeInsets.all(2),
           alignment: Alignment.center,
-          child: Image.network(
-            url,
-            fit: BoxFit.fill,
+          child: Image.memory(
+            blue,
+            fit: BoxFit.contain,
             width: double.infinity,
             height: 40,
-            errorBuilder: (_, __, ___) => Text(
+            errorBuilder: (_, _, _) => Text(
               fallback,
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
             ),
@@ -451,16 +511,28 @@ class ChecklistFormLayout extends ConsumerWidget {
 
   Widget _vRule() => Container(width: 1, color: _border);
 
-  Widget _metaLabel(String text, {double width = 92}) {
+  Widget _metaLabel(String text, {double width = 92, Widget? action}) {
     return Container(
       width: width,
       color: _gold,
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       alignment: AlignmentDirectional.centerStart,
-      child: Text(
-        text,
-        textAlign: TextAlign.start,
-        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Expanded(
+            child: Text(
+              text,
+              textAlign: TextAlign.start,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                color: _accentText,
+              ),
+            ),
+          ),
+          ?action,
+        ],
       ),
     );
   }
@@ -470,6 +542,8 @@ class ChecklistFormLayout extends ConsumerWidget {
     ValueChanged<String>? onChanged,
     TextAlign? align,
     double minHeight = 26,
+    int maxLines = 2,
+    bool fitToWidth = false,
   }) {
     align ??= TextAlign.start;
     final style = const TextStyle(
@@ -490,6 +564,7 @@ class ChecklistFormLayout extends ConsumerWidget {
           onChanged: onChanged,
           style: style,
           textAlign: align,
+          maxLines: 1,
           decoration: const InputDecoration(
             isDense: true,
             border: InputBorder.none,
@@ -498,11 +573,22 @@ class ChecklistFormLayout extends ConsumerWidget {
         ),
       );
     }
+    Widget text = Text(
+      value,
+      textAlign: align,
+      style: style,
+      maxLines: maxLines,
+      overflow: TextOverflow.ellipsis,
+      softWrap: maxLines > 1,
+    );
+    if (fitToWidth) {
+      text = FittedBox(fit: BoxFit.scaleDown, alignment: boxAlign, child: text);
+    }
     return Container(
       constraints: BoxConstraints(minHeight: minHeight),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       alignment: boxAlign,
-      child: Text(value, textAlign: align, style: style),
+      child: text,
     );
   }
 
@@ -511,8 +597,7 @@ class ChecklistFormLayout extends ConsumerWidget {
     WidgetRef ref,
     List<InspectionItem> items,
   ) {
-    final narrow =
-        !forceTableLayout && MediaQuery.sizeOf(context).width < 720;
+    final narrow = !forceTableLayout && MediaQuery.sizeOf(context).width < 720;
     if (narrow) {
       return Container(
         decoration: BoxDecoration(border: Border.all(color: _border)),
@@ -543,7 +628,7 @@ class ChecklistFormLayout extends ConsumerWidget {
       },
       children: [
         TableRow(
-          decoration: const BoxDecoration(color: _gold),
+          decoration: BoxDecoration(color: _gold),
           children: [
             _th(_ar ? 'م' : 'Item'),
             _th(_ar ? 'الوصف' : 'Description', align: startAlign),
@@ -562,11 +647,7 @@ class ChecklistFormLayout extends ConsumerWidget {
         for (var i = 0; i < items.length; i++)
           TableRow(
             children: [
-              _itemIndexCell(
-                context,
-                items[i],
-                isLast: i == items.length - 1,
-              ),
+              _itemIndexCell(context, items[i], isLast: i == items.length - 1),
               Padding(
                 padding: const EdgeInsets.all(7),
                 child: Column(
@@ -575,7 +656,11 @@ class ChecklistFormLayout extends ConsumerWidget {
                     Text(
                       items[i].descriptionFor(language),
                       textAlign: startAlign,
-                      style: const TextStyle(fontSize: 12, height: 1.35),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        height: 1.35,
+                        color: Colors.black,
+                      ),
                     ),
                     if (overdueItemIndexes.contains(items[i].itemIndex)) ...[
                       const SizedBox(height: 4),
@@ -632,11 +717,11 @@ class ChecklistFormLayout extends ConsumerWidget {
       child: Tooltip(
         message: _ar
             ? (canDelete
-                ? 'زر أيمن / ضغط مطول: إضافة أو حذف بند'
-                : 'زر أيمن / ضغط مطول: إضافة بند')
+                  ? 'زر أيمن / ضغط مطول: إضافة أو حذف بند'
+                  : 'زر أيمن / ضغط مطول: إضافة بند')
             : (canDelete
-                ? 'Right-click / long-press: add or delete item'
-                : 'Right-click / long-press: add item'),
+                  ? 'Right-click / long-press: add or delete item'
+                  : 'Right-click / long-press: add item'),
         child: SizedBox(
           width: double.infinity,
           height: 44,
@@ -644,14 +729,6 @@ class ChecklistFormLayout extends ConsumerWidget {
         ),
       ),
     );
-  }
-
-  Offset _globalCenterOf(BuildContext context) {
-    final box = context.findRenderObject() as RenderBox?;
-    if (box == null || !box.hasSize) {
-      return Offset.zero;
-    }
-    return box.localToGlobal(box.size.center(Offset.zero));
   }
 
   Future<void> _showItemIndexMenu(
@@ -663,7 +740,12 @@ class ChecklistFormLayout extends ConsumerWidget {
   }) async {
     final selected = await showMenu<String>(
       context: context,
-      position: RelativeRect.fromLTRB(global.dx, global.dy, global.dx, global.dy),
+      position: RelativeRect.fromLTRB(
+        global.dx,
+        global.dy,
+        global.dx,
+        global.dy,
+      ),
       items: [
         if (canAdd)
           PopupMenuItem(
@@ -686,28 +768,163 @@ class ChecklistFormLayout extends ConsumerWidget {
     Offset global,
     InspectionItem item,
   ) async {
-    // Cell menu only adds; delete is per-thumbnail (right-click that photo).
+    // Empty remarks area: add a new issue unit only.
+    // Fix photos are added by tapping an existing issue thumb.
+    if (onPickIssuePhoto == null) return;
     final selected = await showMenu<String>(
       context: context,
-      position: RelativeRect.fromLTRB(global.dx, global.dy, global.dx, global.dy),
+      position: RelativeRect.fromLTRB(
+        global.dx,
+        global.dy,
+        global.dx,
+        global.dy,
+      ),
       items: [
-        if (onPickIssuePhoto != null)
-          PopupMenuItem(
-            value: 'add_issue',
-            child: Text(_ar ? 'إضافة صورة مشكلة' : 'Add problem photo'),
-          ),
-        if (onPickFixPhoto != null)
-          PopupMenuItem(
-            value: 'add_fix',
-            child: Text(_ar ? 'إضافة صورة إصلاح' : 'Add repair photo'),
-          ),
+        PopupMenuItem(
+          value: 'add_issue',
+          child: Text(_ar ? 'إضافة صورة مشكلة' : 'Add issue photo'),
+        ),
       ],
     );
     if (selected == 'add_issue') {
       await onPickIssuePhoto?.call(item);
-    } else if (selected == 'add_fix') {
-      await onPickFixPhoto?.call(item);
     }
+  }
+
+  /// Paired thumbs: tight gap inside a pair, wider gap between pairs.
+  Widget _remarksPhotosStrip(
+    BuildContext context,
+    WidgetRef ref,
+    InspectionItem item, {
+    required bool hasRemark,
+    required double maxWidth,
+    required double maxHeight,
+  }) {
+    final pairs = item.photoPairs;
+    if (pairs.isEmpty || maxWidth <= 0 || maxHeight <= 0) {
+      return const SizedBox.shrink();
+    }
+    const pairGap = 1.0;
+    const betweenGap = 5.0;
+    const preferredW = 96.0 / 2.54; // ≥ 1 cm at ~96dpi
+    var thumbCount = 0;
+    for (final p in pairs) {
+      if (p.hasIssue) thumbCount++;
+      if (p.hasFix) thumbCount++;
+    }
+    if (thumbCount == 0) return const SizedBox.shrink();
+
+    final betweenCount = (pairs.length - 1).clamp(0, 1000);
+    var innerGaps = 0.0;
+    for (final p in pairs) {
+      final inPair = (p.hasIssue ? 1 : 0) + (p.hasFix ? 1 : 0);
+      if (inPair > 1) innerGaps += pairGap;
+    }
+    final gapsTotal = innerGaps + betweenGap * betweenCount;
+    final fitW = ((maxWidth - gapsTotal) / thumbCount).clamp(4.0, maxWidth);
+    final w = fitW < preferredW ? fitW : preferredW;
+    final h = hasRemark ? (maxHeight * 0.55).clamp(10.0, maxHeight) : maxHeight;
+
+    return SizedBox(
+      width: maxWidth,
+      height: h,
+      child: Row(
+        children: [
+          for (var pi = 0; pi < pairs.length; pi++) ...[
+            if (pi > 0)
+              Container(
+                width: betweenGap,
+                height: h,
+                alignment: Alignment.center,
+                child: Container(
+                  width: 1,
+                  height: h * 0.7,
+                  color: Colors.black26,
+                ),
+              ),
+            _pairThumbs(
+              context,
+              ref,
+              item: item,
+              pair: pairs[pi],
+              unitIndex: pi + 1,
+              thumbW: w,
+              thumbH: h,
+              pairGap: pairGap,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _pairThumbs(
+    BuildContext context,
+    WidgetRef ref, {
+    required InspectionItem item,
+    required InspectionPhotoPair pair,
+    required int unitIndex,
+    required double thumbW,
+    required double thumbH,
+    required double pairGap,
+  }) {
+    final children = <Widget>[];
+    if (pair.hasIssue) {
+      final openAge =
+          issueOpenTooltipsByPath[storagePathOf(pair.issuePath!)] ?? '';
+      final unit = photoPairLabel(unitIndex, arabic: _ar);
+      final issueTip = openAge.isEmpty ? unit : '$unit\n$openAge';
+      children.add(
+        _photoThumb(
+          context,
+          ref,
+          path: pair.issuePath!,
+          border: _problemRed,
+          width: thumbW,
+          height: thumbH,
+          tooltip: issueTip,
+          preferOuterTooltip: true,
+          onClear:
+              !readOnly &&
+                  onClearIssuePhoto != null &&
+                  pair.issuePath!.startsWith('offline://')
+              ? () async {
+                  await onClearIssuePhoto!(item, pair.issuePath!, pair.id);
+                }
+              : null,
+          onSecondary: !readOnly && onPickFixPhoto != null && !pair.hasFix
+              ? () async {
+                  await onPickFixPhoto!(item, pair.id);
+                }
+              : null,
+        ),
+      );
+    }
+    if (pair.hasIssue && pair.hasFix) {
+      children.add(SizedBox(width: pairGap));
+    }
+    if (pair.hasFix) {
+      children.add(
+        _photoThumb(
+          context,
+          ref,
+          path: pair.fixPath!,
+          border: _fixGreen,
+          width: thumbW,
+          height: thumbH,
+          tooltip: photoPairLabel(unitIndex, arabic: _ar),
+          onClear:
+              !readOnly &&
+                  onClearFixPhoto != null &&
+                  pair.fixPath!.startsWith('offline://')
+              ? () async {
+                  await onClearFixPhoto!(item, pair.fixPath!, pair.id);
+                }
+              : null,
+        ),
+      );
+    }
+    return Row(mainAxisSize: MainAxisSize.min, children: children);
   }
 
   Widget _th(
@@ -727,13 +944,18 @@ class ChecklistFormLayout extends ConsumerWidget {
           fontSize: singleLine ? 9.5 : 11,
           fontWeight: FontWeight.w800,
           height: 1.15,
+          color: Colors.white,
         ),
       ),
     );
   }
 
   Widget _tableHeader({required bool narrow}) {
-    const style = TextStyle(fontSize: 11, fontWeight: FontWeight.w800);
+    const style = TextStyle(
+      fontSize: 11,
+      fontWeight: FontWeight.w800,
+      color: Colors.white,
+    );
     return Container(
       color: _gold,
       padding: const EdgeInsets.all(8),
@@ -784,106 +1006,127 @@ class ChecklistFormLayout extends ConsumerWidget {
     );
   }
 
-  Widget _remarksCell(BuildContext context, WidgetRef ref, InspectionItem item) {
+  Widget _remarksCell(
+    BuildContext context,
+    WidgetRef ref,
+    InspectionItem item,
+  ) {
     final hasRemark = item.actionsTaken.trim().isNotEmpty;
-    final photoWidgets = <Widget>[
-      for (final photo in item.remarkPhotos)
-        _photoThumb(
-          context,
-          ref,
-          path: photo.path,
-          border: photo.kind == RemarkPhotoKind.fix ? _fixGreen : _problemRed,
-          onClear: !readOnly &&
-                  ((photo.kind == RemarkPhotoKind.fix &&
-                          onClearFixPhoto != null) ||
-                      (photo.kind != RemarkPhotoKind.fix &&
-                          onClearIssuePhoto != null))
-              ? () async {
-                  if (photo.kind == RemarkPhotoKind.fix) {
-                    await onClearFixPhoto!(item, photo.path);
-                  } else {
-                    await onClearIssuePhoto!(item, photo.path);
-                  }
-                }
-              : null,
-        ),
-    ];
+    final hasPhotos = item.remarkPhotos.isNotEmpty;
+    final canMenu =
+        !readOnly && (onPickIssuePhoto != null || onPickFixPhoto != null);
 
-    final canMenu = !readOnly &&
-        (onPickIssuePhoto != null || onPickFixPhoto != null);
+    // Match empty rows: fixed remarks box; content shrinks to fit.
+    const cellH = 40.0;
 
-    Widget body;
-    if (readOnly) {
-      if (!hasRemark && photoWidgets.isEmpty) {
-        body = const SizedBox.shrink();
-      } else {
-        body = Padding(
-          padding: const EdgeInsets.all(4),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ...photoWidgets.map(
-                (w) => Padding(
-                  padding: const EdgeInsetsDirectional.only(end: 3),
-                  child: w,
-                ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final cellW = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : 160.0;
+        final innerW = (cellW - 8).clamp(40.0, cellW);
+        final innerH = cellH - 8;
+
+        if (readOnly && !hasRemark && !hasPhotos) {
+          return const SizedBox(height: cellH);
+        }
+
+        return SizedBox(
+          height: cellH,
+          width: cellW,
+          child: Padding(
+            padding: const EdgeInsets.all(4),
+            child: ClipRect(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (hasPhotos)
+                    _remarksPhotosStrip(
+                      context,
+                      ref,
+                      item,
+                      hasRemark: hasRemark,
+                      maxWidth: innerW - (canMenu && !readOnly ? 28 : 0),
+                      maxHeight: (!hasRemark && !readOnly)
+                          ? (innerH - 22).clamp(12.0, innerH)
+                          : innerH,
+                    ),
+                  if (hasPhotos && (hasRemark || !readOnly))
+                    const SizedBox(height: 2),
+                  if (readOnly && hasRemark)
+                    Expanded(
+                      child: Text(
+                        item.actionsTaken,
+                        style: const TextStyle(fontSize: 10),
+                        maxLines: hasPhotos ? 2 : 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  if (!readOnly)
+                    Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onLongPressStart: canMenu
+                            ? (details) {
+                                Feedback.forLongPress(context);
+                                _showRemarksMenu(
+                                  context,
+                                  details.globalPosition,
+                                  item,
+                                );
+                              }
+                            : null,
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: _BlankRemarksField(
+                                key: ValueKey(
+                                  'remarks-${item.id ?? item.itemIndex}',
+                                ),
+                                initialValue: item.actionsTaken,
+                                onChanged: (v) =>
+                                    onActionsChanged?.call(item, v),
+                                onLongPressMenu: canMenu
+                                    ? (global) => _showRemarksMenu(
+                                        context,
+                                        global,
+                                        item,
+                                      )
+                                    : null,
+                              ),
+                            ),
+                            if (canMenu)
+                              IconButton(
+                                visualDensity: VisualDensity.compact,
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(
+                                  minWidth: 28,
+                                  minHeight: 28,
+                                ),
+                                tooltip: _ar
+                                    ? 'إضافة صورة مشكلة'
+                                    : 'Add issue photo',
+                                icon: Icon(
+                                  Icons.add_a_photo_outlined,
+                                  size: 16,
+                                  color: _problemRed,
+                                ),
+                                onPressed: () async {
+                                  await onPickIssuePhoto?.call(item);
+                                },
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
               ),
-              if (hasRemark)
-                Expanded(
-                  child: Text(
-                    item.actionsTaken,
-                    style: const TextStyle(fontSize: 11),
-                  ),
-                ),
-            ],
+            ),
           ),
         );
-      }
-    } else {
-      body = Padding(
-        padding: EdgeInsets.all(hasRemark || photoWidgets.isNotEmpty || canMenu ? 4 : 0),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ...photoWidgets.map(
-              (w) => Padding(
-                padding: const EdgeInsetsDirectional.only(end: 3),
-                child: w,
-              ),
-            ),
-            Expanded(
-              child: _BlankRemarksField(
-                key: ValueKey('remarks-${item.id ?? item.itemIndex}'),
-                initialValue: item.actionsTaken,
-                onChanged: (v) => onActionsChanged?.call(item, v),
-                onLongPressMenu: canMenu
-                    ? (global) => _showRemarksMenu(context, global, item)
-                    : null,
-              ),
-            ),
-            if (canMenu)
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                tooltip: _ar ? 'إضافة صورة' : 'Add photo',
-                icon: Icon(
-                  Icons.add_a_photo_outlined,
-                  size: 16,
-                  color: _okBlue,
-                ),
-                onPressed: () =>
-                    _showRemarksMenu(context, _globalCenterOf(context), item),
-              ),
-          ],
-        ),
-      );
-    }
-
-    // Do not wrap photo thumbs in the remarks long-press detector — that
-    // steals / blocks desktop clicks on thumbnails.
-    if (!canMenu) return body;
-    return body;
+      },
+    );
   }
 
   Future<void> _openPhotoViewer(
@@ -892,8 +1135,10 @@ class ChecklistFormLayout extends ConsumerWidget {
     String path,
   ) async {
     onOpenPhoto?.call(path);
-    showDialog<void>(
+    final repo = ref.read(inspectionRepositoryProvider);
+    await showDialog<void>(
       context: context,
+      useRootNavigator: true,
       barrierDismissible: true,
       builder: (dialogContext) {
         return Dialog(
@@ -901,7 +1146,6 @@ class ChecklistFormLayout extends ConsumerWidget {
           insetPadding: const EdgeInsets.all(16),
           child: FutureBuilder<({Uint8List? bytes, String? url})>(
             future: () async {
-              final repo = ref.read(inspectionRepositoryProvider);
               final bytes = await repo.downloadBytes(path);
               if (bytes != null && bytes.isNotEmpty) {
                 return (bytes: bytes, url: null);
@@ -910,6 +1154,15 @@ class ChecklistFormLayout extends ConsumerWidget {
               return (bytes: null, url: url);
             }(),
             builder: (context, snap) {
+              if (snap.hasError) {
+                return Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    _ar ? 'تعذّر فتح الصورة' : 'Could not open photo',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                );
+              }
               if (snap.connectionState != ConnectionState.done) {
                 return const SizedBox(
                   width: 280,
@@ -947,7 +1200,7 @@ class ChecklistFormLayout extends ConsumerWidget {
                     top: 4,
                     right: 4,
                     child: IconButton(
-                      onPressed: () => Navigator.pop(dialogContext),
+                      onPressed: () => Navigator.of(dialogContext).pop(),
                       icon: const Icon(Icons.close, color: Colors.white),
                     ),
                   ),
@@ -966,97 +1219,30 @@ class ChecklistFormLayout extends ConsumerWidget {
     required String path,
     required Color border,
     Future<void> Function()? onClear,
+    Future<void> Function()? onSecondary,
+    String? tooltip,
+    bool preferOuterTooltip = false,
+    double? width,
+    double? height,
   }) {
-    return FutureBuilder<String?>(
-      future: ref.read(inspectionRepositoryProvider).signedUrl(path),
-      builder: (context, snap) {
-        final url = snap.data;
-        return MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => _openPhotoViewer(context, ref, path),
-            onSecondaryTapDown: onClear == null
-                ? null
-                : (details) async {
-                    final action = await showMenu<String>(
-                      context: context,
-                      position: RelativeRect.fromLTRB(
-                        details.globalPosition.dx,
-                        details.globalPosition.dy,
-                        details.globalPosition.dx,
-                        details.globalPosition.dy,
-                      ),
-                      items: [
-                        PopupMenuItem(
-                          value: 'del',
-                          child: Text(
-                            _ar ? 'حذف هذه الصورة' : 'Delete this photo',
-                          ),
-                        ),
-                      ],
-                    );
-                    if (action == 'del') await onClear();
-                  },
-            onLongPressStart: onClear == null
-                ? null
-                : (details) async {
-                    Feedback.forLongPress(context);
-                    final action = await showMenu<String>(
-                      context: context,
-                      position: RelativeRect.fromLTRB(
-                        details.globalPosition.dx,
-                        details.globalPosition.dy,
-                        details.globalPosition.dx,
-                        details.globalPosition.dy,
-                      ),
-                      items: [
-                        PopupMenuItem(
-                          value: 'del',
-                          child: Text(
-                            _ar ? 'حذف هذه الصورة' : 'Delete this photo',
-                          ),
-                        ),
-                      ],
-                    );
-                    if (action == 'del') await onClear();
-                  },
-            child: Container(
-              width: _photoW,
-              height: _photoH,
-              decoration: BoxDecoration(
-                border: Border.all(color: border, width: 2),
-                borderRadius: BorderRadius.circular(2),
-                color: Colors.white,
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: url == null
-                  ? Icon(Icons.image, size: 12, color: border)
-                  : Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        Image.network(
-                          url,
-                          fit: BoxFit.cover,
-                          cacheWidth: 96,
-                          cacheHeight: 144,
-                          filterQuality: FilterQuality.low,
-                        ),
-                        Positioned(
-                          right: 0,
-                          bottom: 0,
-                          child: Container(
-                            width: 7,
-                            height: 7,
-                            color: border,
-                          ),
-                        ),
-                      ],
-                    ),
-            ),
-          ),
-        );
-      },
+    final thumb = _OpenablePhotoThumb(
+      path: path,
+      border: border,
+      arabic: _ar,
+      width: width ?? _photoW,
+      height: height ?? _photoH,
+      onOpen: () => _openPhotoViewer(context, ref, path),
+      onClear: onClear,
+      onSecondary: onSecondary,
+      signedUrlFuture: ref.read(inspectionRepositoryProvider).signedUrl(path),
+      suppressInnerTooltip:
+          preferOuterTooltip && tooltip != null && tooltip.trim().isNotEmpty,
+    );
+    if (tooltip == null || tooltip.isEmpty) return thumb;
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 350),
+      child: thumb,
     );
   }
 
@@ -1107,9 +1293,15 @@ class ChecklistFormLayout extends ConsumerWidget {
           Row(
             children: [
               _responseCell(item, ChecklistResponse.yes),
-              Text(_ar ? ' نعم  ' : ' Yes  ', style: const TextStyle(fontSize: 11)),
+              Text(
+                _ar ? ' نعم  ' : ' Yes  ',
+                style: const TextStyle(fontSize: 11),
+              ),
               _responseCell(item, ChecklistResponse.no),
-              Text(_ar ? ' لا  ' : ' No  ', style: const TextStyle(fontSize: 11)),
+              Text(
+                _ar ? ' لا  ' : ' No  ',
+                style: const TextStyle(fontSize: 11),
+              ),
               _responseCell(item, ChecklistResponse.na),
               Text(_ar ? ' غ.م' : ' NA', style: const TextStyle(fontSize: 11)),
             ],
@@ -1121,30 +1313,7 @@ class ChecklistFormLayout extends ConsumerWidget {
   }
 
   Widget _footerLogos() {
-    return Directionality(
-      textDirection: ui.TextDirection.ltr,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Image.asset(
-            'assets/branding/logo_waseef.png',
-            package: 'checklist_shared',
-            height: 28,
-            errorBuilder: (_, __, ___) => const SizedBox(height: 28),
-          ),
-          const Text(
-            '© MOEHE Facilities',
-            style: TextStyle(fontSize: 9, color: Colors.black54),
-          ),
-          Image.asset(
-            'assets/branding/logo_footer2.png',
-            package: 'checklist_shared',
-            height: 32,
-            errorBuilder: (_, __, ___) => const SizedBox(height: 32),
-          ),
-        ],
-      ),
-    );
+    return ResolvedFooterLogos(siteId: inspection.siteId, language: language);
   }
 }
 
@@ -1193,8 +1362,7 @@ class _BlankRemarksFieldState extends State<_BlankRemarksField> {
     super.dispose();
   }
 
-  bool get _active =>
-      _controller.text.trim().isNotEmpty || _focus.hasFocus;
+  bool get _active => _controller.text.trim().isNotEmpty || _focus.hasFocus;
 
   @override
   Widget build(BuildContext context) {
@@ -1234,6 +1402,202 @@ class _BlankRemarksFieldState extends State<_BlankRemarksField> {
               : EdgeInsets.zero,
         ),
       ),
+    );
+  }
+}
+
+/// Desktop-safe photo thumb: mouse clicks use [Listener] (gesture-arena free).
+class _OpenablePhotoThumb extends StatefulWidget {
+  const _OpenablePhotoThumb({
+    required this.path,
+    required this.border,
+    required this.arabic,
+    required this.width,
+    required this.height,
+    required this.onOpen,
+    required this.signedUrlFuture,
+    this.onClear,
+    this.onSecondary,
+    this.suppressInnerTooltip = false,
+  });
+
+  final String path;
+  final Color border;
+  final bool arabic;
+  final double width;
+  final double height;
+  final Future<void> Function() onOpen;
+  final Future<String?> signedUrlFuture;
+  final Future<void> Function()? onClear;
+
+  /// e.g. add fix for this issue pair (long-press menu when present).
+  final Future<void> Function()? onSecondary;
+  final bool suppressInnerTooltip;
+
+  @override
+  State<_OpenablePhotoThumb> createState() => _OpenablePhotoThumbState();
+}
+
+class _OpenablePhotoThumbState extends State<_OpenablePhotoThumb> {
+  int? _primaryPointer;
+  bool _opening = false;
+  bool _suppressOpen = false;
+
+  Future<void> _open() async {
+    if (_opening || _suppressOpen) return;
+    _opening = true;
+    try {
+      await widget.onOpen();
+    } finally {
+      _opening = false;
+    }
+  }
+
+  Future<void> _showActionMenu(Offset global) async {
+    final onClear = widget.onClear;
+    final onSecondary = widget.onSecondary;
+    _suppressOpen = true;
+    _primaryPointer = null;
+    final action = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        global.dx,
+        global.dy,
+        global.dx,
+        global.dy,
+      ),
+      items: [
+        PopupMenuItem(
+          value: 'open',
+          child: Text(widget.arabic ? 'فتح الصورة' : 'Open photo'),
+        ),
+        if (onSecondary != null)
+          PopupMenuItem(
+            value: 'fix',
+            child: Text(
+              widget.arabic
+                  ? 'إضافة صورة إصلاح لهذه الوحدة'
+                  : 'Add fix photo for this unit',
+            ),
+          ),
+        if (onClear != null)
+          PopupMenuItem(
+            value: 'del',
+            child: Text(widget.arabic ? 'حذف هذه الصورة' : 'Delete this photo'),
+          ),
+      ],
+    );
+    if (action == 'open') await widget.onOpen();
+    if (action == 'fix') await onSecondary?.call();
+    if (action == 'del') await onClear?.call();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    _suppressOpen = false;
+  }
+
+  bool get _hasActions => widget.onClear != null || widget.onSecondary != null;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String?>(
+      future: widget.signedUrlFuture,
+      builder: (context, snap) {
+        final url = snap.data;
+        final thumb = Container(
+          width: widget.width,
+          height: widget.height,
+          decoration: BoxDecoration(
+            border: Border.all(color: widget.border, width: 2),
+            borderRadius: BorderRadius.circular(2),
+            color: Colors.white,
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: url == null
+              ? Icon(Icons.image, size: 12, color: widget.border)
+              : Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.network(
+                      url,
+                      fit: BoxFit.cover,
+                      cacheWidth: 96,
+                      cacheHeight: 144,
+                      filterQuality: FilterQuality.low,
+                    ),
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        width: 7,
+                        height: 7,
+                        color: widget.border,
+                      ),
+                    ),
+                  ],
+                ),
+        );
+
+        // Tap (or long-press) shows actions when editable; otherwise opens photo.
+        final interactive = MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: Listener(
+            behavior: HitTestBehavior.opaque,
+            onPointerDown: (event) {
+              final isPrimaryMouse =
+                  event.kind == PointerDeviceKind.mouse &&
+                  event.buttons == kPrimaryMouseButton;
+              final isTouchLike =
+                  event.kind == PointerDeviceKind.touch ||
+                  event.kind == PointerDeviceKind.stylus ||
+                  event.kind == PointerDeviceKind.trackpad ||
+                  event.kind == PointerDeviceKind.unknown;
+              if (!_suppressOpen && (isPrimaryMouse || isTouchLike)) {
+                _primaryPointer = event.pointer;
+              } else {
+                _primaryPointer = null;
+              }
+            },
+            onPointerCancel: (event) {
+              if (_primaryPointer == event.pointer) _primaryPointer = null;
+            },
+            onPointerUp: (event) {
+              if (_primaryPointer != event.pointer) return;
+              _primaryPointer = null;
+              if (_hasActions) {
+                final box = context.findRenderObject() as RenderBox?;
+                final pos =
+                    box?.localToGlobal(
+                      Offset(box.size.width / 2, box.size.height / 2),
+                    ) ??
+                    Offset.zero;
+                _showActionMenu(pos);
+              } else {
+                _open();
+              }
+            },
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onSecondaryTapDown: _hasActions
+                  ? (details) => _showActionMenu(details.globalPosition)
+                  : null,
+              onLongPressStart: _hasActions
+                  ? (details) {
+                      Feedback.forLongPress(context);
+                      _showActionMenu(details.globalPosition);
+                    }
+                  : null,
+              child: thumb,
+            ),
+          ),
+        );
+        if (widget.suppressInnerTooltip) return interactive;
+        return Tooltip(
+          message: _hasActions
+              ? (widget.arabic ? 'خيارات الصورة' : 'Photo actions')
+              : (widget.arabic ? 'فتح الصورة' : 'Open photo'),
+          waitDuration: const Duration(milliseconds: 600),
+          child: interactive,
+        );
+      },
     );
   }
 }

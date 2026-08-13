@@ -19,6 +19,7 @@
 .svn/
 .swiftpm/
 migrate_working_dir/
+.claude/worktrees/
 
 # IntelliJ
 *.iml
@@ -47,7 +48,6 @@ app.*.symbols
 app.*.map.json
 
 # Android
-**/android/**/gradle-wrapper.jar
 **/android/.gradle/
 **/android/captures/
 **/android/local.properties
@@ -84,3 +84,5 @@ app.*.map.json
 **/ios/Flutter/flutter_export_environment.sh
 **/ios/ServiceDefinitions.json
 **/ios/Runner/GeneratedPluginRegistrant.*
+web_deploy/
+dist/

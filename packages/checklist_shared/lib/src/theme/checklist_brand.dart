@@ -86,6 +86,9 @@ class ChecklistBrand {
 
 /// Active chrome — call [ChecklistChrome.use] once in each app `main`.
 abstract final class ChecklistChrome {
+  /// List cards and working panes remain visible over the patterned canvas.
+  static const double listSurfaceOpacity = 0.50;
+
   static ChecklistBrand _brand = ChecklistBrand.viewer;
 
   static ChecklistBrand get brand => _brand;
@@ -104,33 +107,36 @@ abstract final class ChecklistChrome {
   static Color get iconGlyph => _brand.iconGlyph;
 
   static LinearGradient get iconWellGradient => LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [_brand.iconWellTop, _brand.iconWellBottom],
-      );
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [_brand.iconWellTop, _brand.iconWellBottom],
+  );
 
   static LinearGradient get cardWash => LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [
-          Colors.white,
-          Color.alphaBlend(accentSoft.withValues(alpha: 0.10), Colors.white),
-        ],
-      );
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [
+      Colors.white.withValues(alpha: listSurfaceOpacity),
+      Color.alphaBlend(
+        accentSoft.withValues(alpha: 0.10),
+        Colors.white,
+      ).withValues(alpha: listSurfaceOpacity),
+    ],
+  );
 
   static LinearGradient get appBarGradient => LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [primary, accentDeep],
-      );
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [primary, accentDeep],
+  );
 
-  /// Deep navy / ink dark surfaces (shared across brands).
+  /// Deep navy / ink dark surfaces — higher-contrast readable chrome.
   static const Color darkCanvas = Color(0xFF0B1220);
-  static const Color darkSurface = Color(0xFF152033);
-  static const Color darkSurfaceHigh = Color(0xFF1A2740);
-  static const Color darkInk = Color(0xFFE8EEF5);
-  static const Color darkInkMuted = Color(0xFF94A3B8);
-  static const Color darkBorder = Color(0xFF2A3A4F);
+  static const Color darkSurface = Color(0xFF1C2740);
+  static const Color darkSurfaceHigh = Color(0xFF273652);
+  static const Color darkInk = Color(0xFFF5F8FC);
+  static const Color darkInkMuted = Color(0xFFC2CEDE);
+  static const Color darkBorder = Color(0xFF3A4D6A);
 
   static LinearGradient cardWashFor(Brightness brightness) {
     if (brightness == Brightness.dark) {
@@ -138,8 +144,11 @@ abstract final class ChecklistChrome {
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          darkSurface,
-          Color.alphaBlend(accent.withValues(alpha: 0.18), darkSurfaceHigh),
+          darkSurface.withValues(alpha: listSurfaceOpacity),
+          Color.alphaBlend(
+            accent.withValues(alpha: 0.18),
+            darkSurfaceHigh,
+          ).withValues(alpha: listSurfaceOpacity),
         ],
       );
     }
@@ -188,7 +197,7 @@ abstract final class ChecklistChrome {
       ),
       cardTheme: CardThemeData(
         elevation: 0,
-        color: Colors.transparent,
+        color: scheme.surface.withValues(alpha: listSurfaceOpacity),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       filledButtonTheme: FilledButtonThemeData(
@@ -212,6 +221,25 @@ abstract final class ChecklistChrome {
     );
   }
 
+  /// Stable light theme for printable A4 paper content (answers, signature).
+  /// Kept as a single instance so theme-mode switches do not recreate nested
+  /// Theme InheritedWidgets under a live [Material] / signature pad.
+  static final ThemeData paperFormTheme = ThemeData(
+    useMaterial3: true,
+    brightness: Brightness.light,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: accent,
+      brightness: Brightness.light,
+    ),
+    scaffoldBackgroundColor: Colors.white,
+    canvasColor: Colors.white,
+    iconTheme: const IconThemeData(color: Colors.black87),
+    textTheme: Typography.material2021().black.apply(
+      bodyColor: Colors.black,
+      displayColor: Colors.black,
+    ),
+  );
+
   /// Deep navy ink dark theme aligned with brand accent.
   static ThemeData darkTheme() {
     final scheme = ColorScheme.dark(
@@ -223,8 +251,13 @@ abstract final class ChecklistChrome {
       onSurface: darkInk,
       onSurfaceVariant: darkInkMuted,
       outline: darkBorder,
+      surfaceContainerHighest: darkSurfaceHigh,
       error: const Color(0xFFF87171),
       onError: darkCanvas,
+    );
+    final textTheme = Typography.material2021().white.apply(
+      bodyColor: darkInk,
+      displayColor: darkInk,
     );
     return ThemeData(
       useMaterial3: true,
@@ -234,25 +267,41 @@ abstract final class ChecklistChrome {
       canvasColor: darkCanvas,
       dialogTheme: const DialogThemeData(backgroundColor: darkSurface),
       drawerTheme: const DrawerThemeData(backgroundColor: darkSurface),
+      popupMenuTheme: const PopupMenuThemeData(
+        color: darkSurfaceHigh,
+        textStyle: TextStyle(color: darkInk),
+      ),
+      textTheme: textTheme,
+      primaryTextTheme: textTheme,
       listTileTheme: const ListTileThemeData(
-        iconColor: darkInkMuted,
+        iconColor: darkInk,
         textColor: darkInk,
+        subtitleTextStyle: TextStyle(color: darkInkMuted, fontSize: 13),
+        titleTextStyle: TextStyle(
+          color: darkInk,
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+        ),
       ),
       dividerColor: darkBorder,
+      dividerTheme: const DividerThemeData(color: darkBorder, space: 1),
       appBarTheme: AppBarTheme(
         backgroundColor: primary,
         foregroundColor: onAccent,
         elevation: 0,
+        surfaceTintColor: Colors.transparent,
       ),
       cardTheme: CardThemeData(
         elevation: 0,
-        color: darkSurface,
+        color: darkSurface.withValues(alpha: listSurfaceOpacity),
+        surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: darkSurfaceHigh,
         labelStyle: const TextStyle(color: darkInkMuted),
+        hintStyle: const TextStyle(color: darkInkMuted),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: darkBorder),
@@ -260,6 +309,10 @@ abstract final class ChecklistChrome {
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: darkBorder),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: accent, width: 1.4),
         ),
       ),
       filledButtonTheme: FilledButtonThemeData(
@@ -280,10 +333,24 @@ abstract final class ChecklistChrome {
           ),
         ),
       ),
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: ButtonStyle(
+          foregroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) return onAccent;
+            return darkInk;
+          }),
+          backgroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) return accent;
+            return darkSurfaceHigh;
+          }),
+          side: const WidgetStatePropertyAll(BorderSide(color: darkBorder)),
+        ),
+      ),
       snackBarTheme: const SnackBarThemeData(
         backgroundColor: darkSurfaceHigh,
         contentTextStyle: TextStyle(color: darkInk),
       ),
+      iconTheme: const IconThemeData(color: darkInk),
     );
   }
 }
@@ -402,8 +469,7 @@ PreferredSizeWidget checklistGradientAppBar({
         // Only pass [leading] when set — explicit null used to suppress
         // imply + Drawer stealing the back affordance.
         leading: leading,
-        automaticallyImplyLeading:
-            leading == null && automaticallyImplyLeading,
+        automaticallyImplyLeading: leading == null && automaticallyImplyLeading,
         backgroundColor: Colors.transparent,
         foregroundColor: ChecklistChrome.onAccent,
         elevation: 0,

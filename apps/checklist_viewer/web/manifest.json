@@ -1,11 +1,11 @@
 {
-    "name": "checklist_viewer",
-    "short_name": "checklist_viewer",
+    "name": "Inspection Viewer",
+    "short_name": "Inspection Viewer",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#1B2430",
+    "theme_color": "#3D5A80",
+    "description": "Secure bilingual inspection review, reporting, and operations dashboard for MOEHE.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

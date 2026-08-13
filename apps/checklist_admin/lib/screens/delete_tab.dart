@@ -49,7 +49,7 @@ class _DeleteTabState extends ConsumerState<DeleteTab> {
       ),
     );
     if (ok != true) return;
-    await ref.read(inspectionRepositoryProvider).deleteInspection(row.id);
+    await ref.read(inspectionRepositoryProvider).deleteInspection(row);
     await _load();
   }
 
@@ -72,4 +72,3 @@ class _DeleteTabState extends ConsumerState<DeleteTab> {
     );
   }
 }
-

@@ -4,12 +4,12 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('photo policy', () {
     InspectionItem problemItem({String? photo}) => InspectionItem(
-          itemIndex: 1,
-          description: 'Leak?',
-          defaultAnswer: 'N',
-          response: ChecklistResponse.yes,
-          issueImagePath: photo,
-        );
+      itemIndex: 1,
+      description: 'Leak?',
+      defaultAnswer: 'N',
+      response: ChecklistResponse.yes,
+      issueImagePath: photo,
+    );
 
     test('blocks when critical and photo missing', () {
       final insp = Inspection(

@@ -7,7 +7,9 @@ class CorrectionRepository {
 
   final SupabaseClient _client;
 
-  Future<List<ChecklistCorrection>> listForInspection(String inspectionId) async {
+  Future<List<ChecklistCorrection>> listForInspection(
+    String inspectionId,
+  ) async {
     final rows = await _client
         .from('checklist_corrections')
         .select()
@@ -22,32 +24,22 @@ class CorrectionRepository {
   }
 
   Future<void> correctItem({
-    required String inspectionId,
+    required Inspection inspection,
     required String itemId,
     required String fieldName,
-    String? oldValue,
     String? newValue,
     String reason = '',
-    Map<String, dynamic>? itemPatch,
   }) async {
-    final userId = _client.auth.currentUser?.id;
-    if (userId == null) throw StateError('Not signed in');
-
-    if (itemPatch != null && itemPatch.isNotEmpty) {
-      await _client
-          .from('checklist_inspection_items')
-          .update(itemPatch)
-          .eq('id', itemId);
-    }
-
-    await _client.from('checklist_corrections').insert({
-      'inspection_id': inspectionId,
-      'item_id': itemId,
-      'field_name': fieldName,
-      'old_value': oldValue,
-      'new_value': newValue,
-      'reason': reason,
-      'corrected_by': userId,
-    });
+    final nextVersion = await _client.rpc(
+      'correct_checklist_inspection_item',
+      params: {
+        'p_item_id': itemId,
+        'p_expected_version': inspection.version,
+        'p_field_name': fieldName,
+        'p_new_value': newValue,
+        'p_reason': reason,
+      },
+    );
+    inspection.version = (nextVersion as num).toInt();
   }
 }

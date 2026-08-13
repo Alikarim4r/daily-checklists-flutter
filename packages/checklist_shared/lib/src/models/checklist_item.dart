@@ -32,41 +32,36 @@ class ChecklistItem {
     List<Map<String, dynamic>> customItems = const [],
     Map<String, String> customItemTexts = const {},
   }) {
-    final key = (checklistType != null &&
-            kChecklistLists.containsKey(checklistType))
+    final key =
+        (checklistType != null && kChecklistLists.containsKey(checklistType))
         ? checklistType
         : listKeyForBuilding(buildingId);
-    final base = (kChecklistLists[key] ?? kChecklistLists['DEFAULT']!)
-        .map((raw) {
-          final texts = <String, String>{};
-          for (final lang in const [
-            'en',
-            'ar',
-            'bn',
-            'hi',
-            'ml',
-            'ta',
-            'tl',
-          ]) {
-            final v = raw[lang];
-            if (v is String && v.isNotEmpty) texts[lang] = v;
-          }
-          return ChecklistItem(
-            id: (raw['id'] as num?)?.toInt() ?? 0,
-            defaultAnswer: '${raw['default'] ?? 'Y'}',
-            texts: texts,
-          );
-        })
-        .toList();
+    final base = (kChecklistLists[key] ?? kChecklistLists['DEFAULT']!).map((
+      raw,
+    ) {
+      final texts = <String, String>{};
+      for (final lang in const ['en', 'ar', 'bn', 'hi', 'ml', 'ta', 'tl']) {
+        final v = raw[lang];
+        if (v is String && v.isNotEmpty) texts[lang] = v;
+      }
+      return ChecklistItem(
+        id: (raw['id'] as num?)?.toInt() ?? 0,
+        defaultAnswer: '${raw['default'] ?? 'Y'}',
+        texts: texts,
+      );
+    }).toList();
 
     final customs = [...customItems]
-      ..sort((a, b) => ((a['index'] as num?) ?? 0)
-          .compareTo((b['index'] as num?) ?? 0));
+      ..sort(
+        (a, b) =>
+            ((a['index'] as num?) ?? 0).compareTo((b['index'] as num?) ?? 0),
+      );
 
     for (final c in customs) {
       final index = (c['index'] as num?)?.toInt() ?? 0;
       final id = (c['id'] as num?)?.toInt() ?? (1000 + index);
-      final text = customItemTexts['$id'] ??
+      final text =
+          customItemTexts['$id'] ??
           customItemTexts[id.toString()] ??
           c['text']?.toString() ??
           c['en']?.toString() ??
@@ -75,10 +70,7 @@ class ChecklistItem {
         ChecklistItem(
           id: id,
           defaultAnswer: '${c['default'] ?? 'Y'}',
-          texts: {
-            'en': text,
-            'ar': text,
-          },
+          texts: {'en': text, 'ar': text},
           isCustom: true,
           customIndex: index,
         ),
@@ -99,10 +91,7 @@ bool isProblemResponse({
   return false;
 }
 
-bool isIdealResponse({
-  required ChecklistItem item,
-  required String? response,
-}) {
+bool isIdealResponse({required ChecklistItem item, required String? response}) {
   if (response == null || response == 'NA') return false;
   if (item.defaultAnswer == 'NA') return false;
   return response == item.defaultAnswer;

@@ -1,73 +1,46 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Per-app biometric unlock prefs + optional saved email/password.
+/// Per-app biometric unlock preference.
+///
+/// Supabase owns the refresh session. Raw account passwords are never persisted.
 class SessionSecurityStore {
   SessionSecurityStore(this.appKey);
 
   final String appKey;
   final FlutterSecureStorage _secure = const FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-    mOptions: MacOsOptions(useDataProtectionKeyChain: false),
+    aOptions: AndroidOptions(
+      migrateOnAlgorithmChange: true,
+      migrateWithBackup: true,
+    ),
+    mOptions: MacOsOptions(usesDataProtectionKeychain: true),
   );
 
   bool biometricEnabled = false;
-  String? savedEmail;
 
   String get _prefsBio => 'checklist.session.$appKey.biometric_enabled';
+  // Legacy keys are deleted during migration from password-based quick sign-in.
   String get _secureEmail => 'checklist.session.$appKey.email';
   String get _securePassword => 'checklist.session.$appKey.password';
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     biometricEnabled = prefs.getBool(_prefsBio) ?? false;
-    savedEmail = await _safeRead(_secureEmail);
+    await _clearLegacyCredentials();
   }
 
   Future<void> setBiometricEnabled(bool value) async {
     biometricEnabled = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_prefsBio, value);
-    if (!value) await clearCredentials();
   }
 
-  Future<bool> get hasStoredCredentials async {
-    final email = await _safeRead(_secureEmail);
-    final password = await _safeRead(_securePassword);
-    return email != null &&
-        email.isNotEmpty &&
-        password != null &&
-        password.isNotEmpty;
-  }
-
-  Future<void> saveCredentials({
-    required String email,
-    required String password,
-  }) async {
-    await _secure.write(key: _secureEmail, value: email.trim());
-    await _secure.write(key: _securePassword, value: password);
-    savedEmail = email.trim();
-  }
-
-  Future<({String email, String password})?> readCredentials() async {
-    final email = await _safeRead(_secureEmail);
-    final password = await _safeRead(_securePassword);
-    if (email == null || password == null) return null;
-    if (email.isEmpty || password.isEmpty) return null;
-    return (email: email, password: password);
-  }
-
-  Future<void> clearCredentials() async {
-    await _secure.delete(key: _secureEmail);
-    await _secure.delete(key: _securePassword);
-    savedEmail = null;
-  }
-
-  Future<String?> _safeRead(String key) async {
+  Future<void> _clearLegacyCredentials() async {
     try {
-      return await _secure.read(key: key);
+      await _secure.delete(key: _secureEmail);
+      await _secure.delete(key: _securePassword);
     } catch (_) {
-      return null;
+      // A locked/unavailable keychain must not block application startup.
     }
   }
 }

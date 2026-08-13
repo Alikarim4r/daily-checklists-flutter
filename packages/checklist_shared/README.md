@@ -1,39 +1,37 @@
-<!--
-This README describes the package. If you publish this package to pub.dev,
-this README's contents appear on the landing page for your package.
+# checklist_shared
 
-For information about how to write a good package README, see the guide for
-[writing package pages](https://dart.dev/tools/pub/writing-package-pages).
+Private shared Flutter package for the Daily Checklists applications. It owns
+the domain models, Supabase repositories, authorization/session helpers,
+offline outbox, photo policy, reporting, theming, and common UI components used
+by the Entry, Viewer, and Admin applications.
 
-For general information about developing packages, see the Dart guide for
-[creating packages](https://dart.dev/guides/libraries/create-packages)
-and the Flutter guide for
-[developing packages and plugins](https://flutter.dev/to/develop-packages).
--->
+## Scope
 
-TODO: Put a short description of the package here that helps potential users
-know whether this package might be useful for them.
+- Typed checklist, organization, site, user, media, and operations models.
+- Supabase-backed repositories using the secured inspection workflow RPCs.
+- Encrypted offline inspection queue with idempotent synchronization.
+- Biometric session locking without storing account passwords.
+- Arabic/English reports, form themes, branding, and shared widgets.
+- Photo-pair, carry-forward, overdue, and submission policy enforcement.
 
-## Features
+## Development
 
-TODO: List what your package can do. Maybe include images, gifs, or videos.
+This package is workspace-private (`publish_to: none`). Run its checks from the
+repository root with:
 
-## Getting started
-
-TODO: List prerequisites and provide or point to information on how to
-start using the package.
-
-## Usage
-
-TODO: Include short and useful examples for package users. Add longer examples
-to `/example` folder.
-
-```dart
-const like = 'sample';
+```bash
+./scripts/check_quality.sh
 ```
 
-## Additional information
+Applications consume it through a local path dependency. Database changes that
+affect repositories must remain compatible with the ordered migrations under
+`supabase/migrations` and their integration smoke test.
 
-TODO: Tell users more about the package: where to find more information, how to
-contribute to the package, how to file issues, what response they can expect
-from the package authors, and more.
+## Security notes
+
+Supabase owns the authenticated session. Raw account passwords must never be
+stored locally. The secure-storage v10 dependency is intentionally held for one
+production bridge release so installations upgrading from v9 can migrate their
+encrypted data before a later upgrade to v11.
+
+This package and its assets are proprietary and are not published to pub.dev.

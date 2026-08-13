@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../l10n/app_labels.dart';
@@ -26,13 +27,19 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
   final ValueChanged<String> onLanguageChanged;
   final List<String> languages;
   final List<Widget> advancedItems;
+
   /// Optional path to launcher-style branding asset (نقوش).
   final String? appIconAsset;
+
+  static final Future<PackageInfo> _packageInfo = PackageInfo.fromPlatform();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final ar = language == 'ar';
     final themeMode = ref.watch(themeModeProvider);
+    final notificationsEnabled = ref.watch(notificationsEnabledProvider);
+    final soundEnabled = ref.watch(soundEnabledProvider);
+    final hapticsEnabled = ref.watch(hapticsEnabledProvider);
     final theme = Theme.of(context);
     final name = profile.fullName.trim().isEmpty
         ? profile.email
@@ -57,7 +64,7 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                           width: 48,
                           height: 48,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                          errorBuilder: (_, _, _) => const SizedBox.shrink(),
                         ),
                       )
                     else
@@ -99,34 +106,22 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
               children: [
                 _section(ar ? 'المظهر' : 'Appearance', Icons.palette_outlined),
                 const SizedBox(height: 8),
-                SegmentedButton<ThemeMode>(
-                  segments: [
-                    ButtonSegment(
-                      value: ThemeMode.light,
-                      icon: const Icon(Icons.light_mode_outlined, size: 18),
-                      label: Text(ar ? 'فاتح' : 'Light'),
-                    ),
-                    ButtonSegment(
-                      value: ThemeMode.dark,
-                      icon: const Icon(Icons.dark_mode_outlined, size: 18),
-                      label: Text(ar ? 'داكن' : 'Dark'),
-                    ),
-                    ButtonSegment(
-                      value: ThemeMode.system,
-                      icon: const Icon(Icons.brightness_auto_outlined, size: 18),
-                      label: Text(ar ? 'نظام' : 'System'),
-                    ),
-                  ],
-                  selected: {themeMode},
-                  showSelectedIcon: false,
-                  onSelectionChanged: (s) =>
-                      ref.read(themeModeProvider.notifier).setMode(s.first),
+                _ThemeModeTiles(
+                  language: language,
+                  selected: themeMode,
+                  onSelected: (next) {
+                    // Defer out of the drawer button gesture; MaterialApp swaps
+                    // themes without SegmentedButton's M3 state machine mid-tree.
+                    Future<void>.delayed(Duration.zero, () {
+                      ref.read(themeModeProvider.notifier).setMode(next);
+                    });
+                  },
                 ),
                 const SizedBox(height: 20),
                 _section(ar ? 'اللغة' : 'Language', Icons.translate_outlined),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
-                  value: languages.contains(language)
+                  initialValue: languages.contains(language)
                       ? language
                       : languages.first,
                   isExpanded: true,
@@ -154,6 +149,48 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                   },
                 ),
                 const SizedBox(height: 20),
+                _section(
+                  ar ? 'الإشعارات والتنبيهات' : 'Notifications & feedback',
+                  Icons.notifications_active_outlined,
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.notifications_outlined),
+                  title: Text(ar ? 'مركز الإشعارات' : 'Notification centre'),
+                  subtitle: Text(
+                    ar
+                        ? 'إظهار التنبيهات التشغيلية والمهام المطلوبة'
+                        : 'Show operational alerts and required actions',
+                  ),
+                  value: notificationsEnabled,
+                  onChanged: (enabled) => ref
+                      .read(notificationsEnabledProvider.notifier)
+                      .setEnabled(enabled),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.volume_up_outlined),
+                  title: Text(ar ? 'أصوات التنبيه' : 'Alert sounds'),
+                  subtitle: Text(
+                    ar
+                        ? 'صوت عند نجاح الحفظ أو وجود متابعة عاجلة'
+                        : 'Sound on successful saves and urgent follow-ups',
+                  ),
+                  value: soundEnabled,
+                  onChanged: (enabled) => ref
+                      .read(soundEnabledProvider.notifier)
+                      .setEnabled(enabled),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.vibration_outlined),
+                  title: Text(ar ? 'الاهتزاز اللمسي' : 'Haptic feedback'),
+                  value: hapticsEnabled,
+                  onChanged: (enabled) => ref
+                      .read(hapticsEnabledProvider.notifier)
+                      .setEnabled(enabled),
+                ),
+                const SizedBox(height: 20),
                 _section(ar ? 'الحساب' : 'Account', Icons.person_outline),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
@@ -179,6 +216,22 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                     fontWeight: FontWeight.w800,
                     color: ChecklistChrome.ink,
                   ),
+                ),
+                const SizedBox(height: 8),
+                FutureBuilder<PackageInfo>(
+                  future: _packageInfo,
+                  builder: (context, snapshot) {
+                    final info = snapshot.data;
+                    if (info == null) return const SizedBox.shrink();
+                    return Text(
+                      ar
+                          ? 'الإصدار ${info.version} · البناء ${info.buildNumber}'
+                          : 'Version ${info.version} · Build ${info.buildNumber}',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: ChecklistChrome.inkMuted,
+                      ),
+                    );
+                  },
                 ),
                 InkWell(
                   onTap: () => launchUrl(Uri.parse('tel:+97430058899')),
@@ -270,47 +323,17 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
           await ref.read(sessionSecurityProvider.notifier).disableBiometrics();
           return;
         }
-        final pwd = TextEditingController();
-        final ok = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: Text(
-              ar
-                  ? 'تفعيل ${security.biometricLabel}'
-                  : 'Enable ${security.biometricLabel}',
-            ),
-            content: TextField(
-              controller: pwd,
-              obscureText: true,
-              decoration: InputDecoration(
-                labelText: ar ? 'كلمة المرور' : 'Password',
-                border: const OutlineInputBorder(),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: Text(ar ? 'إلغاء' : 'Cancel'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: Text(ar ? 'متابعة' : 'Continue'),
-              ),
-            ],
-          ),
-        );
-        if (ok != true || !context.mounted) return;
-        final err =
-            await ref.read(sessionSecurityProvider.notifier).enableBiometrics(
-                  email: profile.email,
-                  password: pwd.text,
-                  reason: ar
-                      ? 'أكد عبر ${security.biometricLabel}'
-                      : 'Confirm with ${security.biometricLabel}',
-                );
+        final err = await ref
+            .read(sessionSecurityProvider.notifier)
+            .enableBiometrics(
+              reason: ar
+                  ? 'أكد عبر ${security.biometricLabel}'
+                  : 'Confirm with ${security.biometricLabel}',
+            );
         if (err != null && context.mounted) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text(err)));
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(err)));
         }
       },
     );
@@ -387,10 +410,58 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
       }
     }
+  }
+}
+
+class _ThemeModeTiles extends StatelessWidget {
+  const _ThemeModeTiles({
+    required this.language,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final String language;
+  final ThemeMode selected;
+  final ValueChanged<ThemeMode> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final ar = language == 'ar';
+    final options = <(ThemeMode, IconData, String)>[
+      (ThemeMode.light, Icons.light_mode_outlined, ar ? 'فاتح' : 'Light'),
+      (ThemeMode.dark, Icons.dark_mode_outlined, ar ? 'داكن' : 'Dark'),
+      (
+        ThemeMode.system,
+        Icons.brightness_auto_outlined,
+        ar ? 'نظام' : 'System',
+      ),
+    ];
+    return Column(
+      children: [
+        for (final (mode, icon, label) in options)
+          ListTile(
+            dense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+            leading: Icon(icon, size: 20),
+            title: Text(label),
+            trailing: selected == mode
+                ? Icon(
+                    Icons.check,
+                    color: Theme.of(context).colorScheme.primary,
+                  )
+                : null,
+            selected: selected == mode,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            onTap: selected == mode ? null : () => onSelected(mode),
+          ),
+      ],
+    );
   }
 }

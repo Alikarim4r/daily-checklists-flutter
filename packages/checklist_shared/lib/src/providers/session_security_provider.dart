@@ -31,8 +31,7 @@ class SessionSecurityState {
   final String biometricLabel;
   final bool ready;
 
-  bool get requiresUnlock =>
-      biometricEnabled && canUseBiometrics && !unlocked;
+  bool get requiresUnlock => biometricEnabled && canUseBiometrics && !unlocked;
 
   SessionSecurityState copyWith({
     bool? biometricEnabled,
@@ -79,27 +78,16 @@ class SessionSecurityNotifier extends StateNotifier<SessionSecurityState> {
     state = state.copyWith(biometricLabel: label);
   }
 
-  Future<void> onPasswordSignIn({
-    required String email,
-    required String password,
-  }) async {
-    if (_store.biometricEnabled && state.canUseBiometrics) {
-      await _store.saveCredentials(email: email, password: password);
-    }
+  void onPasswordSignIn() {
     state = state.copyWith(unlocked: true);
   }
 
-  Future<String?> enableBiometrics({
-    required String email,
-    required String password,
-    required String reason,
-  }) async {
+  Future<String?> enableBiometrics({required String reason}) async {
     if (!state.canUseBiometrics) {
       return 'Biometrics unavailable on this device';
     }
     final ok = await _bio.authenticate(localizedReason: reason);
     if (!ok) return 'Biometric confirmation failed';
-    await _store.saveCredentials(email: email, password: password);
     await _store.setBiometricEnabled(true);
     state = state.copyWith(biometricEnabled: true, unlocked: true);
     return null;
@@ -116,10 +104,6 @@ class SessionSecurityNotifier extends StateNotifier<SessionSecurityState> {
     return ok;
   }
 
-  Future<({String email, String password})?> storedCredentials() {
-    return _store.readCredentials();
-  }
-
   void lockForResume() {
     if (state.biometricEnabled && state.canUseBiometrics) {
       state = state.copyWith(unlocked: false);
@@ -129,5 +113,5 @@ class SessionSecurityNotifier extends StateNotifier<SessionSecurityState> {
 
 final sessionSecurityProvider =
     StateNotifierProvider<SessionSecurityNotifier, SessionSecurityState>((ref) {
-  return SessionSecurityNotifier(ref);
-});
+      return SessionSecurityNotifier(ref);
+    });

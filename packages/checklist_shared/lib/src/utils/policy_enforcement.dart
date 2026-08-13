@@ -21,8 +21,7 @@ class PhotoPolicyResult {
 
   bool get shouldWarn =>
       !ok &&
-      (severity == PolicySeverity.warning ||
-          severity == PolicySeverity.info);
+      (severity == PolicySeverity.warning || severity == PolicySeverity.info);
 
   String messageFor(String language) =>
       language == 'ar' ? messageAr : messageEn;
@@ -31,12 +30,7 @@ class PhotoPolicyResult {
 /// Items with a problem but no issue photo.
 List<InspectionItem> itemsMissingProblemPhoto(Inspection inspection) {
   return inspection.items
-      .where(
-        (i) =>
-            i.isProblem &&
-            (i.issueImagePath == null || i.issueImagePath!.trim().isEmpty) &&
-            (i.imagePath == null || i.imagePath!.trim().isEmpty),
-      )
+      .where((i) => i.isProblem && !i.hasIssuePhoto)
       .toList();
 }
 
@@ -50,8 +44,22 @@ List<InspectionItem> itemsMissingFixPhoto({
     if (prev == null || !prev.isProblem) return false;
     // Closing the work order: previous problem → current ideal answer.
     if (!item.isIdealAnswer) return false;
-    final fix = item.fixImagePath?.trim() ?? '';
-    return fix.isEmpty;
+    // Prefer pair-complete: every issue unit on this item should have a fix,
+    // or at least one fix photo when migrating legacy/incomplete pairs.
+    if (item.photoPairs.isNotEmpty) {
+      final open = item.photoPairs.where((p) => p.hasIssue && !p.hasFix);
+      if (open.isNotEmpty) return true;
+      return !item.hasFixPhoto;
+    }
+    return !item.hasFixPhoto;
+  }).toList();
+}
+
+/// Problem item that still has issue units without a linked fix photo.
+List<InspectionItem> itemsWithUnpairedFixPhotos(Inspection inspection) {
+  return inspection.items.where((item) {
+    if (!item.isProblem) return false;
+    return item.photoPairs.any((p) => p.hasIssue && !p.hasFix);
   }).toList();
 }
 
@@ -80,8 +88,7 @@ PhotoPolicyResult validateProblemPhotos({
     ok: false,
     missingItemIndexes: indexes,
     severity: policy.missingPhotoSeverity,
-    messageAr:
-        'بنود بمشكلة بدون صورة: $list. أضف صورة المشكلة قبل الإرسال.',
+    messageAr: 'بنود بمشكلة بدون صورة: $list. أضف صورة المشكلة قبل الإرسال.',
     messageEn:
         'Problem items without photo: $list. Attach an issue photo before submit.',
   );
@@ -182,19 +189,20 @@ Map<String, Map<int, bool>> buildProblemHistory({
   Inspection? current,
 }) {
   final map = <String, Map<int, bool>>{};
-  for (final insp in history) {
-    final day = <int, bool>{};
+  void absorb(Inspection insp) {
+    final day = map.putIfAbsent(insp.dateIso, () => <int, bool>{});
     for (final item in insp.items) {
-      day[item.itemIndex] = item.isProblem;
+      // Same calendar day with multiple checklists: problem if ANY list
+      // still flags the item (keeps open WOs from earlier lists counted).
+      day[item.itemIndex] = (day[item.itemIndex] == true) || item.isProblem;
     }
-    map[insp.dateIso] = day;
+  }
+
+  for (final insp in history) {
+    absorb(insp);
   }
   if (current != null) {
-    final day = <int, bool>{};
-    for (final item in current.items) {
-      day[item.itemIndex] = item.isProblem;
-    }
-    map[current.dateIso] = day;
+    absorb(current);
   }
   return map;
 }

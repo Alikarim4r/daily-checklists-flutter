@@ -6,8 +6,6 @@
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
-	<key>com.apple.security.network.server</key>
-	<true/>
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
 	<key>com.apple.security.files.downloads.read-write</key>
@@ -18,7 +16,7 @@
 	<true/>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)com.moehe.checklists.entry</string>
+		<string>$(AppIdentifierPrefix)com.moehe.checklists.checklistEntry</string>
 	</array>
 </dict>
 </plist>

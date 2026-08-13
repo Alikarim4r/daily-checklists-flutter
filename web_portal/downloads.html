@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>التحميلات — منصة الفحص اليومي</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css?v=1.2.1-6" />
+  <link rel="icon" href="./assets/portal_mark.png?v=1.2.1-6" />
+</head>
+<body data-page="downloads">
+  <div class="site-bg" aria-hidden="true"></div>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <a class="brand" href="./">
+        <img src="./assets/portal_mark.png?v=1.2.1-6" alt="" />
+        <span data-i18n="brand">الفحص اليومي</span>
+      </a>
+      <nav class="nav">
+        <a href="./" data-i18n="navAbout">التعريف</a>
+        <a href="./apps.html" data-i18n="navApps">التطبيقات</a>
+        <a href="./downloads.html" aria-current="page" data-i18n="navDownloads">التحميلات</a>
+        <div class="controls">
+          <button type="button" class="toggle-btn" data-lang-toggle>EN</button>
+          <button type="button" class="toggle-btn" data-theme-toggle>داكن</button>
+        </div>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap">
+    <section class="page-hero">
+      <h1 data-i18n="dlHeroTitle">تحميل التطبيقات</h1>
+      <p data-i18n="dlHeroLead">حمّل أندرويد وماك أو افتح الويب على iPhone.</p>
+      <p><span class="badge badge-ready" data-i18n="currentRelease">إصدار الويب الحالي 1.2.1 (6) — 12 أغسطس 2026</span></p>
+    </section>
+    <section class="section" style="padding-top:0">
+      <div class="download-grid">
+        <article class="download-item">
+          <h3>Android <span class="badge" data-artifact-status="android" data-i18n="artifactPending">بانتظار حزمة موقعة</span></h3>
+          <p data-i18n="dlAndroidBody">ملفات APK.</p>
+          <div class="dl-stack">
+            <a class="btn btn-primary is-disabled" aria-disabled="true" data-artifact="android" href="./downloads/android/inspection-entry.apk?v=1.2.1-6" download data-i18n="dlEntryApk">تحميل فحص إدخال</a>
+            <a class="btn btn-primary is-disabled" aria-disabled="true" data-artifact="android" href="./downloads/android/inspection-viewer.apk?v=1.2.1-6" download data-i18n="dlViewApk">تحميل فحص عرض</a>
+            <a class="btn btn-primary is-disabled" aria-disabled="true" data-artifact="android" href="./downloads/android/inspection-admin.apk?v=1.2.1-6" download data-i18n="dlAdminApk">تحميل فحص إدارة</a>
+          </div>
+        </article>
+        <article class="download-item">
+          <h3>Mac <span class="badge" data-artifact-status="macos" data-i18n="artifactPending">بانتظار حزمة موقعة</span></h3>
+          <p data-i18n="dlMacBody">ملفات ZIP لتطبيقات .app.</p>
+          <div class="dl-stack">
+            <a class="btn btn-primary is-disabled" aria-disabled="true" data-artifact="macos" href="./downloads/macos/Inspection-Entry-macOS.zip?v=1.2.1-6" download data-i18n="dlEntryMac">تحميل فحص إدخال (Mac)</a>
+            <a class="btn btn-primary is-disabled" aria-disabled="true" data-artifact="macos" href="./downloads/macos/Inspection-Viewer-macOS.zip?v=1.2.1-6" download data-i18n="dlViewMac">تحميل فحص عرض (Mac)</a>
+            <a class="btn btn-primary is-disabled" aria-disabled="true" data-artifact="macos" href="./downloads/macos/Inspection-Admin-macOS.zip?v=1.2.1-6" download data-i18n="dlAdminMac">تحميل فحص إدارة (Mac)</a>
+          </div>
+        </article>
+        <article class="download-item">
+          <h3>iPhone / iPad <span class="badge badge-ready" data-i18n="webReady">ويب متاح</span></h3>
+          <p data-i18n="dlIosBody">استخدم Safari.</p>
+          <div class="dl-stack">
+            <a class="btn btn-primary" href="./entry/?v=1.2.1-6" data-i18n="dlEntryIos">فتح فحص إدخال في Safari</a>
+            <a class="btn btn-primary" href="./viewer/?v=1.2.1-6" data-i18n="dlViewIos">فتح فحص عرض في Safari</a>
+            <a class="btn btn-primary" href="./admin/?v=1.2.1-6" data-i18n="dlAdminIos">فتح فحص إدارة في Safari</a>
+          </div>
+        </article>
+      </div>
+      <div class="note" data-i18n="dlNote">ملاحظة تثبيت.</div>
+    </section>
+    <section class="section">
+      <div class="creator">
+        <h2 data-i18n="creatorTitle">تم الإنشاء والتطوير بواسطة</h2>
+        <p class="role">المهندس: علي عبد الكريم الحسن</p>
+        <a href="tel:+97430058899" class="phone-ltr" dir="ltr">+974 3005 8899</a>
+        <a href="mailto:Support@AliMind.com">Support@AliMind.com</a>
+      </div>
+    </section>
+  </main>
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <div><strong data-i18n="brand">الفحص اليومي</strong></div>
+      <div class="footer-links">
+        <a href="./privacy.html" data-i18n="footerPrivacy">الخصوصية</a>
+        <a href="./support.html" data-i18n="footerSupport">الدعم</a>
+        <span data-i18n="footerNote">بوابة منصة الفحص اليومي — AliMind</span>
+      </div>
+    </div>
+  </footer>
+  <script src="./portal.js?v=1.2.1-6"></script>
+</body>
+</html>

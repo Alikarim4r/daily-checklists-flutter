@@ -8,13 +8,16 @@ class ChecklistCatalogRepository {
   ChecklistCatalogRepository(this._client);
   final SupabaseClient _client;
 
-  Future<List<ChecklistTemplate>> listTemplates({bool activeOnly = true}) async {
+  Future<List<ChecklistTemplate>> listTemplates({
+    bool activeOnly = true,
+  }) async {
     var q = _client.from('checklist_templates').select();
     if (activeOnly) q = q.eq('is_active', true);
     final rows = await q.order('code');
     return (rows as List)
         .map(
-          (e) => ChecklistTemplate.fromJson(Map<String, dynamic>.from(e as Map)),
+          (e) =>
+              ChecklistTemplate.fromJson(Map<String, dynamic>.from(e as Map)),
         )
         .toList();
   }
@@ -67,11 +70,7 @@ class ChecklistCatalogRepository {
   }) async {
     final row = await _client
         .from('checklist_templates')
-        .insert({
-          'code': code,
-          'name_en': nameEn,
-          'name_ar': nameAr,
-        })
+        .insert({'code': code, 'name_en': nameEn, 'name_ar': nameAr})
         .select()
         .single();
     return ChecklistTemplate.fromJson(Map<String, dynamic>.from(row));
@@ -87,9 +86,44 @@ class ChecklistCatalogRepository {
     return ChecklistTemplate.fromJson(Map<String, dynamic>.from(row));
   }
 
+  Future<ChecklistTemplate> updateTemplateFormTheme({
+    required String id,
+    required String formTheme,
+    String? formThemeAccent,
+  }) async {
+    final row = await _client
+        .from('checklist_templates')
+        .update({'form_theme': formTheme, 'form_theme_accent': formThemeAccent})
+        .eq('id', id)
+        .select()
+        .single();
+    return ChecklistTemplate.fromJson(Map<String, dynamic>.from(row));
+  }
+
   Future<void> deleteTemplate(String id) async {
     await _client.from('checklist_templates').delete().eq('id', id);
   }
+
+  Future<String> cloneTemplateVersion({
+    required String sourceTemplateId,
+    required String reason,
+  }) async =>
+      await _client.rpc(
+            'clone_checklist_template_version',
+            params: {
+              'p_source_template_id': sourceTemplateId,
+              'p_reason': reason,
+            },
+          )
+          as String;
+
+  Future<void> publishTemplateVersion({
+    required String templateId,
+    required String reason,
+  }) => _client.rpc(
+    'publish_checklist_template_version',
+    params: {'p_template_id': templateId, 'p_reason': reason},
+  );
 
   Future<CatalogItem> upsertTemplateItem({
     required String templateId,
@@ -156,6 +190,8 @@ class ChecklistCatalogRepository {
           'default_answer': item.defaultAnswer,
           'description_en': item.descriptionEn,
           'description_ar': item.descriptionAr,
+          for (final language in const ['bn', 'hi', 'ml', 'tl', 'ta'])
+            'description_$language': item.localizedDescriptions[language],
           'sort_order': item.sortOrder,
           'is_active': item.isActive,
           'overdue_after_days': item.overdueAfterDays,
@@ -197,7 +233,13 @@ class ChecklistCatalogRepository {
             defaultAnswer: '${raw['default'] ?? 'Y'}',
             descriptionEn: (raw['en'] ?? '') as String,
             descriptionAr: raw['ar'] as String?,
+            localizedDescriptions: {
+              for (final language in const ['bn', 'hi', 'ml', 'tl', 'ta'])
+                if ((raw[language] as String?)?.trim().isNotEmpty == true)
+                  language: (raw[language] as String).trim(),
+            },
             sortOrder: raw['id'] as int,
+            overdueAfterDays: (raw['overdue_days'] as num?)?.toInt() ?? 3,
           ),
       ];
     }
@@ -211,12 +253,11 @@ class ChecklistCatalogRepository {
       for (var i = 0; i < extras.length; i++)
         CatalogItem(
           id: extras[i].id,
-          itemIndex: extras[i].itemIndex > maxIndex
-              ? extras[i].itemIndex
-              : maxIndex + i + 1,
+          itemIndex: maxIndex + i + 1,
           defaultAnswer: extras[i].defaultAnswer,
           descriptionEn: extras[i].descriptionEn,
           descriptionAr: extras[i].descriptionAr,
+          localizedDescriptions: extras[i].localizedDescriptions,
           sortOrder: extras[i].sortOrder,
           isCustom: true,
           overdueAfterDays: extras[i].overdueAfterDays,
@@ -229,11 +270,81 @@ class ChecklistCatalogRepository {
           itemIndex: c.itemIndex,
           description: c.descriptionEn,
           descriptionAr: c.descriptionAr,
+          localizedDescriptions: c.localizedDescriptions,
           defaultAnswer: c.defaultAnswer,
           response: null,
           isCustom: c.isCustom,
           overdueAfterDays: c.overdueAfterDays,
         ),
     ];
+  }
+
+  /// Same merge as [resolveItemsForSite] but keeps [CatalogItem] metadata
+  /// (for Admin “effective list” preview).
+  Future<List<CatalogItem>> listEffectiveCatalogForSite({
+    required String checklistType,
+    required String siteId,
+  }) async {
+    final key = checklistType.isEmpty ? 'DEFAULT' : checklistType;
+    final template = await getTemplateByCode(key);
+    final extras = await listSiteExtraItems(siteId);
+
+    List<CatalogItem> catalog;
+    if (template != null && template.items.isNotEmpty) {
+      catalog = [
+        for (final c in template.items)
+          CatalogItem(
+            id: c.id,
+            itemIndex: c.itemIndex,
+            defaultAnswer: c.defaultAnswer,
+            descriptionEn: c.descriptionEn,
+            descriptionAr: c.descriptionAr,
+            localizedDescriptions: c.localizedDescriptions,
+            sortOrder: c.sortOrder,
+            isCustom: false,
+            overdueAfterDays: c.overdueAfterDays,
+          ),
+      ];
+    } else {
+      final rawList =
+          kChecklistLists[key] ?? kChecklistLists['DEFAULT'] ?? const [];
+      catalog = [
+        for (final raw in rawList)
+          CatalogItem(
+            itemIndex: raw['id'] as int,
+            defaultAnswer: '${raw['default'] ?? 'Y'}',
+            descriptionEn: (raw['en'] ?? '') as String,
+            descriptionAr: raw['ar'] as String?,
+            localizedDescriptions: {
+              for (final language in const ['bn', 'hi', 'ml', 'tl', 'ta'])
+                if ((raw[language] as String?)?.trim().isNotEmpty == true)
+                  language: (raw[language] as String).trim(),
+            },
+            sortOrder: raw['id'] as int,
+            isCustom: false,
+            overdueAfterDays: (raw['overdue_days'] as num?)?.toInt() ?? 3,
+          ),
+      ];
+    }
+
+    final maxIndex = catalog.isEmpty
+        ? 0
+        : catalog.map((e) => e.itemIndex).reduce((a, b) => a > b ? a : b);
+
+    return [
+      ...catalog,
+      for (var i = 0; i < extras.length; i++)
+        CatalogItem(
+          id: extras[i].id,
+          itemIndex: maxIndex + i + 1,
+          defaultAnswer: extras[i].defaultAnswer,
+          descriptionEn: extras[i].descriptionEn,
+          descriptionAr: extras[i].descriptionAr,
+          localizedDescriptions: extras[i].localizedDescriptions,
+          sortOrder: extras[i].sortOrder,
+          isCustom: true,
+          overdueAfterDays: extras[i].overdueAfterDays,
+        ),
+    ]..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
   }
 }

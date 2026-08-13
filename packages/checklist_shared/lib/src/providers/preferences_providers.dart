@@ -6,10 +6,57 @@ final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
   throw UnimplementedError('Override sharedPreferencesProvider in main()');
 });
 
-final themeModeProvider =
-    StateNotifierProvider<ThemeModeController, ThemeMode>((ref) {
-  return ThemeModeController(ref.watch(sharedPreferencesProvider));
-});
+final themeModeProvider = StateNotifierProvider<ThemeModeController, ThemeMode>(
+  (ref) {
+    return ThemeModeController(ref.watch(sharedPreferencesProvider));
+  },
+);
+
+/// Whether operational notification badges and notice centres are enabled.
+final notificationsEnabledProvider =
+    StateNotifierProvider<BoolPreferenceController, bool>((ref) {
+      return BoolPreferenceController(
+        ref.watch(sharedPreferencesProvider),
+        key: 'checklist_notifications_enabled',
+        defaultValue: true,
+      );
+    });
+
+/// Whether important actions and newly detected follow-ups play system sounds.
+final soundEnabledProvider =
+    StateNotifierProvider<BoolPreferenceController, bool>((ref) {
+      return BoolPreferenceController(
+        ref.watch(sharedPreferencesProvider),
+        key: 'checklist_sound_enabled',
+        defaultValue: true,
+      );
+    });
+
+/// Whether taps, successful saves, and alerts use device haptic feedback.
+final hapticsEnabledProvider =
+    StateNotifierProvider<BoolPreferenceController, bool>((ref) {
+      return BoolPreferenceController(
+        ref.watch(sharedPreferencesProvider),
+        key: 'checklist_haptics_enabled',
+        defaultValue: true,
+      );
+    });
+
+class BoolPreferenceController extends StateNotifier<bool> {
+  BoolPreferenceController(
+    this._prefs, {
+    required this.key,
+    required bool defaultValue,
+  }) : super(_prefs.getBool(key) ?? defaultValue);
+
+  final SharedPreferences _prefs;
+  final String key;
+
+  Future<void> setEnabled(bool enabled) async {
+    state = enabled;
+    await _prefs.setBool(key, enabled);
+  }
+}
 
 class ThemeModeController extends StateNotifier<ThemeMode> {
   ThemeModeController(this._prefs) : super(_read(_prefs));

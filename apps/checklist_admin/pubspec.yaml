@@ -1,7 +1,7 @@
 name: checklist_admin
 description: MOEHE Facility Daily Inspection — admin permissions and corrections.
 publish_to: "none"
-version: 1.0.0+1
+version: 1.2.1+6
 
 environment:
   sdk: ^3.12.2
@@ -15,11 +15,13 @@ dependencies:
   flutter_riverpod: ^2.6.1
   intl: ^0.20.2
   shared_preferences: ^2.5.3
+  image_picker: ^1.1.2
+  supabase_flutter: ^2.17.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^5.0.0
+  flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.3
 
 flutter_launcher_icons:
@@ -27,7 +29,7 @@ flutter_launcher_icons:
   ios: true
   remove_alpha_ios: true
   image_path: assets/branding/app_icon_simple.png
-  adaptive_icon_background: "#6B7280"
+  adaptive_icon_background: "#6B2D3C"
   adaptive_icon_foreground: assets/branding/app_icon_simple.png
   macos:
     generate: true
@@ -35,8 +37,8 @@ flutter_launcher_icons:
   web:
     generate: true
     image_path: assets/branding/app_icon_simple.png
-    background_color: "#6B7280"
-    theme_color: "#6B7280"
+    background_color: "#6B2D3C"
+    theme_color: "#8B3A4A"
 
 flutter:
   uses-material-design: true

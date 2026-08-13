@@ -73,20 +73,19 @@ class AppLabels {
   String get photoFixRequired =>
       call('photoFixRequired', 'Photo of repair required');
   String get photoRequiredMessage => call(
-        'photoRequiredMessage',
-        'Please attach a photo because there is a problem.',
-      );
+    'photoRequiredMessage',
+    'Please attach a photo because there is a problem.',
+  );
   String get photoFixMessage => call(
-        'photoFixMessage',
-        'Item has been repaired. Please attach a repair photo.',
-      );
+    'photoFixMessage',
+    'Item has been repaired. Please attach a repair photo.',
+  );
   String get previousIssue => call('previousIssue', 'Previous Problem');
   String get repairPhoto => call('repairPhoto', 'Repair Photo');
   String get problemIndicator => call('problemIndicator', 'Problem');
   String get idealIndicator => call('idealIndicator', 'Ideal');
   String get chooseSite => call('building', 'Choose a site');
-  String get mySites =>
-      language == 'ar' ? 'مواقعي' : 'My sites';
+  String get mySites => language == 'ar' ? 'مواقعي' : 'My sites';
   String get selectSiteHint => language == 'ar'
       ? 'اختر الموقع ثم قائمة الفحص داخل الموقع'
       : 'Select a site, then a checklist inside the site';

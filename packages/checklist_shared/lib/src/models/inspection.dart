@@ -1,5 +1,24 @@
 import 'enums.dart';
+import '../theme/form_paper_theme.dart';
+import '../utils/photo_pair.dart';
 import '../utils/storage_path_list.dart';
+
+Map<String, String> _localizedDescriptionsFromJson(Map<String, dynamic> json) {
+  final descriptions = <String, String>{};
+  final embedded = json['_localized_descriptions'];
+  if (embedded is Map) {
+    for (final entry in embedded.entries) {
+      final language = '${entry.key}';
+      final value = '${entry.value}'.trim();
+      if (value.isNotEmpty) descriptions[language] = value;
+    }
+  }
+  for (final language in const ['bn', 'hi', 'ml', 'tl', 'ta']) {
+    final value = (json['description_$language'] as String?)?.trim();
+    if (value != null && value.isNotEmpty) descriptions[language] = value;
+  }
+  return descriptions;
+}
 
 class InspectionItem {
   InspectionItem({
@@ -7,6 +26,7 @@ class InspectionItem {
     required this.itemIndex,
     required this.description,
     this.descriptionAr,
+    Map<String, String> localizedDescriptions = const {},
     this.response,
     this.actionsTaken = '',
     this.imagePath,
@@ -15,144 +35,269 @@ class InspectionItem {
     this.defaultAnswer = 'Y',
     this.isCustom = false,
     this.overdueAfterDays = 3,
-  });
+  }) : localizedDescriptions = Map<String, String>.of(localizedDescriptions);
 
   final String? id;
   final int itemIndex;
   final String description;
   final String? descriptionAr;
+  final Map<String, String> localizedDescriptions;
   ChecklistResponse? response;
   String actionsTaken;
   String? imagePath;
   String? issueImagePath;
   String? fixImagePath;
+
   /// Expected answer from catalog: Y or N (HTML `default`).
   String defaultAnswer;
   final bool isCustom;
+
   /// Consecutive problem days before Overdue for this item.
   int overdueAfterDays;
 
-  List<String> get issueImagePaths {
-    final raw = decodeStoragePathList(issueImagePath ?? imagePath);
-    return [
-      for (final p in raw)
-        if (remarkPhotoKindFromTagged(p) != RemarkPhotoKind.fix)
-          storagePathOf(p),
-    ];
+  /// Linked issue↔fix pairs (preferred API).
+  List<InspectionPhotoPair> get photoPairs => decodePhotoPairs(
+    issueImagePath: issueImagePath,
+    fixImagePath: fixImagePath,
+    imagePath: imagePath,
+  );
+
+  void setPhotoPairs(List<InspectionPhotoPair> pairs) {
+    final clean = <InspectionPhotoPair>[];
+    for (final p in pairs) {
+      if (p.isEmpty) continue;
+      clean.add(
+        InspectionPhotoPair(
+          id: p.id.isEmpty ? newPhotoPairId() : p.id,
+          issuePath: p.hasIssue ? storagePathOf(p.issuePath!) : null,
+          fixPath: p.hasFix ? storagePathOf(p.fixPath!) : null,
+        ),
+      );
+    }
+    issueImagePath = encodePhotoPairsV2(clean);
+    fixImagePath = encodeFixPathsMirror(clean);
+    String? firstIssue;
+    for (final p in clean) {
+      if (p.hasIssue) {
+        firstIssue = p.issuePath;
+        break;
+      }
+    }
+    imagePath = firstIssue;
   }
 
-  List<String> get fixImagePaths {
-    final raw = decodeStoragePathList(fixImagePath);
-    // Prefer explicitly tagged fix rows; also accept untagged legacy in this column.
-    return [
-      for (final p in raw)
-        if (remarkPhotoKindFromTagged(p) != RemarkPhotoKind.issue)
-          storagePathOf(p),
-    ];
-  }
+  List<String> get issueImagePaths => [
+    for (final p in photoPairs)
+      if (p.hasIssue) p.issuePath!,
+  ];
 
-  /// Stable ordered remark photos — kind is stored with the path (issue:/fix:).
-  List<({String path, RemarkPhotoKind kind})> get remarkPhotos {
-    final ordered = <({String path, RemarkPhotoKind kind})>[];
+  List<String> get fixImagePaths => [
+    for (final p in photoPairs)
+      if (p.hasFix) p.fixPath!,
+  ];
+
+  /// Stable ordered remark photos — issue then fix within each pair.
+  List<({String path, RemarkPhotoKind kind, String pairId})> get remarkPhotos {
+    final ordered = <({String path, RemarkPhotoKind kind, String pairId})>[];
     final seen = <String>{};
-
-    void addRaw(String raw, RemarkPhotoKind fallback) {
-      final kind = remarkPhotoKindFromPath(raw) ?? fallback;
-      final path = storagePathOf(raw);
-      if (path.isEmpty || !seen.add(path)) return;
-      ordered.add((path: path, kind: kind));
-    }
-
-    for (final p in decodeStoragePathList(issueImagePath ?? imagePath)) {
-      addRaw(p, RemarkPhotoKind.issue);
-    }
-    for (final p in decodeStoragePathList(fixImagePath)) {
-      addRaw(p, RemarkPhotoKind.fix);
+    for (final pair in photoPairs) {
+      if (pair.hasIssue && seen.add(pair.issuePath!)) {
+        ordered.add((
+          path: pair.issuePath!,
+          kind: RemarkPhotoKind.issue,
+          pairId: pair.id,
+        ));
+      }
+      if (pair.hasFix && seen.add(pair.fixPath!)) {
+        ordered.add((
+          path: pair.fixPath!,
+          kind: RemarkPhotoKind.fix,
+          pairId: pair.id,
+        ));
+      }
     }
     return ordered;
   }
 
+  /// Creates a new pair with an issue photo. Returns pair id.
+  String addPairWithIssue(String path) {
+    final raw = storagePathOf(path);
+    if (raw.isEmpty) return '';
+    final id = newPhotoPairId();
+    setPhotoPairs([...photoPairs, InspectionPhotoPair(id: id, issuePath: raw)]);
+    return id;
+  }
+
+  /// Sets or replaces the fix photo on an existing pair.
+  void setFixForPair(String pairId, String path) {
+    final raw = storagePathOf(path);
+    if (raw.isEmpty || pairId.isEmpty) return;
+    final next = <InspectionPhotoPair>[];
+    var found = false;
+    for (final p in photoPairs) {
+      if (p.id == pairId) {
+        found = true;
+        next.add(p.copyWith(fixPath: raw));
+      } else {
+        next.add(p);
+      }
+    }
+    if (!found) {
+      next.add(InspectionPhotoPair(id: pairId, fixPath: raw));
+    }
+    setPhotoPairs(next);
+    applyIdealAnswerAfterFix();
+  }
+
+  /// Attach fix to [pairId], or first open pair, or a new fix-only pair.
+  void appendFixImage(String path, {String? pairId}) {
+    final raw = storagePathOf(path);
+    if (raw.isEmpty) return;
+    if (pairId != null && pairId.isNotEmpty) {
+      setFixForPair(pairId, raw);
+      return;
+    }
+    final pairs = [...photoPairs];
+    final openIdx = pairs.indexWhere((p) => p.hasIssue && !p.hasFix);
+    if (openIdx >= 0) {
+      pairs[openIdx] = pairs[openIdx].copyWith(fixPath: raw);
+      setPhotoPairs(pairs);
+      applyIdealAnswerAfterFix();
+      return;
+    }
+    setPhotoPairs([
+      ...pairs,
+      InspectionPhotoPair(id: newPhotoPairId(), fixPath: raw),
+    ]);
+    applyIdealAnswerAfterFix();
+  }
+
+  void appendIssueImage(String path) => addPairWithIssue(path);
+
+  void removeIssueImage(String path, {String? pairId}) {
+    final raw = storagePathOf(path);
+    final next = <InspectionPhotoPair>[];
+    for (final p in photoPairs) {
+      if (pairId != null && pairId.isNotEmpty && p.id != pairId) {
+        next.add(p);
+        continue;
+      }
+      if (p.hasIssue && p.issuePath == raw) {
+        final cleared = p.copyWith(clearIssue: true);
+        if (!cleared.isEmpty) next.add(cleared);
+      } else {
+        next.add(p);
+      }
+    }
+    setPhotoPairs(next);
+  }
+
+  void removeFixImage(String path, {String? pairId}) {
+    final raw = storagePathOf(path);
+    final next = <InspectionPhotoPair>[];
+    for (final p in photoPairs) {
+      if (pairId != null && pairId.isNotEmpty && p.id != pairId) {
+        next.add(p);
+        continue;
+      }
+      if (p.hasFix && p.fixPath == raw) {
+        final cleared = p.copyWith(clearFix: true);
+        if (!cleared.isEmpty) next.add(cleared);
+      } else {
+        next.add(p);
+      }
+    }
+    setPhotoPairs(next);
+    // Deleting the last fix while closed→ideal re-opens the problem answer.
+    if (!hasFixPhoto && isIdealAnswer && hasIssuePhoto) {
+      final problem = problemResponse;
+      if (problem != null) response = problem;
+    }
+  }
+
+  /// Legacy flat setters — zip into pairs (prefer keeping existing pair ids by index).
   void setIssueImagePaths(List<String> paths) {
-    final tagged = [
+    final fixes = fixImagePaths;
+    final issues = [
       for (final p in paths)
-        if (storagePathOf(p).isNotEmpty)
-          tagStoragePath(p, RemarkPhotoKind.issue),
+        if (storagePathOf(p).isNotEmpty) storagePathOf(p),
     ];
-    issueImagePath = encodeStoragePathList(tagged);
-    imagePath = tagged.isEmpty ? null : storagePathOf(tagged.first);
+    final existing = photoPairs;
+    final n = issues.length > fixes.length ? issues.length : fixes.length;
+    setPhotoPairs([
+      for (var i = 0; i < n; i++)
+        InspectionPhotoPair(
+          id: i < existing.length ? existing[i].id : newPhotoPairId(),
+          issuePath: i < issues.length ? issues[i] : null,
+          fixPath: i < fixes.length ? fixes[i] : null,
+        ),
+    ]);
   }
 
   void setFixImagePaths(List<String> paths) {
-    final tagged = [
+    final issues = issueImagePaths;
+    final fixes = [
       for (final p in paths)
-        if (storagePathOf(p).isNotEmpty)
-          tagStoragePath(p, RemarkPhotoKind.fix),
+        if (storagePathOf(p).isNotEmpty) storagePathOf(p),
     ];
-    fixImagePath = encodeStoragePathList(tagged);
-  }
-
-  /// Keep columns aligned with each path's permanent kind.
-  void _commitPhotoBuckets(
-    Iterable<({String path, RemarkPhotoKind kind})> photos,
-  ) {
-    final issues = <String>[];
-    final fixes = <String>[];
-    final seen = <String>{};
-    for (final photo in photos) {
-      final path = storagePathOf(photo.path);
-      if (path.isEmpty || !seen.add(path)) continue;
-      if (photo.kind == RemarkPhotoKind.fix) {
-        fixes.add(path);
-      } else {
-        issues.add(path);
-      }
-    }
-    setIssueImagePaths(issues);
-    setFixImagePaths(fixes);
-  }
-
-  void appendIssueImage(String path) {
-    final raw = storagePathOf(path);
-    if (raw.isEmpty) return;
-    final next = [
-      for (final p in remarkPhotos)
-        if (p.path != raw) p,
-      (path: raw, kind: RemarkPhotoKind.issue),
-    ];
-    _commitPhotoBuckets(next);
-  }
-
-  void appendFixImage(String path) {
-    final raw = storagePathOf(path);
-    if (raw.isEmpty) return;
-    final next = [
-      for (final p in remarkPhotos)
-        if (p.path != raw) p,
-      (path: raw, kind: RemarkPhotoKind.fix),
-    ];
-    _commitPhotoBuckets(next);
-  }
-
-  void removeIssueImage(String path) {
-    final raw = storagePathOf(path);
-    _commitPhotoBuckets([
-      for (final p in remarkPhotos)
-        if (p.path != raw) p,
+    final existing = photoPairs;
+    final n = issues.length > fixes.length ? issues.length : fixes.length;
+    setPhotoPairs([
+      for (var i = 0; i < n; i++)
+        InspectionPhotoPair(
+          id: i < existing.length ? existing[i].id : newPhotoPairId(),
+          issuePath: i < issues.length ? issues[i] : null,
+          fixPath: i < fixes.length ? fixes[i] : null,
+        ),
     ]);
   }
 
-  void removeFixImage(String path) {
-    final raw = storagePathOf(path);
-    _commitPhotoBuckets([
-      for (final p in remarkPhotos)
-        if (p.path != raw) p,
-    ]);
-  }
+  Map<String, String> get descriptions => {
+    'en': description,
+    if ((descriptionAr ?? '').isNotEmpty) 'ar': descriptionAr!,
+    ...localizedDescriptions,
+  };
 
   String descriptionFor(String language) =>
-      language == 'ar' && (descriptionAr ?? '').isNotEmpty
-          ? descriptionAr!
-          : description;
+      descriptions[language] ?? description;
+
+  /// Catalog healthy/default answer (Y/N).
+  ChecklistResponse? get idealResponse =>
+      ChecklistResponse.fromDb(defaultAnswer);
+
+  /// Opposite of [idealResponse] (the problem option for this item).
+  ChecklistResponse? get problemResponse {
+    final ideal = idealResponse;
+    if (ideal == ChecklistResponse.yes) return ChecklistResponse.no;
+    if (ideal == ChecklistResponse.no) return ChecklistResponse.yes;
+    return null;
+  }
+
+  /// After a repair photo is attached, force the healthy/default answer.
+  void applyIdealAnswerAfterFix() {
+    final ideal = idealResponse;
+    if (ideal == null || ideal == ChecklistResponse.na) return;
+    response = ideal;
+  }
+
+  /// Applies a Yes/No/NA change with photo gates based on this item's ideal.
+  ///
+  /// Closing a problem (problem → ideal) requires a linked fix photo.
+  /// Returns an error message when blocked; `null` when applied.
+  String? trySetResponse(ChecklistResponse? next, {required String language}) {
+    final closingProblem =
+        isProblem &&
+        next != null &&
+        next != ChecklistResponse.na &&
+        next.shortCode == defaultAnswer.toUpperCase();
+    if (closingProblem && !hasFixPhoto) {
+      return language == 'ar'
+          ? 'لإغلاق المشكلة وتحويل الجواب للحالة السليمة يجب رفع صورة إصلاح أولاً (مرتبطة بصورة المشكلة).'
+          : 'To close the problem and select the healthy answer, attach a fix photo first (linked to the issue photo).';
+    }
+    response = next;
+    return null;
+  }
 
   /// Same rule as HTML `isProblemResponse`: opposite of default (not NA).
   bool get isProblem {
@@ -185,85 +330,77 @@ class InspectionItem {
   factory InspectionItem.fromJson(Map<String, dynamic> json) {
     final rawDefault = (json['default_answer'] ?? 'Y') as String;
     final defaultAnswer =
-        ChecklistResponse.fromDb(rawDefault)?.shortCode ?? rawDefault.toUpperCase();
-    final issuePaths = decodeStoragePathList(
-      json['issue_image_path'] as String? ?? json['image_path'] as String?,
-    );
-    final fixPaths =
-        decodeStoragePathList(json['fix_image_path'] as String?);
+        ChecklistResponse.fromDb(rawDefault)?.shortCode ??
+        rawDefault.toUpperCase();
     final item = InspectionItem(
       id: json['id'] as String?,
       itemIndex: json['item_index'] as int,
       description: (json['description'] ?? '') as String,
       descriptionAr: json['description_ar'] as String?,
+      localizedDescriptions: _localizedDescriptionsFromJson(json),
       response: ChecklistResponse.fromDb(json['response'] as String?),
       actionsTaken: (json['actions_taken'] ?? '') as String,
-      imagePath: null,
-      issueImagePath: null,
-      fixImagePath: null,
+      imagePath: json['image_path'] as String?,
+      issueImagePath: json['issue_image_path'] as String?,
+      fixImagePath: json['fix_image_path'] as String?,
       defaultAnswer: defaultAnswer,
       isCustom: json['is_custom'] as bool? ?? false,
       overdueAfterDays: (json['overdue_after_days'] as num?)?.toInt() ?? 3,
     );
-    // Tag + bucket once so kinds stay fixed (issue:/fix: prefixes).
-    item._commitPhotoBuckets([
-      for (final p in issuePaths)
-        (
-          path: storagePathOf(p),
-          kind: remarkPhotoKindFromPath(p) ?? RemarkPhotoKind.issue,
-        ),
-      for (final p in fixPaths)
-        (
-          path: storagePathOf(p),
-          kind: remarkPhotoKindFromPath(p) ?? RemarkPhotoKind.fix,
-        ),
-    ]);
+    // Normalize to v2 pairs on load so subsequent saves keep pairing.
+    item.setPhotoPairs(item.photoPairs);
     return item;
   }
 
   Map<String, dynamic> toInsertJson(String inspectionId) => {
-        'inspection_id': inspectionId,
-        'item_index': itemIndex,
-        'description': description,
-        if (descriptionAr != null) 'description_ar': descriptionAr,
-        'response': response?.dbValue,
-        'actions_taken': actionsTaken,
-        'image_path': _firstIssueRawPath,
-        'issue_image_path': _encodedTaggedIssues,
-        'fix_image_path': _encodedTaggedFixes,
-        'default_answer': defaultAnswer,
-        'is_custom': isCustom,
-        'overdue_after_days': overdueAfterDays,
-      };
+    'inspection_id': inspectionId,
+    'item_index': itemIndex,
+    'description': description,
+    if (descriptionAr != null) 'description_ar': descriptionAr,
+    for (final language in const ['bn', 'hi', 'ml', 'tl', 'ta'])
+      'description_$language': localizedDescriptions[language],
+    'response': response?.dbValue,
+    'actions_taken': actionsTaken,
+    'image_path': _firstIssueRawPath,
+    'issue_image_path': issueImagePath,
+    'fix_image_path': fixImagePath,
+    'default_answer': defaultAnswer,
+    'is_custom': isCustom,
+    'overdue_after_days': overdueAfterDays,
+  };
 
   Map<String, dynamic> toUpdateJson() => {
-        'response': response?.dbValue,
-        'actions_taken': actionsTaken,
-        'image_path': _firstIssueRawPath,
-        'issue_image_path': _encodedTaggedIssues,
-        'fix_image_path': _encodedTaggedFixes,
-        'default_answer': defaultAnswer,
-        'overdue_after_days': overdueAfterDays,
-      };
+    'response': response?.dbValue,
+    'actions_taken': actionsTaken,
+    'image_path': _firstIssueRawPath,
+    'issue_image_path': issueImagePath,
+    'fix_image_path': fixImagePath,
+    'default_answer': defaultAnswer,
+    'overdue_after_days': overdueAfterDays,
+  };
+
+  Map<String, dynamic> toRpcJson() => {
+    if (id != null) 'id': id,
+    'item_index': itemIndex,
+    'description': description,
+    'description_ar': descriptionAr,
+    '_localized_descriptions': localizedDescriptions,
+    'response': response?.dbValue,
+    'actions_taken': actionsTaken,
+    'image_path': _firstIssueRawPath,
+    'issue_image_path': issueImagePath,
+    'fix_image_path': fixImagePath,
+    'default_answer': defaultAnswer,
+    'is_custom': isCustom,
+    'overdue_after_days': overdueAfterDays,
+  };
 
   String? get _firstIssueRawPath {
-    for (final p in remarkPhotos) {
-      if (p.kind == RemarkPhotoKind.issue) return p.path;
+    for (final p in photoPairs) {
+      if (p.hasIssue) return p.issuePath;
     }
     return null;
   }
-
-  String? get _encodedTaggedIssues => encodeStoragePathList([
-        for (final p in remarkPhotos)
-          if (p.kind == RemarkPhotoKind.issue)
-            tagStoragePath(p.path, RemarkPhotoKind.issue),
-      ]);
-
-  String? get _encodedTaggedFixes => encodeStoragePathList([
-        for (final p in remarkPhotos)
-          if (p.kind == RemarkPhotoKind.fix)
-            tagStoragePath(p.path, RemarkPhotoKind.fix),
-      ]);
 }
 
 enum ColorCode { empty, ok, problem, na }
@@ -286,13 +423,31 @@ class Inspection {
     this.submittedBy,
     this.approvedAt,
     this.approvedBy,
+    this.workflowNote,
+    this.workflowChangedAt,
+    this.workflowChangedBy,
     this.createdAt,
     this.updatedAt,
+    this.version = 1,
+    this.referenceNo = '',
+    this.templateId,
+    this.templateCodeSnapshot,
+    this.templateVersionSnapshot,
+    this.templateNameEnSnapshot,
+    this.templateNameArSnapshot,
     List<InspectionItem>? items,
     this.siteNameEn = '',
     this.siteNameAr = '',
     this.pin = '',
     this.organizationId = '',
+    this.formTheme = 'classic_gold',
+    this.formThemeAccent,
+    this.parentSiteId,
+    this.parentFormTheme,
+    this.parentFormThemeAccent,
+    this.resolvedFormTheme,
+    this.resolvedFormThemeAccent,
+    this.formThemeSource,
   }) : items = items ?? [];
 
   final String id;
@@ -311,17 +466,45 @@ class Inspection {
   final String? submittedBy;
   final DateTime? approvedAt;
   final String? approvedBy;
+  final String? workflowNote;
+  final DateTime? workflowChangedAt;
+  final String? workflowChangedBy;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  int version;
+  final String referenceNo;
+  final String? templateId;
+  final String? templateCodeSnapshot;
+  final int? templateVersionSnapshot;
+  final String? templateNameEnSnapshot;
+  final String? templateNameArSnapshot;
   final List<InspectionItem> items;
   final String siteNameEn;
   final String siteNameAr;
   final String pin;
   final String organizationId;
+  final String formTheme;
+  final String? formThemeAccent;
+  final String? parentSiteId;
+  final String? parentFormTheme;
+  final String? parentFormThemeAccent;
+  final String? resolvedFormTheme;
+  final String? resolvedFormThemeAccent;
+  final String? formThemeSource;
+
+  /// Effective paper/list theme, including campus inheritance.
+  FormPaperTheme get paperTheme => FormPaperTheme.resolve(
+    themeDb: resolvedFormTheme ?? formTheme,
+    accentHex: resolvedFormThemeAccent ?? formThemeAccent,
+    parentThemeDb: parentFormTheme,
+    parentAccentHex: parentFormThemeAccent,
+  );
 
   bool get isSubmitted => status == InspectionStatus.submitted;
   bool get isApproved => reviewStatus == ReviewStatus.approved;
   bool get awaitingReview => reviewStatus == ReviewStatus.submitted;
+  bool get isReturned => reviewStatus == ReviewStatus.returned;
+  bool get isTerminal => reviewStatus.isTerminal;
 
   String get dateIso =>
       '${inspectionDate.year.toString().padLeft(4, '0')}-'
@@ -351,8 +534,9 @@ class Inspection {
       inspectorUserId: json['inspector_user_id'] as String?,
       signaturePath: json['signature_path'] as String?,
       status: InspectionStatus.fromDb((json['status'] ?? 'draft') as String),
-      reviewStatus:
-          ReviewStatus.fromDb(json['review_status'] as String? ?? 'draft'),
+      reviewStatus: ReviewStatus.fromDb(
+        json['review_status'] as String? ?? 'draft',
+      ),
       submittedAt: json['submitted_at'] != null
           ? DateTime.tryParse(json['submitted_at'] as String)
           : null,
@@ -361,19 +545,39 @@ class Inspection {
           ? DateTime.tryParse(json['approved_at'] as String)
           : null,
       approvedBy: json['approved_by'] as String?,
+      workflowNote: json['workflow_note'] as String?,
+      workflowChangedAt: json['workflow_changed_at'] != null
+          ? DateTime.tryParse(json['workflow_changed_at'] as String)
+          : null,
+      workflowChangedBy: json['workflow_changed_by'] as String?,
       createdAt: json['created_at'] != null
           ? DateTime.tryParse(json['created_at'] as String)
           : null,
       updatedAt: json['updated_at'] != null
           ? DateTime.tryParse(json['updated_at'] as String)
           : null,
+      version: (json['version'] as num?)?.toInt() ?? 1,
+      referenceNo: (json['reference_no'] ?? '') as String,
+      templateId: json['template_id'] as String?,
+      templateCodeSnapshot: json['template_code_snapshot'] as String?,
+      templateVersionSnapshot: (json['template_version_snapshot'] as num?)
+          ?.toInt(),
+      templateNameEnSnapshot: json['template_name_en_snapshot'] as String?,
+      templateNameArSnapshot: json['template_name_ar_snapshot'] as String?,
       items: items,
       siteNameEn: (site?['name_en'] ?? '') as String,
       siteNameAr: (site?['name_ar'] ?? '') as String,
       pin: (site?['pin'] ?? '') as String,
-      organizationId: (site?['organization_id'] ??
-              json['organization_id'] ??
-              '') as String,
+      organizationId:
+          (site?['organization_id'] ?? json['organization_id'] ?? '') as String,
+      formTheme: (site?['form_theme'] as String?) ?? 'classic_gold',
+      formThemeAccent: site?['form_theme_accent'] as String?,
+      parentSiteId: site?['parent_site_id'] as String?,
+      parentFormTheme: json['_parent_form_theme'] as String?,
+      parentFormThemeAccent: json['_parent_form_theme_accent'] as String?,
+      resolvedFormTheme: json['_resolved_form_theme'] as String?,
+      resolvedFormThemeAccent: json['_resolved_form_theme_accent'] as String?,
+      formThemeSource: json['_form_theme_source'] as String?,
     );
   }
 }

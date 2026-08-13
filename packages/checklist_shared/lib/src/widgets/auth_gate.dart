@@ -5,12 +5,14 @@ import '../models/enums.dart';
 import '../models/profile.dart';
 import '../providers/providers.dart';
 import '../providers/session_security_provider.dart';
+import '../security/session_relock_policy.dart';
 import '../theme/checklist_brand.dart';
 
 typedef ProfilePredicate = bool Function(Profile profile);
 typedef HomeBuilder = Widget Function(BuildContext context, Profile profile);
 
 /// Login → approval → role gate → optional site access → home.
+/// Layout aligned with smart-meters AppLoginPanel.
 class ChecklistAuthGate extends ConsumerStatefulWidget {
   const ChecklistAuthGate({
     super.key,
@@ -18,6 +20,11 @@ class ChecklistAuthGate extends ConsumerStatefulWidget {
     required this.subtitle,
     required this.allowedForProfile,
     required this.homeBuilder,
+    this.language = 'en',
+    this.onLanguageChanged,
+    this.allowSelfRegistration = true,
+    this.registrationRequestedRole = 'technician_request',
+    this.brandMarkAsset,
     this.siteAccessRequirement = SiteAccessRequirement.none,
     this.accessDeniedMessage = 'لا تملك صلاحية استخدام هذا التطبيق.',
     this.noSiteAccessMessage =
@@ -28,6 +35,11 @@ class ChecklistAuthGate extends ConsumerStatefulWidget {
   final String subtitle;
   final ProfilePredicate allowedForProfile;
   final HomeBuilder homeBuilder;
+  final String language;
+  final ValueChanged<String>? onLanguageChanged;
+  final bool allowSelfRegistration;
+  final String registrationRequestedRole;
+  final String? brandMarkAsset;
   final SiteAccessRequirement siteAccessRequirement;
   final String accessDeniedMessage;
   final String noSiteAccessMessage;
@@ -36,49 +48,82 @@ class ChecklistAuthGate extends ConsumerStatefulWidget {
   ConsumerState<ChecklistAuthGate> createState() => _ChecklistAuthGateState();
 }
 
-class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
+class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
+    with WidgetsBindingObserver {
+  final _formKey = GlobalKey<FormState>();
   final email = TextEditingController();
   final password = TextEditingController();
+  final fullName = TextEditingController();
   bool loading = false;
+  bool obscurePassword = true;
+  bool registerMode = false;
   String? error;
+  String? info;
+  final SessionRelockPolicy _relockPolicy = SessionRelockPolicy();
 
-  /// Temporary trial login (staging/demo only). Remove when real auth is ready.
+  /// Trial login credentials (owner account unchanged).
   static const _demoEnabled = bool.fromEnvironment(
     'DEMO_LOGIN',
-    defaultValue: true,
+    defaultValue: false,
   );
   static const _demoEmail = String.fromEnvironment(
     'DEMO_EMAIL',
-    defaultValue: 'alikarim4r@gmail.com',
+    defaultValue: '',
   );
   static const _demoPassword = String.fromEnvironment(
     'DEMO_PASSWORD',
-    defaultValue: 'DemoTemp2026!',
+    defaultValue: '',
   );
+
+  bool get _demoConfigured =>
+      _demoEnabled && _demoEmail.isNotEmpty && _demoPassword.isNotEmpty;
+
+  bool get ar => widget.language == 'ar';
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     email.dispose();
     password.dispose();
+    fullName.dispose();
     super.dispose();
   }
 
-  Future<void> _signIn({String? overrideEmail, String? overridePassword}) async {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _relockPolicy.onBackgrounded();
+      return;
+    }
+    if (state == AppLifecycleState.resumed && _relockPolicy.onResumed()) {
+      ref.read(sessionSecurityProvider.notifier).lockForResume();
+    }
+  }
+
+  Future<void> _signIn({
+    String? overrideEmail,
+    String? overridePassword,
+  }) async {
     setState(() {
       loading = true;
       error = null;
+      info = null;
     });
     try {
       final mail = (overrideEmail ?? email.text).trim();
       final pass = overridePassword ?? password.text;
-      await ref.read(authRepositoryProvider).signIn(
-            email: mail,
-            password: pass,
-          );
-      await ref.read(sessionSecurityProvider.notifier).onPasswordSignIn(
-            email: mail,
-            password: pass,
-          );
+      await ref
+          .read(authRepositoryProvider)
+          .signIn(email: mail, password: pass);
+      ref.read(sessionSecurityProvider.notifier).onPasswordSignIn();
       ref.invalidate(currentProfileProvider);
     } catch (e) {
       setState(() => error = e.toString());
@@ -87,33 +132,42 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
     }
   }
 
-  Future<void> _biometricQuickSignIn() async {
-    final security = ref.read(sessionSecurityProvider);
-    final ar = Directionality.of(context) == TextDirection.rtl;
+  Future<void> _signUp() async {
+    if (!_formKey.currentState!.validate()) return;
     setState(() {
       loading = true;
       error = null;
+      info = null;
     });
     try {
-      final ok = await ref.read(sessionSecurityProvider.notifier).unlock(
-            reason: ar
-                ? 'استخدم ${security.biometricLabel} لتسجيل الدخول'
-                : 'Use ${security.biometricLabel} to sign in',
+      await ref
+          .read(authRepositoryProvider)
+          .signUp(
+            email: email.text.trim(),
+            password: password.text,
+            fullName: fullName.text.trim(),
+            requestedRole: widget.registrationRequestedRole,
           );
-      if (!ok) {
-        setState(() => error = ar ? 'فشل التحقق بالبصمة' : 'Biometric failed');
-        return;
-      }
-      final creds =
-          await ref.read(sessionSecurityProvider.notifier).storedCredentials();
-      if (creds == null) {
-        setState(() =>
-            error = ar ? 'لا توجد بيانات محفوظة' : 'No saved credentials');
-        return;
-      }
-      await _signIn(overrideEmail: creds.email, overridePassword: creds.password);
+      setState(() {
+        registerMode = false;
+        info = ar
+            ? 'تم إرسال طلب التسجيل. انتظر موافقة المسؤول قبل الدخول.'
+            : 'Registration submitted. Wait for admin approval before signing in.';
+        password.clear();
+      });
+    } catch (e) {
+      setState(() => error = e.toString());
     } finally {
       if (mounted) setState(() => loading = false);
+    }
+  }
+
+  Future<void> _submit() async {
+    if (registerMode && widget.allowSelfRegistration) {
+      await _signUp();
+    } else {
+      if (!_formKey.currentState!.validate()) return;
+      await _signIn();
     }
   }
 
@@ -127,17 +181,15 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
   Widget build(BuildContext context) {
     final auth = ref.watch(authStateProvider);
     return auth.when(
-      loading: () => const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      ),
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (e, _) => Scaffold(body: Center(child: Text('$e'))),
       data: (state) {
         if (state.session == null) return _loginScaffold();
         final profileAsync = ref.watch(currentProfileProvider);
         return profileAsync.when(
-          loading: () => const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          ),
+          loading: () =>
+              const Scaffold(body: Center(child: CircularProgressIndicator())),
           error: (e, _) => Scaffold(body: Center(child: Text('$e'))),
           data: (profile) {
             if (profile == null) {
@@ -146,12 +198,16 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Text('لم يتم العثور على الملف الشخصي.'),
+                      Text(
+                        ar
+                            ? 'لم يتم العثور على الملف الشخصي.'
+                            : 'Profile not found.',
+                      ),
                       const SizedBox(height: 12),
                       FilledButton(
                         onPressed: () =>
                             ref.read(authRepositoryProvider).signOut(),
-                        child: const Text('خروج'),
+                        child: Text(ar ? 'خروج' : 'Sign out'),
                       ),
                     ],
                   ),
@@ -160,7 +216,9 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
             }
             if (!profile.isApprovedActive && !profile.isPlatformOwner) {
               return _statusScaffold(
-                'الحساب بانتظار الموافقة أو غير نشط.',
+                ar
+                    ? 'الحساب بانتظار الموافقة أو غير نشط.'
+                    : 'Account pending approval or inactive.',
                 profile,
               );
             }
@@ -171,9 +229,9 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
                 !profile.isPlatformOwner &&
                 profile.role != UserRole.superAdmin) {
               return FutureBuilder<int>(
-                future: ref.read(siteRepositoryProvider).countMyAccess(
-                      requirement: widget.siteAccessRequirement,
-                    ),
+                future: ref
+                    .read(siteRepositoryProvider)
+                    .countMyAccess(requirement: widget.siteAccessRequirement),
                 builder: (context, snap) {
                   if (!snap.hasData) {
                     return const Scaffold(
@@ -181,10 +239,7 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
                     );
                   }
                   if (snap.data! < 1) {
-                    return _statusScaffold(
-                      widget.noSiteAccessMessage,
-                      profile,
-                    );
+                    return _statusScaffold(widget.noSiteAccessMessage, profile);
                   }
                   return _maybeBiometricGate(
                     context,
@@ -209,7 +264,6 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     if (!security.requiresUnlock) return home;
-    final ar = Directionality.of(context) == TextDirection.rtl;
     return Scaffold(
       body: Center(
         child: Padding(
@@ -224,12 +278,17 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
                     ? 'افتح التطبيق عبر ${security.biometricLabel}'
                     : 'Unlock with ${security.biometricLabel}',
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               const SizedBox(height: 20),
               FilledButton.icon(
                 onPressed: () async {
-                  await ref.read(sessionSecurityProvider.notifier).unlock(
+                  await ref
+                      .read(sessionSecurityProvider.notifier)
+                      .unlock(
                         reason: ar
                             ? 'استخدم ${security.biometricLabel} للمتابعة'
                             : 'Use ${security.biometricLabel} to continue',
@@ -264,7 +323,7 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
               const SizedBox(height: 16),
               FilledButton(
                 onPressed: () => ref.read(authRepositoryProvider).signOut(),
-                child: const Text('خروج'),
+                child: Text(ar ? 'خروج' : 'Sign out'),
               ),
             ],
           ),
@@ -273,9 +332,50 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
     );
   }
 
+  Widget _brandMark() {
+    final asset = widget.brandMarkAsset;
+    if (asset != null && asset.isNotEmpty) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Image.asset(
+          asset,
+          width: 72,
+          height: 72,
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => _fallbackMark(),
+        ),
+      );
+    }
+    return _fallbackMark();
+  }
+
+  Widget _fallbackMark() {
+    return Container(
+      width: 72,
+      height: 72,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        gradient: ChecklistChrome.iconWellGradient,
+      ),
+      alignment: Alignment.center,
+      child: Icon(
+        Icons.fact_check_rounded,
+        size: 36,
+        color: ChecklistChrome.iconGlyph,
+      ),
+    );
+  }
+
   Widget _loginScaffold() {
-    final scheme = Theme.of(context).colorScheme;
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final registering = widget.allowSelfRegistration && registerMode;
+    final subtitle = registering
+        ? (ar
+              ? 'أنشئ حساباً. سيظهر لدى المشرف للموافقة قبل الدخول.'
+              : 'Create an account. An admin must approve before access.')
+        : widget.subtitle;
+
     return Scaffold(
       backgroundColor: dark
           ? ChecklistChrome.darkCanvas
@@ -283,127 +383,278 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate> {
               ChecklistChrome.accentSoft.withValues(alpha: 0.55),
               Colors.white,
             ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: Card(
-            elevation: dark ? 0 : 8,
-            color: dark ? ChecklistChrome.darkSurface : scheme.surface,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-              side: dark
-                  ? const BorderSide(color: ChecklistChrome.darkBorder)
-                  : BorderSide.none,
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    widget.appTitle,
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: dark ? ChecklistChrome.darkInk : null,
-                    ),
-                    textAlign: TextAlign.center,
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: dark ? ChecklistChrome.darkSurface : Colors.white,
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: ChecklistChrome.accent.withValues(alpha: 0.28),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    widget.subtitle,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: dark
-                          ? ChecklistChrome.darkInkMuted
-                          : Colors.black54,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  TextField(
-                    controller: email,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(
-                      labelText: 'البريد الإلكتروني',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: password,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'كلمة المرور',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  if (error != null) ...[
-                    const SizedBox(height: 8),
-                    Text(error!, style: const TextStyle(color: Colors.red)),
-                  ],
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: ChecklistChrome.accent,
-                        minimumSize: const Size.fromHeight(48),
-                      ),
-                      onPressed: loading ? null : () => _signIn(),
-                      child: loading
-                          ? const SizedBox(
-                              width: 22,
-                              height: 22,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('دخول'),
-                    ),
-                  ),
-                  Builder(
-                    builder: (context) {
-                      final security = ref.watch(sessionSecurityProvider);
-                      if (!security.ready ||
-                          !security.biometricEnabled ||
-                          !security.canUseBiometrics) {
-                        return const SizedBox.shrink();
-                      }
-                      final ar =
-                          Directionality.of(context) == TextDirection.rtl;
-                      return Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed:
-                                loading ? null : _biometricQuickSignIn,
-                            icon: const Icon(Icons.fingerprint),
-                            label: Text(
-                              ar
-                                  ? 'دخول عبر ${security.biometricLabel}'
-                                  : 'Continue with ${security.biometricLabel}',
+                  boxShadow: dark
+                      ? null
+                      : [
+                          BoxShadow(
+                            color: ChecklistChrome.primary.withValues(
+                              alpha: 0.10,
+                            ),
+                            blurRadius: 28,
+                            offset: const Offset(0, 12),
+                          ),
+                        ],
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (widget.onLanguageChanged != null)
+                          Align(
+                            alignment: AlignmentDirectional.centerEnd,
+                            child: SegmentedButton<String>(
+                              style: const ButtonStyle(
+                                visualDensity: VisualDensity.compact,
+                              ),
+                              segments: const [
+                                ButtonSegment(value: 'en', label: Text('E')),
+                                ButtonSegment(value: 'ar', label: Text('ع')),
+                              ],
+                              selected: {widget.language},
+                              onSelectionChanged: (s) =>
+                                  widget.onLanguageChanged!(s.first),
                             ),
                           ),
+                        const SizedBox(height: 8),
+                        Center(child: _brandMark()),
+                        const SizedBox(height: 16),
+                        Text(
+                          widget.appTitle,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            color: dark
+                                ? ChecklistChrome.darkInk
+                                : ChecklistChrome.ink,
+                          ),
                         ),
-                      );
-                    },
+                        const SizedBox(height: 8),
+                        Text(
+                          subtitle,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: dark
+                                ? ChecklistChrome.darkInkMuted
+                                : ChecklistChrome.inkMuted,
+                            height: 1.35,
+                          ),
+                        ),
+                        const SizedBox(height: 22),
+                        if (registering) ...[
+                          TextFormField(
+                            controller: fullName,
+                            textInputAction: TextInputAction.next,
+                            textCapitalization: TextCapitalization.words,
+                            decoration: InputDecoration(
+                              labelText: ar ? 'الاسم الكامل' : 'Full name',
+                              prefixIcon: const Icon(
+                                Icons.person_outline_rounded,
+                              ),
+                              border: const OutlineInputBorder(),
+                            ),
+                            validator: (v) {
+                              if (v == null || v.trim().isEmpty) {
+                                return ar ? 'الاسم مطلوب' : 'Name is required';
+                              }
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 14),
+                        ],
+                        TextFormField(
+                          controller: email,
+                          keyboardType: TextInputType.emailAddress,
+                          textInputAction: TextInputAction.next,
+                          autocorrect: false,
+                          decoration: InputDecoration(
+                            labelText: ar ? 'البريد الإلكتروني' : 'Email',
+                            prefixIcon: const Icon(Icons.mail_outline_rounded),
+                            border: const OutlineInputBorder(),
+                          ),
+                          validator: (v) {
+                            if (v == null || v.trim().isEmpty) {
+                              return ar
+                                  ? 'البريد الإلكتروني مطلوب'
+                                  : 'Email is required';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 14),
+                        TextFormField(
+                          controller: password,
+                          obscureText: obscurePassword,
+                          textInputAction: TextInputAction.done,
+                          onFieldSubmitted: (_) => loading ? null : _submit(),
+                          decoration: InputDecoration(
+                            labelText: ar ? 'كلمة المرور' : 'Password',
+                            prefixIcon: const Icon(Icons.lock_outline_rounded),
+                            border: const OutlineInputBorder(),
+                            suffixIcon: IconButton(
+                              tooltip: ar
+                                  ? (obscurePassword
+                                        ? 'إظهار كلمة المرور'
+                                        : 'إخفاء كلمة المرور')
+                                  : (obscurePassword
+                                        ? 'Show password'
+                                        : 'Hide password'),
+                              icon: Icon(
+                                obscurePassword
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
+                              ),
+                              onPressed: () => setState(
+                                () => obscurePassword = !obscurePassword,
+                              ),
+                            ),
+                          ),
+                          validator: (v) {
+                            if (v == null || v.isEmpty) {
+                              return ar
+                                  ? 'كلمة المرور مطلوبة'
+                                  : 'Password is required';
+                            }
+                            if (registering && v.length < 6) {
+                              return ar
+                                  ? 'كلمة المرور يجب ألا تقل عن 6 أحرف'
+                                  : 'Password must be at least 6 characters';
+                            }
+                            return null;
+                          },
+                        ),
+                        if (info != null) ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: ChecklistChrome.accent.withValues(
+                                alpha: 0.08,
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: ChecklistChrome.accent.withValues(
+                                  alpha: 0.35,
+                                ),
+                              ),
+                            ),
+                            child: Text(
+                              info!,
+                              style: TextStyle(
+                                color: ChecklistChrome.accentDeep,
+                                height: 1.35,
+                              ),
+                            ),
+                          ),
+                        ],
+                        if (error != null) ...[
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.error.withValues(
+                                alpha: 0.08,
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: theme.colorScheme.error.withValues(
+                                  alpha: 0.35,
+                                ),
+                              ),
+                            ),
+                            child: Text(
+                              error!,
+                              style: TextStyle(
+                                color: theme.colorScheme.error,
+                                height: 1.35,
+                              ),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 22),
+                        FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: ChecklistChrome.accent,
+                            foregroundColor: ChecklistChrome.onAccent,
+                            minimumSize: const Size.fromHeight(48),
+                          ),
+                          onPressed: loading ? null : _submit,
+                          child: loading
+                              ? const SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Text(
+                                  registering
+                                      ? (ar ? 'إنشاء حساب' : 'Create account')
+                                      : (ar ? 'تسجيل الدخول' : 'Sign in'),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                        ),
+                        if (widget.allowSelfRegistration) ...[
+                          const SizedBox(height: 8),
+                          TextButton(
+                            onPressed: loading
+                                ? null
+                                : () => setState(() {
+                                    registerMode = !registerMode;
+                                    error = null;
+                                    info = null;
+                                  }),
+                            child: Text(
+                              registering
+                                  ? (ar
+                                        ? 'لديك حساب؟ تسجيل الدخول'
+                                        : 'Have an account? Sign in')
+                                  : (ar ? 'حساب جديد' : 'Create an account'),
+                            ),
+                          ),
+                        ],
+                        if (_demoConfigured && !registering) ...[
+                          const SizedBox(height: 4),
+                          OutlinedButton.icon(
+                            onPressed: loading ? null : _demoSignIn,
+                            icon: const Icon(Icons.science_outlined),
+                            label: Text(ar ? 'دخول تجريبي' : 'Trial login'),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            ar
+                                ? 'للتجربة فقط — لا يغيّر حساب المالك'
+                                : 'Trial only — owner account unchanged',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: ChecklistChrome.inkMuted,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
-                  if (_demoEnabled) ...[
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: loading ? null : _demoSignIn,
-                        icon: const Icon(Icons.science_outlined),
-                        label: const Text('دخول تجريبي (مؤقت)'),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'للتجربة فقط — يُزال لاحقًا',
-                      style: TextStyle(fontSize: 11, color: Colors.black45),
-                    ),
-                  ],
-                ],
+                ),
               ),
             ),
           ),

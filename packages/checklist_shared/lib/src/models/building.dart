@@ -35,7 +35,6 @@ class BuildingConfig {
     );
   }
 
-  static List<BuildingConfig> get all => kBuildingsConfig.keys
-      .map((id) => byId(id)!)
-      .toList(growable: false);
+  static List<BuildingConfig> get all =>
+      kBuildingsConfig.keys.map((id) => byId(id)!).toList(growable: false);
 }

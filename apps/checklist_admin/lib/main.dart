@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'screens/checklists_tab.dart';
+import 'screens/client_error_log_screen.dart';
+import 'screens/audit_log_screen.dart';
 import 'screens/delete_tab.dart';
 import 'screens/policies_screen.dart';
 import 'screens/structure_tab.dart';
@@ -15,6 +17,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   ChecklistChrome.use(ChecklistBrand.admin);
   await bootstrapSupabase();
+  StructuredErrorReporter.install(appKey: 'admin');
   final prefs = await SharedPreferences.getInstance();
   runApp(
     ProviderScope(
@@ -41,23 +44,35 @@ class _AdminRootState extends ConsumerState<AdminRoot> {
   Widget build(BuildContext context) {
     final rtl = isRtlLanguage(language);
     final themeMode = ref.watch(themeModeProvider);
+    final platformDark =
+        WidgetsBinding.instance.platformDispatcher.platformBrightness ==
+        Brightness.dark;
+    final useDark = switch (themeMode) {
+      ThemeMode.dark => true,
+      ThemeMode.light => false,
+      ThemeMode.system => platformDark,
+    };
     return MaterialApp(
-      title: language == 'ar' ? 'فحص يومي — إدارة' : 'Daily Checklists — Admin',
+      key: ValueKey(useDark ? 'admin-dark' : 'admin-light'),
+      title: language == 'ar' ? 'فحص إدارة' : 'Inspection Admin',
       debugShowCheckedModeBanner: false,
-      theme: ChecklistChrome.theme(),
-      darkTheme: ChecklistChrome.darkTheme(),
-      themeMode: themeMode,
+      theme: useDark ? ChecklistChrome.darkTheme() : ChecklistChrome.theme(),
+      themeMode: ThemeMode.light,
+      themeAnimationDuration: Duration.zero,
+      themeAnimationStyle: AnimationStyle.noAnimation,
       builder: (context, child) => Directionality(
         textDirection: rtl ? ui.TextDirection.rtl : ui.TextDirection.ltr,
-        child: ChecklistAppBackground(
-          child: child ?? const SizedBox.shrink(),
-        ),
+        child: ChecklistAppBackground(child: child ?? const SizedBox.shrink()),
       ),
       home: ChecklistAuthGate(
-        appTitle: language == 'ar' ? 'إدارة الفحص اليومي' : 'Checklist Admin',
+        appTitle: language == 'ar' ? 'فحص إدارة' : 'Inspection Admin',
         subtitle: language == 'ar'
-            ? 'هيكل • قوائم • مستخدمون • سياسات'
-            : 'Structure • Checklists • Users • Policies',
+            ? 'هيكل وقوائم ومستخدمون وسياسات'
+            : 'Structure, checklists, users and policies',
+        language: language,
+        onLanguageChanged: (v) => setState(() => language = v),
+        allowSelfRegistration: false,
+        brandMarkAsset: 'assets/branding/app_icon_simple.png',
         allowedForProfile: (p) => p.canUseAdminApp,
         homeBuilder: (context, profile) => AdminShell(
           profile: profile,
@@ -93,8 +108,8 @@ class _AdminShellState extends ConsumerState<AdminShell> {
     final p = widget.profile;
     final ar = widget.language == 'ar';
     final tabs = <Widget>[
-      StructureTab(profile: p),
-      ChecklistsTab(profile: p),
+      StructureTab(profile: p, language: widget.language),
+      ChecklistsTab(profile: p, language: widget.language),
       UsersTab(profile: p),
     ];
     final destinations = <NavigationDestination>[
@@ -122,15 +137,51 @@ class _AdminShellState extends ConsumerState<AdminShell> {
         advancedItems: [
           ListTile(
             contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.manage_history_outlined),
+            title: Text(ar ? 'سجل التدقيق' : 'Audit log'),
+            subtitle: Text(
+              ar
+                  ? 'التغييرات والحذف والاعتماد'
+                  : 'Changes, deletion and approval',
+            ),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => AuditLogScreen(language: widget.language),
+                ),
+              );
+            },
+          ),
+          if (p.isPlatformOwner)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.monitor_heart_outlined),
+              title: Text(ar ? 'مراقبة الأخطاء' : 'Error monitoring'),
+              subtitle: Text(
+                ar
+                    ? 'أعطال التطبيقات المنقحة من البيانات الحساسة'
+                    : 'Privacy-sanitized application failures',
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        ClientErrorLogScreen(language: widget.language),
+                  ),
+                );
+              },
+            ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.policy_outlined),
             title: Text(ar ? 'السياسات' : 'Policies'),
             subtitle: Text(ar ? 'صور المشكلة' : 'Problem photos'),
             onTap: () {
               Navigator.pop(context);
               Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => PoliciesScreen(profile: p),
-                ),
+                MaterialPageRoute(builder: (_) => PoliciesScreen(profile: p)),
               );
             },
           ),
@@ -145,9 +196,7 @@ class _AdminShellState extends ConsumerState<AdminShell> {
                   MaterialPageRoute(
                     builder: (_) => Scaffold(
                       appBar: AppBar(
-                        title: Text(
-                          ar ? 'حذف الفحوصات' : 'Delete inspections',
-                        ),
+                        title: Text(ar ? 'حذف الفحوصات' : 'Delete inspections'),
                       ),
                       body: DeleteTab(profile: p),
                     ),
@@ -166,7 +215,9 @@ class _AdminShellState extends ConsumerState<AdminShell> {
               child: Text(
                 p.isPlatformOwner
                     ? (ar ? 'مالك المنصة' : 'Owner')
-                    : p.role.labelAr,
+                    : (ar
+                          ? p.role.labelAr
+                          : p.role.dbValue.replaceAll('_', ' ')),
                 style: const TextStyle(fontSize: 13),
               ),
             ),
@@ -180,10 +231,7 @@ class _AdminShellState extends ConsumerState<AdminShell> {
           ),
         ],
       ),
-      body: IndexedStack(
-        index: tab.clamp(0, tabs.length - 1),
-        children: tabs,
-      ),
+      body: IndexedStack(index: tab.clamp(0, tabs.length - 1), children: tabs),
       bottomNavigationBar: NavigationBar(
         selectedIndex: tab.clamp(0, tabs.length - 1),
         onDestinationSelected: (i) => setState(() => tab = i),

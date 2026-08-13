@@ -10,8 +10,7 @@ List<String> decodeStoragePathList(String? raw) {
       final decoded = jsonDecode(s);
       if (decoded is List) {
         return [
-          for (final e in decoded)
-            '$e'.trim(),
+          for (final e in decoded) '$e'.trim(),
         ].where((e) => e.isNotEmpty).toList();
       }
     } catch (_) {}

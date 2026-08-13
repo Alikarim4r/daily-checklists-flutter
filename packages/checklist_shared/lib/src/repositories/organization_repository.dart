@@ -6,7 +6,9 @@ class OrganizationRepository {
   OrganizationRepository(this._client);
   final SupabaseClient _client;
 
-  Future<List<Organization>> listOrganizations({bool activeOnly = false}) async {
+  Future<List<Organization>> listOrganizations({
+    bool activeOnly = false,
+  }) async {
     var q = _client.from('organizations').select();
     if (activeOnly) q = q.eq('is_active', true);
     final rows = await q.order('name_en');
@@ -55,8 +57,11 @@ class OrganizationRepository {
   }
 
   Future<List<Zone>> listAllZones() async {
-    final rows =
-        await _client.from('zones').select().order('sort_order').order('name_en');
+    final rows = await _client
+        .from('zones')
+        .select()
+        .order('sort_order')
+        .order('name_en');
     return (rows as List)
         .map((e) => Zone.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList();
@@ -83,5 +88,60 @@ class OrganizationRepository {
 
   Future<void> deleteZone(String id) async {
     await _client.from('zones').delete().eq('id', id);
+  }
+
+  Future<Organization> updateOrgLogos({
+    required String id,
+    String? logoEnPath,
+    String? logoArPath,
+  }) async {
+    final row = await _client
+        .from('organizations')
+        .update({'logo_en_path': logoEnPath, 'logo_ar_path': logoArPath})
+        .eq('id', id)
+        .select()
+        .single();
+    return Organization.fromJson(Map<String, dynamic>.from(row));
+  }
+
+  Future<Organization> updateOrganizationFormTheme({
+    required String id,
+    required String formTheme,
+    String? formThemeAccent,
+  }) async {
+    final row = await _client
+        .from('organizations')
+        .update({'form_theme': formTheme, 'form_theme_accent': formThemeAccent})
+        .eq('id', id)
+        .select()
+        .single();
+    return Organization.fromJson(Map<String, dynamic>.from(row));
+  }
+
+  Future<Zone> updateZoneLogo({
+    required String id,
+    String? reportLogoPath,
+  }) async {
+    final row = await _client
+        .from('zones')
+        .update({'report_logo_path': reportLogoPath})
+        .eq('id', id)
+        .select()
+        .single();
+    return Zone.fromJson(Map<String, dynamic>.from(row));
+  }
+
+  Future<Zone> updateZoneFormTheme({
+    required String id,
+    required String formTheme,
+    String? formThemeAccent,
+  }) async {
+    final row = await _client
+        .from('zones')
+        .update({'form_theme': formTheme, 'form_theme_accent': formThemeAccent})
+        .eq('id', id)
+        .select()
+        .single();
+    return Zone.fromJson(Map<String, dynamic>.from(row));
   }
 }

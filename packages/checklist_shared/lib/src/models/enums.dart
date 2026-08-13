@@ -1,14 +1,5 @@
 import 'package:collection/collection.dart';
 
-const kPlatformOwnerEmails = <String>{
-  'alikarim4r@gmail.com',
-};
-
-bool isPlatformOwnerEmail(String? email) {
-  if (email == null) return false;
-  return kPlatformOwnerEmails.contains(email.trim().toLowerCase());
-}
-
 enum UserRole {
   superAdmin('super_admin'),
   siteAdmin('site_admin'),
@@ -20,18 +11,18 @@ enum UserRole {
   final String dbValue;
 
   static UserRole fromDb(String value) => UserRole.values.firstWhere(
-        (r) => r.dbValue == value,
-        orElse: () => UserRole.viewer,
-      );
+    (r) => r.dbValue == value,
+    orElse: () => UserRole.viewer,
+  );
 
   /// Arabic label for admin UI.
   String get labelAr => switch (this) {
-        UserRole.superAdmin => 'سوبر أدمن',
-        UserRole.siteAdmin => 'أدمن',
-        UserRole.technician => 'فني',
-        UserRole.technicianRequest => 'طلب فني',
-        UserRole.viewer => 'عارض',
-      };
+    UserRole.superAdmin => 'سوبر أدمن',
+    UserRole.siteAdmin => 'أدمن',
+    UserRole.technician => 'فني',
+    UserRole.technicianRequest => 'طلب فني',
+    UserRole.viewer => 'عارض',
+  };
 
   bool get canUseEntry =>
       this == UserRole.technician ||
@@ -76,11 +67,11 @@ enum ApprovalStatus {
   }
 
   String get labelAr => switch (this) {
-        ApprovalStatus.pending => 'بانتظار الاعتماد',
-        ApprovalStatus.approved => 'معتمد',
-        ApprovalStatus.rejected => 'مرفوض',
-        ApprovalStatus.suspended => 'موقوف',
-      };
+    ApprovalStatus.pending => 'بانتظار الاعتماد',
+    ApprovalStatus.approved => 'معتمد',
+    ApprovalStatus.rejected => 'مرفوض',
+    ApprovalStatus.suspended => 'موقوف',
+  };
 }
 
 enum ChecklistResponse {
@@ -103,17 +94,17 @@ enum ChecklistResponse {
   }
 
   String get label => switch (this) {
-        ChecklistResponse.yes => 'Yes',
-        ChecklistResponse.no => 'No',
-        ChecklistResponse.na => 'NA',
-      };
+    ChecklistResponse.yes => 'Yes',
+    ChecklistResponse.no => 'No',
+    ChecklistResponse.na => 'NA',
+  };
 
   /// HTML / catalog short code (Y / N / NA).
   String get shortCode => switch (this) {
-        ChecklistResponse.yes => 'Y',
-        ChecklistResponse.no => 'N',
-        ChecklistResponse.na => 'NA',
-      };
+    ChecklistResponse.yes => 'Y',
+    ChecklistResponse.no => 'N',
+    ChecklistResponse.na => 'NA',
+  };
 }
 
 enum InspectionStatus {
@@ -133,35 +124,44 @@ enum InspectionStatus {
 enum ReviewStatus {
   draft('draft'),
   submitted('submitted'),
-  approved('approved');
+  approved('approved'),
+  returned('returned'),
+  rejected('rejected'),
+  canceled('canceled');
 
   const ReviewStatus(this.dbValue);
   final String dbValue;
 
   static ReviewStatus fromDb(String? value) => ReviewStatus.values.firstWhere(
-        (e) => e.dbValue == value,
-        orElse: () => ReviewStatus.draft,
-      );
+    (e) => e.dbValue == value,
+    orElse: () => ReviewStatus.draft,
+  );
 
   String get labelAr => switch (this) {
-        ReviewStatus.draft => 'مسودة',
-        ReviewStatus.submitted => 'بانتظار الاعتماد',
-        ReviewStatus.approved => 'معتمد',
-      };
+    ReviewStatus.draft => 'مسودة',
+    ReviewStatus.submitted => 'بانتظار الاعتماد',
+    ReviewStatus.approved => 'معتمد',
+    ReviewStatus.returned => 'معاد للتصحيح',
+    ReviewStatus.rejected => 'مرفوض',
+    ReviewStatus.canceled => 'ملغى',
+  };
 
   String get labelEn => switch (this) {
-        ReviewStatus.draft => 'Draft',
-        ReviewStatus.submitted => 'Awaiting approval',
-        ReviewStatus.approved => 'Approved',
-      };
+    ReviewStatus.draft => 'Draft',
+    ReviewStatus.submitted => 'Awaiting approval',
+    ReviewStatus.approved => 'Approved',
+    ReviewStatus.returned => 'Returned for correction',
+    ReviewStatus.rejected => 'Rejected',
+    ReviewStatus.canceled => 'Canceled',
+  };
 
-  String labelFor(String language) =>
-      language == 'ar' ? labelAr : labelEn;
+  bool get isTerminal =>
+      this == ReviewStatus.approved ||
+      this == ReviewStatus.rejected ||
+      this == ReviewStatus.canceled;
+
+  String labelFor(String language) => language == 'ar' ? labelAr : labelEn;
 }
 
 /// Field-app gate: require at least one readable / writable site.
-enum SiteAccessRequirement {
-  none,
-  read,
-  write,
-}
+enum SiteAccessRequirement { none, read, write }

@@ -4,7 +4,7 @@ import 'package:local_auth/local_auth.dart';
 /// Thin wrapper around [LocalAuthentication] with web-safe fallbacks.
 class BiometricAuthService {
   BiometricAuthService({LocalAuthentication? auth})
-      : _auth = auth ?? LocalAuthentication();
+    : _auth = auth ?? LocalAuthentication();
 
   final LocalAuthentication _auth;
 
@@ -33,7 +33,8 @@ class BiometricAuthService {
     try {
       final types = await _auth.getAvailableBiometrics();
       final hasFace = types.contains(BiometricType.face);
-      final hasFinger = types.contains(BiometricType.fingerprint) ||
+      final hasFinger =
+          types.contains(BiometricType.fingerprint) ||
           types.contains(BiometricType.strong) ||
           types.contains(BiometricType.weak);
       if (hasFace && hasFinger) {
@@ -52,11 +53,8 @@ class BiometricAuthService {
       if (!canAuth) return false;
       return await _auth.authenticate(
         localizedReason: localizedReason,
-        options: const AuthenticationOptions(
-          biometricOnly: false,
-          stickyAuth: true,
-          useErrorDialogs: true,
-        ),
+        biometricOnly: true,
+        persistAcrossBackgrounding: true,
       );
     } catch (e, st) {
       debugPrint('BiometricAuthService.authenticate failed: $e\n$st');

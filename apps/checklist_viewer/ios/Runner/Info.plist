@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Checklist Viewer</string>
+	<string>فحص عرض</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -26,6 +26,12 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera is used to capture inspection photos.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Face ID / Touch ID is used to unlock the app securely.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Photo library is used to attach inspection photos.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -66,11 +72,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>NSCameraUsageDescription</key>
-	<string>Camera is used to capture inspection photos.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Photo library is used to attach inspection photos.</string>
-	<key>NSFaceIDUsageDescription</key>
-	<string>Face ID / Touch ID is used to unlock the app securely.</string>
 </dict>
 </plist>

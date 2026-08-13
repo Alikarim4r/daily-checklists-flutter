@@ -13,6 +13,7 @@ class UsersTab extends ConsumerStatefulWidget {
 class _UsersTabState extends ConsumerState<UsersTab> {
   List<Profile> users = [];
   List<ChecklistSite> sites = [];
+  List<Organization> organizations = [];
   bool loading = true;
   String? message;
   int segment = 0; // 0 pending, 1 active
@@ -30,11 +31,17 @@ class _UsersTabState extends ConsumerState<UsersTab> {
     });
     try {
       final list = await ref.read(authRepositoryProvider).listProfiles();
-      final siteList =
-          await ref.read(siteRepositoryProvider).listAllSites(activeOnly: true);
+      // RLS scopes sites/orgs to what the actor may see.
+      final siteList = await ref
+          .read(siteRepositoryProvider)
+          .listAllSites(activeOnly: true);
+      final orgList = await ref
+          .read(organizationRepositoryProvider)
+          .listOrganizations(activeOnly: true);
       setState(() {
         users = list;
         sites = siteList;
+        organizations = orgList;
       });
     } catch (e) {
       setState(() => message = e.toString());
@@ -65,22 +72,26 @@ class _UsersTabState extends ConsumerState<UsersTab> {
       builder: (context) => _ApproveUserDialog(
         user: user,
         sites: sites,
+        organizations: organizations,
         actor: widget.profile,
       ),
     );
     if (result == null) return;
     try {
-      await ref.read(authRepositoryProvider).approveUser(
+      await ref
+          .read(authRepositoryProvider)
+          .approveUser(
             userId: user.id,
             role: result.role,
             siteIds: result.siteIds,
             note: result.note,
+            organizationId: result.organizationId,
           );
       await _load();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم اعتماد المستخدم')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('تم اعتماد المستخدم')));
       }
     } catch (e) {
       setState(() => message = e.toString());
@@ -104,10 +115,9 @@ class _UsersTabState extends ConsumerState<UsersTab> {
 
   Future<void> _setStatus(Profile user, ApprovalStatus status) async {
     try {
-      await ref.read(authRepositoryProvider).setUserStatus(
-            userId: user.id,
-            status: status,
-          );
+      await ref
+          .read(authRepositoryProvider)
+          .setUserStatus(userId: user.id, status: status);
       await _load();
     } catch (e) {
       setState(() => message = e.toString());
@@ -115,8 +125,20 @@ class _UsersTabState extends ConsumerState<UsersTab> {
   }
 
   bool get _canCreate =>
-      widget.profile.isPlatformOwner ||
-      widget.profile.role == UserRole.superAdmin;
+      widget.profile.canManageSuperAdmins || widget.profile.canManageSiteAdmins;
+
+  bool _canActOn(Profile user) {
+    if (user.isPlatformOwner) return false;
+    if (user.role == UserRole.superAdmin &&
+        !widget.profile.canManageSuperAdmins) {
+      return false;
+    }
+    if (user.role == UserRole.siteAdmin &&
+        !widget.profile.canManageSiteAdmins) {
+      return false;
+    }
+    return true;
+  }
 
   Future<void> _createUser() async {
     if (!_canCreate) return;
@@ -179,7 +201,9 @@ class _UsersTabState extends ConsumerState<UsersTab> {
     );
     if (ok != true) return;
     try {
-      final userId = await ref.read(authRepositoryProvider).createUser(
+      final userId = await ref
+          .read(authRepositoryProvider)
+          .createUser(
             email: email.text.trim(),
             password: password.text,
             fullName: name.text.trim().isEmpty ? null : name.text.trim(),
@@ -251,9 +275,7 @@ class _UsersTabState extends ConsumerState<UsersTab> {
                         vertical: 6,
                       ),
                       child: ListTile(
-                        title: Text(
-                          u.fullName.isEmpty ? u.email : u.fullName,
-                        ),
+                        title: Text(u.fullName.isEmpty ? u.email : u.fullName),
                         subtitle: Text(
                           '${u.email}\n'
                           '${u.role.labelAr} • ${u.approvalStatus.labelAr}'
@@ -264,13 +286,13 @@ class _UsersTabState extends ConsumerState<UsersTab> {
                           spacing: 4,
                           children: [
                             if (u.approvalStatus != ApprovalStatus.approved &&
-                                !u.isPlatformOwner)
+                                _canActOn(u))
                               FilledButton(
                                 onPressed: () => _approve(u),
                                 child: const Text('اعتماد'),
                               ),
                             if (u.approvalStatus == ApprovalStatus.approved &&
-                                !u.isPlatformOwner) ...[
+                                _canActOn(u)) ...[
                               TextButton(
                                 onPressed: () => _editSiteFlags(u),
                                 child: const Text('صلاحيات'),
@@ -282,7 +304,7 @@ class _UsersTabState extends ConsumerState<UsersTab> {
                               ),
                             ],
                             if (u.approvalStatus == ApprovalStatus.pending &&
-                                !u.isPlatformOwner)
+                                _canActOn(u))
                               TextButton(
                                 onPressed: () =>
                                     _setStatus(u, ApprovalStatus.rejected),
@@ -305,21 +327,25 @@ class _ApproveResult {
     required this.role,
     required this.siteIds,
     this.note,
+    this.organizationId,
   });
   final UserRole role;
   final List<String> siteIds;
   final String? note;
+  final String? organizationId;
 }
 
 class _ApproveUserDialog extends StatefulWidget {
   const _ApproveUserDialog({
     required this.user,
     required this.sites,
+    required this.organizations,
     required this.actor,
   });
 
   final Profile user;
   final List<ChecklistSite> sites;
+  final List<Organization> organizations;
   final Profile actor;
 
   @override
@@ -330,11 +356,17 @@ class _ApproveUserDialogState extends State<_ApproveUserDialog> {
   late UserRole role;
   final selected = <String>{};
   final noteCtrl = TextEditingController();
+  String? organizationId;
 
   @override
   void initState() {
     super.initState();
     role = UserRole.technician;
+    organizationId =
+        widget.actor.homeOrganizationId ??
+        (widget.organizations.isNotEmpty
+            ? widget.organizations.first.id
+            : null);
   }
 
   @override
@@ -344,20 +376,25 @@ class _ApproveUserDialogState extends State<_ApproveUserDialog> {
   }
 
   List<UserRole> get _roleChoices {
-    final list = <UserRole>[
-      UserRole.siteAdmin,
-      UserRole.technician,
-      UserRole.viewer,
-    ];
-    if (widget.actor.isPlatformOwner) {
-      list.insert(0, UserRole.superAdmin);
+    if (widget.actor.canManageSuperAdmins) {
+      return const [
+        UserRole.superAdmin,
+        UserRole.siteAdmin,
+        UserRole.technician,
+        UserRole.viewer,
+      ];
     }
-    return list;
+    if (widget.actor.canManageSiteAdmins) {
+      return const [UserRole.siteAdmin, UserRole.technician, UserRole.viewer];
+    }
+    // Site admin: technicians / viewers only
+    return const [UserRole.technician, UserRole.viewer];
   }
 
   @override
   Widget build(BuildContext context) {
     final needsSites = role != UserRole.superAdmin;
+    final needsOrg = role == UserRole.superAdmin;
     return AlertDialog(
       title: Text('اعتماد — ${widget.user.email}'),
       content: SizedBox(
@@ -368,7 +405,7 @@ class _ApproveUserDialogState extends State<_ApproveUserDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               DropdownButtonFormField<UserRole>(
-                value: role,
+                initialValue: role,
                 decoration: const InputDecoration(
                   labelText: 'الدور',
                   border: OutlineInputBorder(),
@@ -382,6 +419,24 @@ class _ApproveUserDialogState extends State<_ApproveUserDialog> {
                   setState(() => role = v);
                 },
               ),
+              if (needsOrg) ...[
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: organizationId,
+                  decoration: const InputDecoration(
+                    labelText: 'الجهة (مطلوب للسوبر أدمن)',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: [
+                    for (final o in widget.organizations)
+                      DropdownMenuItem(
+                        value: o.id,
+                        child: Text(o.nameAr.isNotEmpty ? o.nameAr : o.nameEn),
+                      ),
+                  ],
+                  onChanged: (v) => setState(() => organizationId = v),
+                ),
+              ],
               const SizedBox(height: 12),
               TextField(
                 controller: noteCtrl,
@@ -438,6 +493,13 @@ class _ApproveUserDialogState extends State<_ApproveUserDialog> {
         ),
         FilledButton(
           onPressed: () {
+            if (needsOrg &&
+                (organizationId == null || organizationId!.isEmpty)) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('اختر جهة للسوبر أدمن')),
+              );
+              return;
+            }
             if (needsSites && selected.isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('اختر موقعاً واحداً على الأقل')),
@@ -452,6 +514,7 @@ class _ApproveUserDialogState extends State<_ApproveUserDialog> {
                 note: noteCtrl.text.trim().isEmpty
                     ? null
                     : noteCtrl.text.trim(),
+                organizationId: needsOrg ? organizationId : null,
               ),
             );
           },
@@ -493,6 +556,8 @@ class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
           canRead: a.canRead,
           canWrite: a.canWrite,
           canManage: a.canManage,
+          validFrom: a.validFrom?.toLocal(),
+          validUntil: a.validUntil?.toLocal(),
         ),
     };
   }
@@ -514,12 +579,11 @@ class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
             canWrite: row.canWrite,
             canManage: row.canManage,
             role: widget.user.role.dbValue,
+            validFrom: row.validFrom,
+            validUntil: row.validUntil,
           );
         } else if (!want && had) {
-          await repo.revokeSiteAccess(
-            userId: widget.user.id,
-            siteId: site.id,
-          );
+          await repo.revokeSiteAccess(userId: widget.user.id, siteId: site.id);
         } else if (want && had) {
           await repo.updateSiteAccessFlags(
             userId: widget.user.id,
@@ -527,6 +591,8 @@ class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
             canRead: row!.canRead,
             canWrite: row.canWrite,
             canManage: row.canManage,
+            validFrom: row.validFrom,
+            validUntil: row.validUntil,
           );
         }
       }
@@ -534,9 +600,9 @@ class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
       }
     } finally {
       if (mounted) setState(() => saving = false);
@@ -562,6 +628,8 @@ class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
                       canRead: true,
                       canWrite: widget.user.role.defaultCanWrite,
                       canManage: widget.user.role.defaultCanManage,
+                      validFrom: null,
+                      validUntil: null,
                     ),
                   );
                   return Card(
@@ -605,6 +673,75 @@ class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
                                   onSelected: (v) =>
                                       setState(() => row.canManage = v),
                                 ),
+                                OutlinedButton.icon(
+                                  onPressed: () async {
+                                    final picked = await showDatePicker(
+                                      context: context,
+                                      initialDate:
+                                          row.validFrom ?? DateTime.now(),
+                                      firstDate: DateTime.now().subtract(
+                                        const Duration(days: 1),
+                                      ),
+                                      lastDate: DateTime.now().add(
+                                        const Duration(days: 3650),
+                                      ),
+                                    );
+                                    if (picked != null) {
+                                      setState(() => row.validFrom = picked);
+                                    }
+                                  },
+                                  icon: const Icon(Icons.play_circle_outline),
+                                  label: Text(
+                                    row.validFrom == null
+                                        ? 'يبدأ الآن'
+                                        : 'من ${_dateLabel(row.validFrom!)}',
+                                  ),
+                                ),
+                                OutlinedButton.icon(
+                                  onPressed: () async {
+                                    final picked = await showDatePicker(
+                                      context: context,
+                                      initialDate:
+                                          row.validUntil ??
+                                          DateTime.now().add(
+                                            const Duration(days: 30),
+                                          ),
+                                      firstDate:
+                                          row.validFrom ?? DateTime.now(),
+                                      lastDate: DateTime.now().add(
+                                        const Duration(days: 3650),
+                                      ),
+                                    );
+                                    if (picked != null) {
+                                      setState(
+                                        () => row.validUntil = DateTime(
+                                          picked.year,
+                                          picked.month,
+                                          picked.day,
+                                          23,
+                                          59,
+                                          59,
+                                        ),
+                                      );
+                                    }
+                                  },
+                                  icon: const Icon(Icons.event_busy_outlined),
+                                  label: Text(
+                                    row.validUntil == null
+                                        ? 'بلا انتهاء'
+                                        : 'حتى ${_dateLabel(row.validUntil!)}',
+                                  ),
+                                ),
+                                if (row.validFrom != null ||
+                                    row.validUntil != null)
+                                  IconButton(
+                                    tooltip: 'إزالة المدة',
+                                    onPressed: () => setState(() {
+                                      row.validFrom = null;
+                                      row.validUntil = null;
+                                    }),
+                                    icon: const Icon(Icons.clear),
+                                  ),
                               ],
                             ),
                           ),
@@ -628,6 +765,10 @@ class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
       ],
     );
   }
+
+  String _dateLabel(DateTime value) =>
+      '${value.year}-${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
 }
 
 class _FlagRow {
@@ -636,10 +777,13 @@ class _FlagRow {
     required this.canRead,
     required this.canWrite,
     required this.canManage,
+    required this.validFrom,
+    required this.validUntil,
   });
   bool selected;
   bool canRead;
   bool canWrite;
   bool canManage;
+  DateTime? validFrom;
+  DateTime? validUntil;
 }
-

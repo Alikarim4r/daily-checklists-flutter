@@ -21,12 +21,15 @@ class OpsDashboardScreen extends ConsumerStatefulWidget {
 
 class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
   OpsPeriod period = OpsPeriod.today;
+  DateTimeRange? customRange;
   String? siteFilter;
   OpsSnapshot? snapshot;
   List<ChecklistSite> sites = [];
   List<CampusChecklistGroup> campusGroups = [];
   bool loading = true;
   String? error;
+  int? _lastUrgentCount;
+  int _loadGeneration = 0;
 
   bool get ar => widget.language == 'ar';
 
@@ -52,29 +55,56 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
   }
 
   Future<void> _load() async {
+    final generation = ++_loadGeneration;
     setState(() {
       loading = true;
       error = null;
     });
     try {
-      final siteList = await ref
-          .read(siteRepositoryProvider)
-          .listAccessibleCampusGroups(profile: widget.profile);
-      final snap = await ref.read(opsMetricsRepositoryProvider).load(
-            profile: widget.profile,
-            period: period,
-            siteId: siteFilter,
-            language: widget.language,
-          );
-      if (!mounted) return;
+      final results = await Future.wait<Object>([
+        ref
+            .read(siteRepositoryProvider)
+            .listAccessibleCampusGroups(profile: widget.profile),
+        ref
+            .read(opsMetricsRepositoryProvider)
+            .load(
+              profile: widget.profile,
+              period: period,
+              siteId: siteFilter,
+              language: widget.language,
+              dateFrom: customRange?.start,
+              dateTo: customRange?.end,
+            ),
+      ]);
+      final siteList = results[0] as List<CampusChecklistGroup>;
+      final snap = results[1] as OpsSnapshot;
+      if (!mounted || generation != _loadGeneration) return;
+      final urgent =
+          snap.pendingReviewCount +
+          snap.overdueInspectionCount +
+          snap.openProblemCount;
+      final shouldAlert =
+          _lastUrgentCount != null && urgent > _lastUrgentCount!;
       setState(() {
         campusGroups = siteList;
         sites = [for (final g in siteList) ...g.checklists];
         snapshot = snap;
         loading = false;
+        _lastUrgentCount = urgent;
       });
-    } catch (e) {
-      if (!mounted) return;
+      if (shouldAlert && ref.read(notificationsEnabledProvider)) {
+        await ChecklistFeedback.alert(
+          soundEnabled: ref.read(soundEnabledProvider),
+          hapticsEnabled: ref.read(hapticsEnabledProvider),
+        );
+      }
+    } catch (e, stack) {
+      await StructuredErrorReporter.capture(
+        e,
+        stack,
+        module: 'viewer.supervision_load',
+      );
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         error = '$e';
         loading = false;
@@ -85,10 +115,63 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
   String _pct(double v) => '${(v * 100).clamp(0, 100).toStringAsFixed(0)}%';
 
   String _periodLabel(OpsPeriod p) => switch (p) {
-        OpsPeriod.today => ar ? 'اليوم' : 'Today',
-        OpsPeriod.days7 => ar ? '7 أيام' : '7 days',
-        OpsPeriod.days30 => ar ? '30 يوماً' : '30 days',
-      };
+    OpsPeriod.today => ar ? 'اليوم' : 'Today',
+    OpsPeriod.thisWeek => ar ? 'هذا الأسبوع' : 'This week',
+    OpsPeriod.thisMonth => ar ? 'هذا الشهر' : 'This month',
+    OpsPeriod.lastMonth => ar ? 'الشهر الماضي' : 'Last month',
+    OpsPeriod.last3Months => ar ? 'آخر 3 أشهر' : 'Last 3 months',
+    OpsPeriod.last6Months => ar ? 'آخر 6 أشهر' : 'Last 6 months',
+    OpsPeriod.thisYear => ar ? 'هذه السنة' : 'This year',
+  };
+
+  String _iso(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
+
+  Future<void> _pickCustomRange() async {
+    final now = qatarBusinessNow();
+    final today = DateTime(now.year, now.month, now.day);
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2000),
+      lastDate: today,
+      initialDateRange: customRange ?? DateTimeRange(start: today, end: today),
+      helpText: ar ? 'حدد فترة التقرير' : 'Select report range',
+    );
+    if (picked == null) return;
+    setState(() => customRange = picked);
+    await _load();
+  }
+
+  Future<void> _exportReport() async {
+    final snap = snapshot;
+    if (snap == null) return;
+    try {
+      var scope = ar ? 'كل القوائم' : 'All checklists';
+      if (siteFilter != null) {
+        for (final site in sites) {
+          if (site.id == siteFilter) {
+            scope = _siteFilterLabel(site);
+            break;
+          }
+        }
+      }
+      await const OpsReportExporter().sharePdf(
+        snapshot: snap,
+        language: widget.language,
+        scopeLabel: scope,
+      );
+    } catch (exception, stack) {
+      await StructuredErrorReporter.capture(
+        exception,
+        stack,
+        module: 'viewer.supervision_report',
+      );
+      if (!mounted) return;
+      setState(() => error = '$exception');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -98,6 +181,12 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
         title: ar ? 'المتابعة والإشراف' : 'Ops & Supervision',
         leading: checklistBackButton(context),
         actions: [
+          if (snapshot != null)
+            IconButton(
+              tooltip: ar ? 'تصدير تقرير PDF' : 'Export PDF report',
+              onPressed: loading ? null : _exportReport,
+              icon: const Icon(Icons.picture_as_pdf_outlined),
+            ),
           IconButton(
             tooltip: ar ? 'تحديث' : 'Refresh',
             onPressed: loading ? null : _load,
@@ -112,84 +201,78 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
             child: loading
                 ? const Center(child: CircularProgressIndicator())
                 : error != null
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Text(
-                            error!,
-                            style: const TextStyle(color: Colors.red),
-                            textAlign: TextAlign.center,
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        error!,
+                        style: const TextStyle(color: Colors.red),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  )
+                : snap == null
+                ? Center(child: Text(ar ? 'لا توجد بيانات' : 'No data'))
+                : RefreshIndicator(
+                    onRefresh: _load,
+                    child: ListView(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+                      children: [
+                        _operationalPulse(snap),
+                        const SizedBox(height: 18),
+                        _sectionTitle(ar ? 'مؤشرات الأداء' : 'KPI Overview'),
+                        const SizedBox(height: 10),
+                        _kpiGrid(snap),
+                        const SizedBox(height: 22),
+                        _sectionTitle(ar ? 'متابعة مطلوبة' : 'Follow-up'),
+                        const SizedBox(height: 8),
+                        _followUpSection(
+                          title: ar ? 'بانتظار الاعتماد' : 'Pending approval',
+                          items: snap.followUpsOf(FollowUpKind.pendingReview),
+                          color: ChecklistChrome.accent,
+                          icon: Icons.rate_review_outlined,
+                        ),
+                        _followUpSection(
+                          title: ar ? 'بنود متأخرة' : 'Overdue',
+                          items: snap.followUpsOf(FollowUpKind.overdue),
+                          color: const Color(0xFFB91C1C),
+                          icon: Icons.warning_amber_rounded,
+                        ),
+                        _followUpSection(
+                          title: ar ? 'مشاكل مفتوحة' : 'Open problems',
+                          items: snap.followUpsOf(FollowUpKind.openProblems),
+                          color: const Color(0xFFEA580C),
+                          icon: Icons.build_circle_outlined,
+                        ),
+                        const SizedBox(height: 18),
+                        _sectionTitle(ar ? 'ترتيب المواقع' : 'Site ranking'),
+                        const SizedBox(height: 8),
+                        _sitesRanking(
+                          title: ar ? 'الأفضل أداءً' : 'Top sites',
+                          rows: snap.bestSites,
+                          positive: true,
+                        ),
+                        const SizedBox(height: 12),
+                        _sitesRanking(
+                          title: ar ? 'تحتاج اهتماماً' : 'Needs attention',
+                          rows: snap.worstSites,
+                          positive: false,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          ar
+                              ? 'التقييم يدمج نسبة الإجابة المثالية، الاعتماد، والامتثال اليومي. بنود المتأخرة تستخدم مهلة الأوفر ديو لكل بند من إعدادات القوائم.'
+                              : 'Ranking blends ideal answer rate, approval rate, and today’s compliance. Overdue uses each item’s fix deadline from checklist settings.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurfaceVariant,
                           ),
                         ),
-                      )
-                    : snap == null
-                        ? Center(
-                            child: Text(
-                              ar ? 'لا توجد بيانات' : 'No data',
-                            ),
-                          )
-                        : RefreshIndicator(
-                            onRefresh: _load,
-                            child: ListView(
-                              padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
-                              children: [
-                                _sectionTitle(
-                                  ar ? 'مؤشرات الأداء' : 'KPI Overview',
-                                ),
-                                const SizedBox(height: 10),
-                                _kpiGrid(snap),
-                                const SizedBox(height: 22),
-                                _sectionTitle(
-                                  ar ? 'متابعة مطلوبة' : 'Follow-up',
-                                ),
-                                const SizedBox(height: 8),
-                                _followUpSection(
-                                  title: ar
-                                      ? 'بانتظار الاعتماد'
-                                      : 'Pending approval',
-                                  items: snap.followUpsOf(
-                                    FollowUpKind.pendingReview,
-                                  ),
-                                  color: ChecklistChrome.accent,
-                                  icon: Icons.rate_review_outlined,
-                                ),
-                                _followUpSection(
-                                  title: ar ? 'بنود متأخرة' : 'Overdue',
-                                  items:
-                                      snap.followUpsOf(FollowUpKind.overdue),
-                                  color: const Color(0xFFB91C1C),
-                                  icon: Icons.warning_amber_rounded,
-                                ),
-                                _followUpSection(
-                                  title:
-                                      ar ? 'مشاكل مفتوحة' : 'Open problems',
-                                  items: snap.followUpsOf(
-                                    FollowUpKind.openProblems,
-                                  ),
-                                  color: const Color(0xFFEA580C),
-                                  icon: Icons.build_circle_outlined,
-                                ),
-                                const SizedBox(height: 18),
-                                _sectionTitle(
-                                  ar ? 'ترتيب المواقع' : 'Site ranking',
-                                ),
-                                const SizedBox(height: 8),
-                                _sitesRanking(
-                                  title: ar ? 'الأفضل أداءً' : 'Top sites',
-                                  rows: snap.bestSites,
-                                  positive: true,
-                                ),
-                                const SizedBox(height: 12),
-                                _sitesRanking(
-                                  title: ar
-                                      ? 'تحتاج اهتماماً'
-                                      : 'Needs attention',
-                                  rows: snap.worstSites,
-                                  positive: false,
-                                ),
-                              ],
-                            ),
-                          ),
+                      ],
+                    ),
+                  ),
           ),
         ],
       ),
@@ -197,8 +280,11 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
   }
 
   Widget _filtersBar() {
+    final colors = Theme.of(context).colorScheme;
     return Material(
-      color: ChecklistChrome.surface,
+      color: colors.surface.withValues(
+        alpha: ChecklistChrome.listSurfaceOpacity,
+      ),
       elevation: 0.5,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
@@ -209,27 +295,46 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
               ar ? 'الفترة' : 'Period',
               style: TextStyle(
                 fontWeight: FontWeight.w700,
-                color: ChecklistChrome.inkMuted,
+                color: colors.onSurfaceVariant,
                 fontSize: 12,
               ),
             ),
             const SizedBox(height: 6),
-            SegmentedButton<OpsPeriod>(
-              segments: [
+            DropdownButtonFormField<OpsPeriod>(
+              initialValue: period,
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: ar ? 'اختيار سريع' : 'Quick range',
+                isDense: true,
+                border: const OutlineInputBorder(),
+              ),
+              items: [
                 for (final p in OpsPeriod.values)
-                  ButtonSegment(value: p, label: Text(_periodLabel(p))),
+                  DropdownMenuItem(value: p, child: Text(_periodLabel(p))),
               ],
-              selected: {period},
-              showSelectedIcon: false,
-              onSelectionChanged: (s) {
-                setState(() => period = s.first);
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() {
+                  period = value;
+                  customRange = null;
+                });
                 _load();
               },
             ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _pickCustomRange,
+              icon: const Icon(Icons.date_range_outlined),
+              label: Text(
+                customRange == null
+                    ? (ar ? 'فترة مخصصة' : 'Custom date range')
+                    : '${_iso(customRange!.start)} — ${_iso(customRange!.end)}',
+              ),
+            ),
             const SizedBox(height: 10),
             DropdownButtonFormField<String?>(
-              // ignore: deprecated_member_use
-              value: siteFilter,
+              initialValue: siteFilter,
+              isExpanded: true,
               decoration: InputDecoration(
                 labelText: ar ? 'قائمة الفحص' : 'Checklist',
                 isDense: true,
@@ -238,13 +343,18 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
               items: [
                 DropdownMenuItem<String?>(
                   value: null,
-                  child: Text(ar ? 'كل القوائم' : 'All checklists'),
+                  child: Text(
+                    ar ? 'كل القوائم' : 'All checklists',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
                 for (final s in sites)
                   DropdownMenuItem<String?>(
                     value: s.id,
                     child: Text(
                       _siteFilterLabel(s),
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
@@ -266,8 +376,98 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
       style: TextStyle(
         fontSize: 16,
         fontWeight: FontWeight.w800,
-        color: ChecklistChrome.ink,
+        color: Theme.of(context).colorScheme.onSurface,
       ),
+    );
+  }
+
+  Widget _operationalPulse(OpsSnapshot snap) {
+    final urgent =
+        snap.pendingReviewCount +
+        snap.overdueInspectionCount +
+        snap.openProblemCount;
+    final healthy = urgent == 0;
+    final pulseColor = healthy
+        ? const Color(0xFF15803D)
+        : urgent <= 3
+        ? const Color(0xFFB45309)
+        : const Color(0xFFB91C1C);
+    final time = TimeOfDay.fromDateTime(snap.asOf.toLocal()).format(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ChecklistPulseCard(
+          title: healthy
+              ? (ar ? 'الوضع التشغيلي مستقر' : 'Operations are stable')
+              : (ar ? 'توجد متابعة تحتاج إجراء' : 'Follow-up needs action'),
+          subtitle: ar
+              ? 'آخر تحديث $time · يعرض المؤشر الالتزام والاعتماد والمشكلات النشطة ضمن النطاق المحدد.'
+              : 'Updated $time · The pulse combines compliance, approvals, and active issues in the selected scope.',
+          progress: snap.dailyCompliance,
+          progressLabel: _pct(snap.dailyCompliance),
+          color: pulseColor,
+          icon: healthy
+              ? Icons.monitor_heart_outlined
+              : Icons.notification_important_outlined,
+          trailing: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: pulseColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              ar ? '$urgent إجراء' : '$urgent action(s)',
+              style: TextStyle(
+                color: pulseColor,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 720;
+            final tileWidth = wide
+                ? (constraints.maxWidth - 20) / 3
+                : constraints.maxWidth;
+            return Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                SizedBox(
+                  width: tileWidth,
+                  child: ChecklistMetricTile(
+                    label: ar ? 'بانتظار الاعتماد' : 'Pending approval',
+                    value: '${snap.pendingReviewCount}',
+                    icon: Icons.rate_review_outlined,
+                    color: ChecklistChrome.accent,
+                  ),
+                ),
+                SizedBox(
+                  width: tileWidth,
+                  child: ChecklistMetricTile(
+                    label: ar ? 'قوائم متأخرة' : 'Overdue checklists',
+                    value: '${snap.overdueInspectionCount}',
+                    icon: Icons.timer_outlined,
+                    color: const Color(0xFFB91C1C),
+                  ),
+                ),
+                SizedBox(
+                  width: tileWidth,
+                  child: ChecklistMetricTile(
+                    label: ar ? 'مشكلات مفتوحة' : 'Open problems',
+                    value: '${snap.openProblemCount}',
+                    icon: Icons.build_circle_outlined,
+                    color: const Color(0xFFEA580C),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ],
     );
   }
 
@@ -332,10 +532,7 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
             runSpacing: 10,
             children: [
               for (final card in cards)
-                SizedBox(
-                  width: (c.maxWidth - 20) / 3,
-                  child: _kpiCard(card),
-                ),
+                SizedBox(width: (c.maxWidth - 20) / 3, child: _kpiCard(card)),
             ],
           );
         }
@@ -352,6 +549,7 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
   }
 
   Widget _kpiCard(_KpiCardData data) {
+    final colors = Theme.of(context).colorScheme;
     return ChecklistBrandCard(
       borderColor: data.color.withValues(alpha: 0.35),
       child: Column(
@@ -366,7 +564,7 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
                   data.label,
                   style: TextStyle(
                     fontWeight: FontWeight.w700,
-                    color: ChecklistChrome.ink,
+                    color: colors.onSurface,
                     fontSize: 13,
                   ),
                 ),
@@ -385,7 +583,7 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
           const SizedBox(height: 4),
           Text(
             data.detail,
-            style: TextStyle(color: ChecklistChrome.inkMuted, fontSize: 12),
+            style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
           ),
           if (data.progress > 0) ...[
             const SizedBox(height: 10),
@@ -410,6 +608,7 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
     required Color color,
     required IconData icon,
   }) {
+    final colors = Theme.of(context).colorScheme;
     return ChecklistBrandCard(
       borderColor: color.withValues(alpha: 0.3),
       child: Column(
@@ -424,13 +623,12 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
                   title,
                   style: TextStyle(
                     fontWeight: FontWeight.w800,
-                    color: ChecklistChrome.ink,
+                    color: colors.onSurface,
                   ),
                 ),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
                   color: color.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(20),
@@ -450,19 +648,21 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
           if (items.isEmpty)
             Text(
               ar ? 'لا يوجد عناصر حالياً' : 'Nothing to follow up',
-              style: TextStyle(color: ChecklistChrome.inkMuted),
+              style: TextStyle(color: colors.onSurfaceVariant),
             )
           else
-            ...items.take(12).map(
-              (item) => ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text(item.title),
-                subtitle: Text(item.subtitle),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => widget.onOpenInspection(item.inspectionId),
-              ),
-            ),
+            ...items
+                .take(12)
+                .map(
+                  (item) => ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(item.title),
+                    subtitle: Text(item.subtitle),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => widget.onOpenInspection(item.inspectionId),
+                  ),
+                ),
         ],
       ),
     );
@@ -473,8 +673,8 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
     required List<SiteKpiRow> rows,
     required bool positive,
   }) {
-    final accent =
-        positive ? const Color(0xFF15803D) : const Color(0xFFB45309);
+    final colors = Theme.of(context).colorScheme;
+    final accent = positive ? const Color(0xFF15803D) : const Color(0xFFB45309);
     return ChecklistBrandCard(
       borderColor: accent.withValues(alpha: 0.25),
       child: Column(
@@ -484,14 +684,14 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
             title,
             style: TextStyle(
               fontWeight: FontWeight.w800,
-              color: ChecklistChrome.ink,
+              color: colors.onSurface,
             ),
           ),
           const SizedBox(height: 8),
           if (rows.isEmpty)
             Text(
               ar ? 'لا مواقع في النطاق' : 'No sites in scope',
-              style: TextStyle(color: ChecklistChrome.inkMuted),
+              style: TextStyle(color: colors.onSurfaceVariant),
             )
           else
             ...rows.map((r) {
@@ -521,11 +721,11 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen> {
                     const SizedBox(height: 4),
                     Text(
                       ar
-                          ? 'مثالي ${_pct(r.idealRate)} · اعتماد ${_pct(r.approvalRate)} · مشاكل ${r.openProblemCount}'
-                          : 'Ideal ${_pct(r.idealRate)} · Approved ${_pct(r.approvalRate)} · Issues ${r.openProblemCount}',
+                          ? 'مثالي ${_pct(r.idealRate)} · اعتماد ${_pct(r.approvalRate)} · مفتوحة ${r.openProblemCount} · متأخرة ${r.overdueCount}'
+                          : 'Ideal ${_pct(r.idealRate)} · Approved ${_pct(r.approvalRate)} · Open ${r.openProblemCount} · Overdue ${r.overdueCount}',
                       style: TextStyle(
                         fontSize: 11,
-                        color: ChecklistChrome.inkMuted,
+                        color: colors.onSurfaceVariant,
                       ),
                     ),
                     const SizedBox(height: 4),

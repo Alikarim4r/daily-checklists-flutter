@@ -1,7 +1,7 @@
 name: checklist_viewer
 description: MOEHE Facility Daily Inspection — viewer/edit app.
 publish_to: "none"
-version: 1.0.0+1
+version: 1.2.1+6
 
 environment:
   sdk: ^3.12.2
@@ -17,11 +17,12 @@ dependencies:
   collection: ^1.19.1
   image_picker: ^1.1.2
   shared_preferences: ^2.5.3
+  signature: ^5.5.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^5.0.0
+  flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.3
 
 flutter_launcher_icons:
@@ -29,7 +30,7 @@ flutter_launcher_icons:
   ios: true
   remove_alpha_ios: true
   image_path: assets/branding/app_icon_simple.png
-  adaptive_icon_background: "#C9A227"
+  adaptive_icon_background: "#1B2430"
   adaptive_icon_foreground: assets/branding/app_icon_simple.png
   macos:
     generate: true
@@ -37,8 +38,8 @@ flutter_launcher_icons:
   web:
     generate: true
     image_path: assets/branding/app_icon_simple.png
-    background_color: "#C9A227"
-    theme_color: "#C9A227"
+    background_color: "#1B2430"
+    theme_color: "#3D5A80"
 
 flutter:
   uses-material-design: true

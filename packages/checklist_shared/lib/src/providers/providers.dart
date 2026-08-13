@@ -3,10 +3,13 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../bootstrap/bootstrap.dart';
 import '../models/profile.dart';
+import '../repositories/audit_repository.dart';
 import '../repositories/auth_repository.dart';
 import '../repositories/catalog_repository.dart';
 import '../repositories/correction_repository.dart';
+import '../repositories/corrective_action_repository.dart';
 import '../repositories/inspection_repository.dart';
+import '../repositories/notification_repository.dart';
 import '../repositories/ops_metrics_repository.dart';
 import '../repositories/organization_repository.dart';
 import '../repositories/policy_repository.dart';
@@ -16,6 +19,10 @@ final supabaseClientProvider = Provider<SupabaseClient>((ref) => supabase);
 
 final authRepositoryProvider = Provider<AuthRepository>(
   (ref) => AuthRepository(ref.watch(supabaseClientProvider)),
+);
+
+final auditRepositoryProvider = Provider<AuditRepository>(
+  (ref) => AuditRepository(ref.watch(supabaseClientProvider)),
 );
 
 final siteRepositoryProvider = Provider<SiteRepository>(
@@ -38,14 +45,21 @@ final inspectionRepositoryProvider = Provider<InspectionRepository>(
   (ref) => InspectionRepository(ref.watch(supabaseClientProvider)),
 );
 
+final notificationRepositoryProvider = Provider<NotificationRepository>(
+  (ref) => NotificationRepository(ref.watch(supabaseClientProvider)),
+);
+
 final correctionRepositoryProvider = Provider<CorrectionRepository>(
   (ref) => CorrectionRepository(ref.watch(supabaseClientProvider)),
+);
+
+final correctiveActionRepositoryProvider = Provider<CorrectiveActionRepository>(
+  (ref) => CorrectiveActionRepository(ref.watch(supabaseClientProvider)),
 );
 
 final opsMetricsRepositoryProvider = Provider<OpsMetricsRepository>(
   (ref) => OpsMetricsRepository(
     ref.watch(supabaseClientProvider),
-    ref.watch(inspectionRepositoryProvider),
     ref.watch(siteRepositoryProvider),
   ),
 );

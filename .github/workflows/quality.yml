@@ -1,0 +1,132 @@
+name: Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.44.2
+
+jobs:
+  format-and-sql:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Verify formatting
+        run: >-
+          dart format --output=none --set-exit-if-changed
+          apps/checklist_entry/lib apps/checklist_entry/test
+          apps/checklist_viewer/lib apps/checklist_viewer/test
+          apps/checklist_admin/lib apps/checklist_admin/test
+          packages/checklist_shared/lib packages/checklist_shared/test
+      - name: Parse migrations and verify security invariants
+        run: python3 scripts/check_sql_migrations.py
+      - name: Apply migrations and run workflow smoke test
+        env:
+          CHECKLIST_REQUIRE_POSTGRES: "1"
+        run: scripts/test_migrations_postgres.sh
+      - name: Validate portal and JavaScript
+        run: |
+          python3 scripts/check_web_portal.py
+          node --check web_portal/portal.js
+
+  flutter-quality:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - packages/checklist_shared
+          - apps/checklist_entry
+          - apps/checklist_viewer
+          - apps/checklist_admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - working-directory: ${{ matrix.project }}
+        run: flutter pub get
+      - working-directory: ${{ matrix.project }}
+        run: flutter analyze --no-pub
+      - working-directory: ${{ matrix.project }}
+        run: flutter test --no-pub
+
+  web-release-build:
+    needs: [format-and-sql, flutter-quality]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: [checklist_entry, checklist_viewer, checklist_admin]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - working-directory: apps/${{ matrix.app }}
+        run: flutter pub get
+      - name: Compile production web bundle
+        working-directory: apps/${{ matrix.app }}
+        run: >-
+          flutter build web --release
+          --dart-define=SUPABASE_URL=https://ci-placeholder.supabase.co
+          --dart-define=SUPABASE_ANON_KEY=ci-placeholder
+          --dart-define=APP_ENV=ci
+          --dart-define=DEMO_LOGIN=false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-${{ matrix.app }}
+          path: apps/${{ matrix.app }}/build/web
+          if-no-files-found: error
+
+  android-debug-build:
+    needs: [format-and-sql, flutter-quality]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: [checklist_entry, checklist_viewer, checklist_admin]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - working-directory: apps/${{ matrix.app }}
+        run: flutter pub get
+      - name: Compile Android application and native plugins
+        working-directory: apps/${{ matrix.app }}
+        run: >-
+          flutter build apk --debug
+          --dart-define=SUPABASE_URL=https://ci-placeholder.supabase.co
+          --dart-define=SUPABASE_ANON_KEY=ci-placeholder
+          --dart-define=APP_ENV=ci
+          --dart-define=DEMO_LOGIN=false

@@ -20,7 +20,7 @@
 	<true/>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)com.moehe.checklists.admin</string>
+		<string>$(AppIdentifierPrefix)com.moehe.checklists.checklistAdmin</string>
 	</array>
 </dict>
 </plist>

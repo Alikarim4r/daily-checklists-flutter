@@ -2,20 +2,55 @@
 
 enum OpsPeriod {
   today,
-  days7,
-  days30;
+  thisWeek,
+  thisMonth,
+  lastMonth,
+  last3Months,
+  last6Months,
+  thisYear;
 
   (DateTime from, DateTime to) range(DateTime now) {
     final to = DateTime(now.year, now.month, now.day);
     switch (this) {
       case OpsPeriod.today:
         return (to, to);
-      case OpsPeriod.days7:
-        return (to.subtract(const Duration(days: 6)), to);
-      case OpsPeriod.days30:
-        return (to.subtract(const Duration(days: 29)), to);
+      case OpsPeriod.thisWeek:
+        // Qatar business week begins on Sunday.
+        return (to.subtract(Duration(days: to.weekday % 7)), to);
+      case OpsPeriod.thisMonth:
+        return (DateTime(to.year, to.month), to);
+      case OpsPeriod.lastMonth:
+        final start = DateTime(to.year, to.month - 1);
+        final end = DateTime(
+          to.year,
+          to.month,
+        ).subtract(const Duration(days: 1));
+        return (start, end);
+      case OpsPeriod.last3Months:
+        return (DateTime(to.year, to.month - 2), to);
+      case OpsPeriod.last6Months:
+        return (DateTime(to.year, to.month - 5), to);
+      case OpsPeriod.thisYear:
+        return (DateTime(to.year), to);
     }
   }
+}
+
+/// Current Qatar wall-clock time, independent of the device timezone.
+DateTime qatarBusinessNow([DateTime? instant]) {
+  final qatar = (instant ?? DateTime.now()).toUtc().add(
+    const Duration(hours: 3),
+  );
+  return DateTime(
+    qatar.year,
+    qatar.month,
+    qatar.day,
+    qatar.hour,
+    qatar.minute,
+    qatar.second,
+    qatar.millisecond,
+    qatar.microsecond,
+  );
 }
 
 enum FollowUpKind { pendingReview, overdue, openProblems }
@@ -58,6 +93,7 @@ class SiteKpiRow {
   final String siteName;
   final int inspectionsInPeriod;
   final int approvedCount;
+
   /// 0..1 share of answered items that match ideal (Yes path).
   final double idealRate;
   final int openProblemCount;
@@ -77,6 +113,8 @@ class SiteKpiRow {
 class OpsSnapshot {
   const OpsSnapshot({
     required this.period,
+    required this.dateFrom,
+    required this.dateTo,
     required this.asOf,
     required this.siteCount,
     required this.dailyCompliance,
@@ -91,6 +129,8 @@ class OpsSnapshot {
   });
 
   final OpsPeriod period;
+  final DateTime dateFrom;
+  final DateTime dateTo;
   final DateTime asOf;
   final int siteCount;
 

@@ -1,49 +1,83 @@
 # Daily Checklists Flutter
 
-MOEHE Facility Daily Inspection — Flutter apps with a **dedicated** Supabase backend.
+منظومة فحص مرافق يومية ثنائية اللغة لوزارة التربية والتعليم والتعليم العالي، مبنية من ثلاثة تطبيقات Flutter وحزمة مشتركة وقاعدة Supabase مستقلة.
 
-This project is independent from `smart-meters-platform`. Do not share that project's URL, keys, or migrations.
+> هذا المستودع مستقل تماماً عن `smart-meters-platform`. لا تشارك معه عنوان Supabase أو المفاتيح أو الهجرات.
 
-## Apps
+## التطبيقات
 
-| App | Path | Role |
-|-----|------|------|
-| Entry | `apps/checklist_entry` | Technician daily inspection (photos, signature, Y/N/NA) |
-| Viewer | `apps/checklist_viewer` | View / edit / submit inspections |
-| Admin | `apps/checklist_admin` | Search, correct, delete + Storage media |
+| التطبيق | المسار | الاستخدام |
+|---|---|---|
+| Entry | `apps/checklist_entry` | إدخال الفني، الصور المائية، التوقيع، والعمل دون اتصال |
+| Viewer | `apps/checklist_viewer` | العرض والمراجعة والاعتماد والتقارير ولوحة التشغيل |
+| Admin | `apps/checklist_admin` | المؤسسات والمواقع والمستخدمون والصلاحيات والكتالوج والسياسات |
 
-Shared package: `packages/checklist_shared`
+الحزمة المشتركة في `packages/checklist_shared`، والهجرات المتسلسلة `001` إلى `026` في `supabase/migrations`.
 
-## Backend (dedicated)
+## ضمانات الإصدار
 
-- Supabase project: **daily-checklists** (`xhdpyiklhouqwrtdwztn`)
-- Migrations: `supabase/migrations/001` … `005` (orgs, zones, sites, profiles, inspections, storage, MOEHE seed)
-- Setup details: [`docs/SUPABASE_SETUP.md`](docs/SUPABASE_SETUP.md)
+- مالك المنصة محدد بعضوية UUID محمية، وليس ببريد قابل للتعديل.
+- صلاحيات المستخدم والمؤسسة والموقع مفروضة في PostgreSQL/RLS وRPCs، لا في الواجهة فقط.
+- دورة الفحص ذرّية مع تحقق خادمي، قفل تفاؤلي `version`، وسجل تصحيحات.
+- قائمة العمل دون اتصال مشفرة، والمسودات المحلية متزامنة دون تكرار عبر `client_reference`.
+- جلسة Supabase هي مصدر المصادقة؛ لا تُخزن كلمات مرور الحساب محلياً.
+- إصدارات Android لا تستخدم مفتاح debug، وإصدارات macOS قابلة للتوقيع والتوثيق، ووضع Demo معطل افتراضياً.
+- بوابة CI تفحص التنسيق والتحليل والاختبارات وبناء الويب وصحة SQL والثوابت الأمنية.
 
-```bash
-# already linked on this machine:
-npx supabase link --project-ref xhdpyiklhouqwrtdwztn
-npx supabase db push
-```
-
-Fill `.env.local` from `.env.example` with **this** project's URL + anon key only.
-
-## Run
+## الإعداد والتشغيل
 
 ```bash
+cp .env.example .env.local
+# ضع SUPABASE_URL وSUPABASE_ANON_KEY للمشروع المخصص فقط
+
 ./scripts/run_staging_app.sh entry
 ./scripts/run_staging_app.sh viewer
 ./scripts/run_staging_app.sh admin
 ```
 
-## Data
+## بوابة الجودة
 
-Buildings (B1–B7 + DC/Mech/BMS) and checklist lists (127 items, multi-language labels) are embedded in:
+يتطلب فحص SQL حزمة Python `pglast==8.4`.
 
-- `packages/checklist_shared/lib/src/data/buildings.dart`
-- `packages/checklist_shared/lib/src/data/checklist_lists.dart`
-- `packages/checklist_shared/lib/src/data/ui_labels.dart`
+```bash
+python3 -m pip install -r requirements-dev.txt
+./scripts/check_quality.sh
+```
 
-## Source
+عند توفر PostgreSQL محليًا، يطبّق الفحص جميع الهجرات في قاعدة مؤقتة ويشغّل
+دورة إنشاء/حفظ/إرسال/اعتماد كاملة. في CI يكون هذا الاختبار إلزاميًا.
 
-Ported from Daily Checklists RAR (`EntryV2`, `ViewerEdit`, `deletetool`).
+## نشر قاعدة البيانات
+
+لا تفترض أن الهجرات المحلية مطبقة على المشروع البعيد. افحص التاريخ واعرض التغييرات أولاً، ثم ادفعها من جلسة Supabase CLI موثقة:
+
+```bash
+npx supabase login
+npx supabase link --project-ref xhdpyiklhouqwrtdwztn
+npx supabase migration list --linked
+npx supabase db push --linked --dry-run
+npx supabase db push --linked
+```
+
+انشر الهجرات `019`–`026` قبل نشر التطبيقات الجديدة؛ تضيف `022` ثيمات القوائم الهرمية، وتضيف `023` قوائم المساجد الاحترافية وترجماتها السبع، وتحدّث `024` مسوداتها القديمة غير المستخدمة فقط، وتصحح `025` قائمة `B7-M` إلى 22 بنداً متعدد اللغات، ثم يصلح `026` المواقع المرتبطة خطأ بقالب المبنى الرابع ويحدّث المسودات غير المستخدمة فقط. لا تستخدم `db reset --linked` مع بيانات حقيقية.
+
+## بناء الإصدار
+
+```bash
+# Android: يتطلب android/key.properties أو ANDROID_KEYSTORE_*
+./scripts/build_android_release.sh checklist_entry
+
+# iOS: يتطلب توقيع Apple، ويمكن تمرير IOS_EXPORT_OPTIONS_PLIST
+./scripts/build_ios_release.sh checklist_entry
+
+# macOS: يتطلب Developer ID؛ APPLE_NOTARY_PROFILE يفعّل notarization
+./scripts/build_macos_signed.sh \
+  checklist_entry InspectionEntry com.moehe.checklists.checklistEntry
+
+# بوابة الويب والتطبيقات الثلاثة
+./scripts/build_web_portal.sh
+```
+
+كرر أوامر المنصات مع `checklist_viewer` و`checklist_admin`. تحفظ المخرجات الموقعة في `dist/` ولا تدخل Git.
+
+تفاصيل قاعدة البيانات في `docs/SUPABASE_SETUP.md` وخطوات الإطلاق في `docs/RELEASE_CHECKLIST.md`.
