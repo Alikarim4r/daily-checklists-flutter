@@ -63,6 +63,9 @@ class SessionSecurityNotifier extends StateNotifier<SessionSecurityState> {
   Future<void> _bootstrap() async {
     await _store.load();
     final can = await _bio.canUseBiometrics();
+    if (_store.biometricEnabled && !can) {
+      await _store.setBiometricEnabled(false);
+    }
     final label = await _bio.preferredLabel(isArabic: false);
     state = SessionSecurityState(
       biometricEnabled: _store.biometricEnabled && can,

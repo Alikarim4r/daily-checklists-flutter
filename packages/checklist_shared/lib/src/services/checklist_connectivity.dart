@@ -1,6 +1,3 @@
-import 'dart:async';
-
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Connectivity checks that distinguish a device-interface report from
@@ -16,8 +13,8 @@ abstract final class ChecklistConnectivity {
     'network unreachable',
     'no route to host',
     'software caused connection abort',
-    'clientexception',
     'xmlhttprequest error',
+    'network request failed',
     'timed out',
     'timeoutexception',
   ];
@@ -29,27 +26,23 @@ abstract final class ChecklistConnectivity {
     return _networkMarkers.any(value.contains);
   }
 
-  /// Uses the OS interface state as a fast path, then probes Supabase when
-  /// macOS/desktop incorrectly reports `none` despite a working connection.
+  /// Probes the actual backend. An attached Wi-Fi/mobile interface does not
+  /// prove that DNS, the internet, or Supabase is reachable.
   static Future<bool> canReachBackend(
     SupabaseClient client, {
     Duration timeout = const Duration(seconds: 5),
+    Future<void> Function()? probe,
   }) async {
     try {
-      final interfaces = await Connectivity().checkConnectivity();
-      if (interfaces.any((value) => value != ConnectivityResult.none)) {
-        return true;
+      if (probe != null) {
+        await probe().timeout(timeout);
+      } else {
+        await client
+            .from('checklist_templates')
+            .select('id')
+            .limit(1)
+            .timeout(timeout);
       }
-    } catch (_) {
-      // Continue to the authoritative backend probe.
-    }
-
-    try {
-      await client
-          .from('checklist_templates')
-          .select('id')
-          .limit(1)
-          .timeout(timeout);
       return true;
     } catch (error) {
       // Any PostgREST response proves the server is reachable, even if that

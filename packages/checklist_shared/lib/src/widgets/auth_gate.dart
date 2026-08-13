@@ -60,6 +60,8 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
   String? error;
   String? info;
   final SessionRelockPolicy _relockPolicy = SessionRelockPolicy();
+  String? _accessFutureKey;
+  Future<int>? _accessFuture;
 
   /// Trial login credentials (owner account unchanged).
   static const _demoEnabled = bool.fromEnvironment(
@@ -96,6 +98,15 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
   }
 
   @override
+  void didUpdateWidget(covariant ChecklistAuthGate oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.siteAccessRequirement != widget.siteAccessRequirement) {
+      _accessFutureKey = null;
+      _accessFuture = null;
+    }
+  }
+
+  @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
@@ -104,8 +115,21 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
       return;
     }
     if (state == AppLifecycleState.resumed && _relockPolicy.onResumed()) {
+      _accessFutureKey = null;
+      _accessFuture = null;
       ref.read(sessionSecurityProvider.notifier).lockForResume();
     }
+  }
+
+  Future<int> _countSiteAccess(Profile profile) {
+    final key = '${profile.id}:${widget.siteAccessRequirement.name}';
+    if (_accessFutureKey != key || _accessFuture == null) {
+      _accessFutureKey = key;
+      _accessFuture = ref
+          .read(siteRepositoryProvider)
+          .countMyAccess(requirement: widget.siteAccessRequirement);
+    }
+    return _accessFuture!;
   }
 
   Future<void> _signIn({
@@ -229,9 +253,7 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
                 !profile.isPlatformOwner &&
                 profile.role != UserRole.superAdmin) {
               return FutureBuilder<int>(
-                future: ref
-                    .read(siteRepositoryProvider)
-                    .countMyAccess(requirement: widget.siteAccessRequirement),
+                future: _countSiteAccess(profile),
                 builder: (context, snap) {
                   if (!snap.hasData) {
                     return const Scaffold(

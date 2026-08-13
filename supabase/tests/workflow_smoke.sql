@@ -288,6 +288,118 @@ begin
 end;
 $$;
 
+do $$
+declare
+  v_technician uuid := '10000000-0000-4000-8000-000000000001';
+  v_manager uuid := '10000000-0000-4000-8000-000000000002';
+  v_site_id uuid;
+  v_org_id uuid;
+  v_inspection_id uuid;
+  v_version bigint;
+  v_path text;
+  v_orphan_path text;
+  v_deleted_paths text[];
+begin
+  if exists (
+    select 1 from pg_policies
+    where schemaname = 'storage'
+      and tablename = 'objects'
+      and policyname = 'checklist_media_update'
+  ) then
+    raise exception 'checklist evidence objects are still mutable';
+  end if;
+
+  select site.id, site.organization_id
+  into v_site_id, v_org_id
+  from public.sites site
+  where site.is_active = true
+    and site.building_code is not null
+  order by site.id
+  limit 1;
+
+  insert into public.user_site_access (
+    user_id, site_id, role, can_read, can_write, can_manage
+  ) values (
+    v_manager, v_site_id, 'site_admin', true, true, true
+  ) on conflict (user_id, site_id) do update set
+    can_read = true, can_write = true, can_manage = true;
+  insert into public.user_site_access (
+    user_id, site_id, role, can_read, can_write, can_manage
+  ) values (
+    v_technician, v_site_id, 'technician', true, true, false
+  ) on conflict (user_id, site_id) do update set
+    can_read = true, can_write = true;
+
+  perform set_config('request.jwt.claim.sub', v_technician::text, false);
+  v_inspection_id := public.create_checklist_reinspection_draft(
+    v_site_id,
+    public.current_business_date(),
+    'Immutable cleanup smoke',
+    '10:00',
+    'ALL',
+    '[]'::jsonb,
+    'immutable-cleanup-smoke',
+    'Cleanup lifecycle smoke test'
+  );
+  select version into v_version
+  from public.checklist_inspections
+  where id = v_inspection_id;
+
+  v_path := v_org_id::text || '/' || v_site_id::text || '/'
+    || v_inspection_id::text || '/signature_0123456789abcdef.png';
+  v_orphan_path := v_org_id::text || '/' || v_site_id::text || '/'
+    || v_inspection_id::text || '/photo_orphan_0123456789abcdef.jpg';
+  insert into storage.objects (bucket_id, name)
+  values ('checklist-media', v_orphan_path);
+  if not public.can_delete_checklist_media(v_orphan_path) then
+    raise exception 'technician could not clean an unreferenced failed upload';
+  end if;
+  delete from storage.objects
+  where bucket_id = 'checklist-media' and name = v_orphan_path;
+
+  insert into storage.objects (bucket_id, name)
+  values ('checklist-media', v_path);
+  perform public.register_checklist_media_evidence(
+    v_inspection_id, null, v_path, 'signature'
+  );
+
+  update public.profiles
+  set role = 'super_admin', home_organization_id = v_org_id
+  where id = v_manager;
+  perform set_config('request.jwt.claim.sub', v_manager::text, false);
+  v_deleted_paths := public.delete_checklist_inspection_with_cleanup(
+    v_inspection_id, v_version
+  );
+  if not (v_path = any(v_deleted_paths)) then
+    raise exception 'delete cleanup did not return registered evidence';
+  end if;
+  if exists (
+    select 1 from public.checklist_inspections where id = v_inspection_id
+  ) then
+    raise exception 'authorized draft was not deleted';
+  end if;
+  if not public.can_delete_checklist_media(v_path) then
+    raise exception 'cleanup authorization was not created';
+  end if;
+  if not (v_path = any(public.list_my_pending_checklist_media_cleanup())) then
+    raise exception 'pending cleanup path was not recoverable by the requester';
+  end if;
+
+  delete from storage.objects
+  where bucket_id = 'checklist-media' and name = v_path;
+  perform public.complete_checklist_media_cleanup(array[v_path]);
+  if public.can_delete_checklist_media(v_path) then
+    raise exception 'completed cleanup authorization remained active';
+  end if;
+  if cardinality(public.list_my_pending_checklist_media_cleanup()) <> 0 then
+    raise exception 'completed cleanup path remained in the pending list';
+  end if;
+  update public.profiles
+  set role = 'site_admin'
+  where id = v_manager;
+end;
+$$;
+
 -- Temporary grants must stop authorizing immediately after expiry. The test
 -- restores the fixture so it remains independent from later smoke assertions.
 do $$

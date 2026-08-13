@@ -49,6 +49,9 @@ b7_mech = (MIGRATIONS / "025_professional_moehe_b7_mech.sql").read_text(
 b7_binding = (MIGRATIONS / "026_repair_b7_m_site_binding.sql").read_text(
     encoding="utf-8"
 )
+immutable_cleanup = (
+    MIGRATIONS / "033_immutable_storage_and_safe_cleanup.sql"
+).read_text(encoding="utf-8")
 
 required_hardening = (
     "create table if not exists public.platform_owners",
@@ -158,6 +161,21 @@ for fragment in required_b7_binding:
     if fragment not in b7_binding.lower():
         errors.append(f"026 is missing B7-M binding invariant: {fragment}")
 
+required_immutable_cleanup = (
+    "drop policy if exists checklist_media_update on storage.objects",
+    "create table if not exists public.checklist_media_cleanup_requests",
+    "create or replace function public.delete_checklist_inspection_with_cleanup",
+    "create or replace function public.complete_checklist_media_cleanup",
+    "create or replace function public.list_my_pending_checklist_media_cleanup",
+    "inspection.review_status <> 'approved'",
+    "public.can_write_checklist_media(path)",
+    "foreign key (inspection_id)",
+    "on delete cascade",
+)
+for fragment in required_immutable_cleanup:
+    if fragment not in immutable_cleanup.lower():
+        errors.append(f"033 is missing immutable cleanup invariant: {fragment}")
+
 if re.search(
     r"signingConfig\s*=\s*signingConfigs\.getByName\([\"']debug[\"']\)",
     "\n".join(
@@ -177,6 +195,13 @@ for app in ("checklist_entry", "checklist_viewer", "checklist_admin"):
     ):
         if not (android / relative).is_file():
             errors.append(f"{app} is missing Android wrapper file: {relative}")
+    manifest = (android / "app/src/main/AndroidManifest.xml").read_text(
+        encoding="utf-8"
+    )
+    if 'android:allowBackup="false"' not in manifest:
+        errors.append(f"{app} still permits Android application backup")
+    if 'android:fullBackupContent="false"' not in manifest:
+        errors.append(f"{app} still permits Android full backup content")
 
 if errors:
     print("Migration/security checks failed:", file=sys.stderr)

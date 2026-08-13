@@ -16,6 +16,55 @@ import 'report_branding_resolver.dart';
 
 enum ReportPhotoMode { links, embedded }
 
+enum InspectionReportEvidenceIssue {
+  missingSignature,
+  unavailableSignature,
+  unavailablePhoto,
+  unreadablePhoto,
+}
+
+class InspectionReportEvidenceException implements Exception {
+  const InspectionReportEvidenceException(this.issue, {this.reference});
+
+  final InspectionReportEvidenceIssue issue;
+  final String? reference;
+
+  String messageFor(String language) {
+    final ar = language == 'ar';
+    return switch (issue) {
+      InspectionReportEvidenceIssue.missingSignature =>
+        ar
+            ? 'لا يمكن إنشاء تقرير نهائي لأن السجل لا يحتوي على توقيع محفوظ.'
+            : 'A final report cannot be created because the record has no saved signature.',
+      InspectionReportEvidenceIssue.unavailableSignature =>
+        ar
+            ? 'تعذر تحميل التوقيع المحفوظ. تحقق من الاتصال وسلامة ملف الدليل ثم أعد المحاولة.'
+            : 'The saved signature could not be loaded. Check connectivity and evidence integrity, then retry.',
+      InspectionReportEvidenceIssue.unavailablePhoto =>
+        ar
+            ? 'تعذر تحميل صورة الدليل${reference == null ? '' : ' رقم $reference'}. لن يتم إنشاء تقرير ناقص.'
+            : 'Evidence photo${reference == null ? '' : ' $reference'} could not be loaded. An incomplete report was not created.',
+      InspectionReportEvidenceIssue.unreadablePhoto =>
+        ar
+            ? 'صورة الدليل${reference == null ? '' : ' رقم $reference'} تالفة أو غير قابلة للقراءة.'
+            : 'Evidence photo${reference == null ? '' : ' $reference'} is corrupt or unreadable.',
+    };
+  }
+
+  @override
+  String toString() => messageFor('en');
+}
+
+void validateInspectionReportEvidence(Inspection inspection) {
+  if (inspection.isSubmitted &&
+      (inspection.signaturePath == null ||
+          inspection.signaturePath!.trim().isEmpty)) {
+    throw const InspectionReportEvidenceException(
+      InspectionReportEvidenceIssue.missingSignature,
+    );
+  }
+}
+
 /// Stable references derived only from checklist item/photo order. They do not
 /// depend on PDF pagination, paper size, signed URLs, or storage file names.
 Map<String, String> buildInspectionPhotoReferences(
@@ -129,6 +178,7 @@ class InspectionReportExporter {
     FormPaperTheme? paperTheme,
     ReportPhotoMode photoMode = ReportPhotoMode.links,
   }) async {
+    validateInspectionReportEvidence(inspection);
     final ar = language == 'ar';
     var resolvedPaperTheme = paperTheme ?? inspection.paperTheme;
     // Older/offline instances may not carry migration 022's resolved theme.
@@ -183,16 +233,31 @@ class InspectionReportExporter {
     for (final item in items) {
       for (final photo in item.remarkPhotos) {
         if (photoLinks.containsKey(photo.path)) continue;
+        final reference = photoReferences[photo.path];
         final url = await repo.signedUrl(photo.path, expiresIn: 7 * 24 * 3600);
-        if (url != null && url.isNotEmpty) {
-          photoLinks[photo.path] = url;
+        if (url == null || url.isEmpty) {
+          throw InspectionReportEvidenceException(
+            InspectionReportEvidenceIssue.unavailablePhoto,
+            reference: reference,
+          );
         }
+        photoLinks[photo.path] = url;
         if (photoMode == ReportPhotoMode.embedded) {
           final bytes = await repo.downloadBytes(photo.path);
-          if (bytes != null && bytes.isNotEmpty) {
-            final optimized = _optimizeReportPhoto(bytes);
-            if (optimized != null) embeddedPhotos[photo.path] = optimized;
+          if (bytes == null || bytes.isEmpty) {
+            throw InspectionReportEvidenceException(
+              InspectionReportEvidenceIssue.unavailablePhoto,
+              reference: reference,
+            );
           }
+          final optimized = _optimizeReportPhoto(bytes);
+          if (optimized == null) {
+            throw InspectionReportEvidenceException(
+              InspectionReportEvidenceIssue.unreadablePhoto,
+              reference: reference,
+            );
+          }
+          embeddedPhotos[photo.path] = optimized;
         }
       }
     }
@@ -245,11 +310,20 @@ class InspectionReportExporter {
         final raw = await InspectionRepository(
           Supabase.instance.client,
         ).downloadBytes(sigPath, forceRefresh: true);
-        if (raw != null && raw.isNotEmpty) {
-          final blue = recolorSignatureToBlueInk(Uint8List.fromList(raw));
-          signatureImage = pw.MemoryImage(blue);
+        if (raw == null || raw.isEmpty) {
+          throw const InspectionReportEvidenceException(
+            InspectionReportEvidenceIssue.unavailableSignature,
+          );
         }
-      } catch (_) {}
+        final blue = recolorSignatureToBlueInk(Uint8List.fromList(raw));
+        signatureImage = pw.MemoryImage(blue);
+      } on InspectionReportEvidenceException {
+        rethrow;
+      } catch (_) {
+        throw const InspectionReportEvidenceException(
+          InspectionReportEvidenceIssue.unavailableSignature,
+        );
+      }
     }
 
     final disclaimer = ar
