@@ -1,72 +1,72 @@
 {
   "B1": {
     "num": "1",
-    "ar": "مبنى 1 - معهد التقييم",
-    "en": "Building 1 - Evaluation Institute",
-    "pin": "66170852/A",
+    "ar": "مبنى أ",
+    "en": "Building A",
+    "pin": "DEMO-100/A",
     "type": "DEFAULT"
   },
   "B2": {
     "num": "2",
-    "ar": "مبنى 2 - قطاع الخدمات المشتركة",
-    "en": "Building 2 - Shared Services Division",
-    "pin": "66170852/B",
+    "ar": "مبنى ب",
+    "en": "Building B",
+    "pin": "DEMO-100/B",
     "type": "DEFAULT"
   },
   "B2-DC": {
-    "num": "2 (Data Center)",
-    "ar": "مبنى 2 - غرفة مركز البيانات",
-    "en": "Building 2 GF - Data Center Room",
-    "pin": "66170852/B-DC",
+    "num": "2-DC",
+    "ar": "مبنى ب - غرفة المعدات",
+    "en": "Building B - Equipment Room",
+    "pin": "DEMO-100/B-EQ",
     "type": "B2_DC"
   },
   "B3": {
     "num": "3",
-    "ar": "مبنى 3 - معهد التعليم العالي",
-    "en": "Building 3 - Higher Education Institute",
-    "pin": "66170852/C",
+    "ar": "مبنى ج",
+    "en": "Building C",
+    "pin": "DEMO-100/C",
     "type": "DEFAULT"
   },
   "B4": {
     "num": "4",
-    "ar": "مبنى 4 - مكتب الأمين العام",
-    "en": "Building 4 - Secretary General's Office",
-    "pin": "66170852/D",
+    "ar": "مبنى د",
+    "en": "Building D",
+    "pin": "DEMO-100/D",
     "type": "B4"
   },
   "B5": {
     "num": "5",
-    "ar": "مبنى 5 - معهد التعليم",
-    "en": "Building 5 - Education Institute",
-    "pin": "66170852/E",
+    "ar": "مبنى هـ",
+    "en": "Building E",
+    "pin": "DEMO-100/E",
     "type": "DEFAULT"
   },
   "B6": {
     "num": "6",
-    "ar": "مبنى 6 - جدار المعرفة",
-    "en": "Building 6 - Wall Of Knowledge",
-    "pin": "66170852/F",
+    "ar": "مبنى و",
+    "en": "Building F",
+    "pin": "DEMO-100/F",
     "type": "KNOWLEDGE_WALL"
   },
   "B7": {
     "num": "7",
-    "ar": "مبنى 7 - مواقف السيارات",
-    "en": "Building 7 - Car Parking",
-    "pin": "66170852/G",
+    "ar": "مبنى ز",
+    "en": "Building G",
+    "pin": "DEMO-100/G",
     "type": "B7_PARKING"
   },
   "B7-M": {
-    "num": "7 (Mech)",
-    "ar": "مبنى 7 - المحطات الميكانيكية",
-    "en": "Building 7 - Mechanical Plants",
-    "pin": "66170852/G-M",
+    "num": "9",
+    "ar": "مبنى I",
+    "en": "Building I",
+    "pin": "DEMO-100/I",
     "type": "B7_MECH"
   },
   "B7-BMS": {
-    "num": "7 (BMS)",
-    "ar": "مبنى 7 - نظام إدارة المباني",
-    "en": "Building 7 - BMS",
-    "pin": "66170852/G-BMS",
+    "num": "10",
+    "ar": "مبنى J",
+    "en": "Building J",
+    "pin": "DEMO-100/J",
     "type": "B7_BMS"
   }
 }
