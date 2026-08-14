@@ -1058,7 +1058,7 @@ class EntryZonesScreen extends ConsumerWidget {
         children: [
           Text(
             ar ? 'اختر المنطقة' : 'Select a zone',
-            style: TextStyle(color: ChecklistChrome.inkMuted),
+            style: TextStyle(color: ChecklistChrome.inkMutedFor(context)),
           ),
           const SizedBox(height: 12),
           for (final zone in section.zones)
@@ -1089,7 +1089,7 @@ class EntryZonesScreen extends ConsumerWidget {
                           style: TextStyle(
                             fontWeight: FontWeight.w800,
                             fontSize: 16,
-                            color: ChecklistChrome.ink,
+                            color: ChecklistChrome.inkFor(context),
                           ),
                         ),
                         const SizedBox(height: 2),
@@ -1098,7 +1098,7 @@ class EntryZonesScreen extends ConsumerWidget {
                               ? '${zone.groups.length} مواقع'
                               : '${zone.groups.length} sites',
                           style: TextStyle(
-                            color: ChecklistChrome.inkMuted,
+                            color: ChecklistChrome.inkMutedFor(context),
                             fontSize: 13,
                           ),
                         ),
@@ -1171,12 +1171,15 @@ class EntryCampusesScreen extends ConsumerWidget {
         children: [
           Text(
             ar ? 'اختر الموقع' : 'Select a site',
-            style: TextStyle(color: ChecklistChrome.inkMuted),
+            style: TextStyle(color: ChecklistChrome.inkMutedFor(context)),
           ),
           const SizedBox(height: 4),
           Text(
             organizationName,
-            style: TextStyle(color: ChecklistChrome.inkMuted, fontSize: 12),
+            style: TextStyle(
+              color: ChecklistChrome.inkMutedFor(context),
+              fontSize: 12,
+            ),
           ),
           const SizedBox(height: 12),
           for (final group in zoneSection.groups)
@@ -1199,7 +1202,7 @@ class EntryCampusesScreen extends ConsumerWidget {
                           style: TextStyle(
                             fontWeight: FontWeight.w800,
                             fontSize: 16,
-                            color: ChecklistChrome.ink,
+                            color: ChecklistChrome.inkFor(context),
                           ),
                         ),
                         const SizedBox(height: 2),
@@ -1208,7 +1211,7 @@ class EntryCampusesScreen extends ConsumerWidget {
                               ? '${group.checklists.length} قوائم فحص'
                               : '${group.checklists.length} checklists',
                           style: TextStyle(
-                            color: ChecklistChrome.inkMuted,
+                            color: ChecklistChrome.inkMutedFor(context),
                             fontSize: 13,
                           ),
                         ),
@@ -1255,13 +1258,13 @@ class EntryCampusScreen extends ConsumerWidget {
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w800,
-              color: ChecklistChrome.ink,
+              color: ChecklistChrome.inkFor(context),
             ),
           ),
           const SizedBox(height: 6),
           Text(
             L.selectChecklistHint,
-            style: TextStyle(color: ChecklistChrome.inkMuted),
+            style: TextStyle(color: ChecklistChrome.inkMutedFor(context)),
           ),
           const SizedBox(height: 16),
           for (final site in group.checklists)
@@ -1293,14 +1296,14 @@ class EntryCampusScreen extends ConsumerWidget {
                           style: TextStyle(
                             fontWeight: FontWeight.w800,
                             fontSize: 16,
-                            color: ChecklistChrome.ink,
+                            color: ChecklistChrome.inkFor(context),
                           ),
                         ),
                         const SizedBox(height: 2),
                         Text(
                           '${site.buildingCode} · ${site.checklistType}',
                           style: TextStyle(
-                            color: ChecklistChrome.inkMuted,
+                            color: ChecklistChrome.inkMutedFor(context),
                             fontSize: 13,
                           ),
                         ),
@@ -2570,13 +2573,13 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
                                   site.nameFor(language),
                                   style: TextStyle(
                                     fontWeight: FontWeight.w800,
-                                    color: ChecklistChrome.ink,
+                                    color: ChecklistChrome.inkFor(context),
                                   ),
                                 ),
                                 Text(
                                   L.inspectionItems,
                                   style: TextStyle(
-                                    color: ChecklistChrome.inkMuted,
+                                    color: ChecklistChrome.inkMutedFor(context),
                                     fontSize: 12,
                                   ),
                                 ),
@@ -2666,7 +2669,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
                                   : 'This checklist was sent. Start a new one for today if needed.',
                               style: TextStyle(
                                 fontSize: 12,
-                                color: ChecklistChrome.inkMuted,
+                                color: ChecklistChrome.inkMutedFor(context),
                               ),
                             ),
                             const SizedBox(height: 8),
@@ -2963,7 +2966,7 @@ class _SignatureCard extends StatelessWidget {
                     labels.signature,
                     style: TextStyle(
                       fontWeight: FontWeight.w800,
-                      color: ChecklistChrome.ink,
+                      color: ChecklistChrome.inkFor(context),
                     ),
                   ),
                 ),
@@ -2992,7 +2995,7 @@ class _SignatureCard extends StatelessWidget {
           else
             Text(
               labels.signature,
-              style: TextStyle(color: ChecklistChrome.inkMuted),
+              style: TextStyle(color: ChecklistChrome.inkMutedFor(context)),
             ),
         ],
       ),
@@ -3085,7 +3088,7 @@ class _EntryItemCard extends StatelessWidget {
                   style: TextStyle(
                     fontWeight: FontWeight.w700,
                     height: 1.35,
-                    color: ChecklistChrome.ink,
+                    color: ChecklistChrome.inkFor(context),
                   ),
                 ),
               ),
@@ -3099,7 +3102,10 @@ class _EntryItemCard extends StatelessWidget {
             Text(
               '${labels.previousAnswer} ${previous!.response?.label ?? '—'}'
               '${prevProblem ? ' · ${labels.previousIssue}' : ''}',
-              style: TextStyle(fontSize: 12, color: ChecklistChrome.inkMuted),
+              style: TextStyle(
+                fontSize: 12,
+                color: ChecklistChrome.inkMutedFor(context),
+              ),
             ),
           ],
           const SizedBox(height: 12),

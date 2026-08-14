@@ -106,6 +106,16 @@ abstract final class ChecklistChrome {
   static Color get borderLight => _brand.borderLight;
   static Color get iconGlyph => _brand.iconGlyph;
 
+  /// Theme-aware text colors for widgets drawn on application chrome.
+  ///
+  /// Do not use the brand's light [ink] tokens directly on a dark canvas: the
+  /// Entry palette is intentionally deep teal and becomes unreadable there.
+  static Color inkFor(BuildContext context) =>
+      Theme.of(context).colorScheme.onSurface;
+
+  static Color inkMutedFor(BuildContext context) =>
+      Theme.of(context).colorScheme.onSurfaceVariant;
+
   static LinearGradient get iconWellGradient => LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
