@@ -413,7 +413,7 @@ class Inspection {
     required this.inspectionDate,
     this.inspectionTime = '',
     this.floorLabel = 'ALL',
-    this.locationLabel = 'MOEHE Permanent Headquarters',
+    this.locationLabel = 'Government HQ Demo',
     this.inspectorName = '',
     this.inspectorUserId,
     this.signaturePath,
@@ -528,8 +528,7 @@ class Inspection {
       inspectionDate: DateTime.parse(json['inspection_date'] as String),
       inspectionTime: (json['inspection_time'] ?? '') as String,
       floorLabel: (json['floor_label'] ?? 'ALL') as String,
-      locationLabel:
-          (json['location_label'] ?? 'MOEHE Permanent Headquarters') as String,
+      locationLabel: (json['location_label'] ?? 'Government HQ Demo') as String,
       inspectorName: (json['inspector_name'] ?? '') as String,
       inspectorUserId: json['inspector_user_id'] as String?,
       signaturePath: json['signature_path'] as String?,

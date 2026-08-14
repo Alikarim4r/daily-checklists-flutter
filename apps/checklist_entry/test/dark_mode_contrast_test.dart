@@ -20,8 +20,8 @@ void main() {
     const section = OrgBrowseSection(
       organization: Organization(
         id: 'org-1',
-        nameEn: 'Ministry of Awqaf and Islamic Affairs',
-        nameAr: 'وزارة الأوقاف والشؤون الإسلامية',
+        nameEn: 'Endowments Authority Demo',
+        nameAr: 'هيئة أوقاف تجريبية',
       ),
       zones: [
         ZoneBrowseSection(

@@ -86,3 +86,6 @@ app.*.map.json
 **/ios/Runner/GeneratedPluginRegistrant.*
 web_deploy/
 dist/
+
+# Flutter build output (never publish app bundles from the source branch)
+build/

@@ -140,7 +140,7 @@ pw.ThemeData buildInspectionReportTheme({
   );
 }
 
-/// PDF export matching the on-screen A4 [ChecklistFormLayout] / MOEHE paper form.
+/// PDF export matching the on-screen A4 [ChecklistFormLayout] / Demo Org paper form.
 class InspectionReportExporter {
   InspectionReportExporter();
 
@@ -347,14 +347,14 @@ class InspectionReportExporter {
           Supabase.instance.client,
         ).resolveForSite(siteId: inspection.siteId, language: language);
 
-    pw.MemoryImage? moeheLogo;
-    pw.MemoryImage? waseefLogo;
+    pw.MemoryImage? orgLogo;
+    pw.MemoryImage? siteLogo;
     pw.MemoryImage? footerLogo;
     if (brand.orgHeaderLogo != null) {
-      moeheLogo = pw.MemoryImage(Uint8List.fromList(brand.orgHeaderLogo!));
+      orgLogo = pw.MemoryImage(Uint8List.fromList(brand.orgHeaderLogo!));
     }
     if (brand.siteFooterLogo != null) {
-      waseefLogo = pw.MemoryImage(Uint8List.fromList(brand.siteFooterLogo!));
+      siteLogo = pw.MemoryImage(Uint8List.fromList(brand.siteFooterLogo!));
     }
     if (brand.zoneFooterLogo != null) {
       footerLogo = pw.MemoryImage(Uint8List.fromList(brand.zoneFooterLogo!));
@@ -395,12 +395,12 @@ class InspectionReportExporter {
         theme: theme,
         footer: (context) => _pageFooter(
           ar: ar,
-          siteLogo: waseefLogo,
+          siteLogo: siteLogo,
           zoneLogo: footerLogo,
           orgName: orgName,
         ),
         build: (context) => [
-          _header(inspection, ar, moeheLogo, orgName),
+          _header(inspection, ar, orgLogo, orgName),
           pw.SizedBox(height: 6),
           _titleBanner(inspection, ar),
           pw.SizedBox(height: 8),

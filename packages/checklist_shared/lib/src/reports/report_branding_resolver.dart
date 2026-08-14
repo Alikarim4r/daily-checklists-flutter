@@ -108,9 +108,9 @@ class ReportBrandingResolver {
         ? (logoAr?.isNotEmpty == true ? logoAr : logoEn)
         : (logoEn?.isNotEmpty == true ? logoEn : logoAr);
 
-    // Only MOEHE HQ keeps legacy bundled logos when slots are empty.
-    const moeheOrgId = 'a0000000-0000-4000-8000-000000000001';
-    final useLegacyFallback = orgId == moeheOrgId;
+    // Only Demo Org HQ keeps legacy bundled logos when slots are empty.
+    const legacyOrgId = 'a0000000-0000-4000-8000-000000000001';
+    final useLegacyFallback = orgId == legacyOrgId;
     final media = await Future.wait<Object?>([
       _downloadOrNull(orgPath),
       _downloadOrNull(zoneLogoPath),
@@ -154,17 +154,17 @@ class ReportBrandingResolver {
 
     return ReportBrandingBytes(
       orgHeaderLogo: await load(
-        'packages/checklist_shared/assets/branding/moehe_logo.png',
+        'packages/checklist_shared/assets/branding/org_logo_demo.png',
       ),
-      // Historical layout: left waseef (= site slot), right footer2 (= zone slot)
+      // Historical layout: left site slot, right zone slot
       siteFooterLogo: await load(
-        'packages/checklist_shared/assets/branding/logo_waseef.png',
+        'packages/checklist_shared/assets/branding/site_logo_demo.png',
       ),
       zoneFooterLogo: await load(
-        'packages/checklist_shared/assets/branding/logo_footer2.png',
+        'packages/checklist_shared/assets/branding/zone_logo_demo.png',
       ),
-      orgNameEn: 'MOEHE',
-      orgNameAr: 'وزارة التربية والتعليم والتعليم العالي',
+      orgNameEn: 'Government HQ Demo',
+      orgNameAr: 'مقر حكومي تجريبي',
     );
   }
 }

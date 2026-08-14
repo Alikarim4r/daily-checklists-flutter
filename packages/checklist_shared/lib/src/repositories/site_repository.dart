@@ -488,7 +488,7 @@ class SiteRepository {
     String? buildingCode,
     String pin = '',
     String checklistType = 'DEFAULT',
-    String location = 'MOEHE Permanent Headquarters',
+    String location = 'Government HQ Demo',
     String siteType = 'other',
   }) async {
     final code = buildingCode?.trim();
@@ -521,7 +521,7 @@ class SiteRepository {
     String? buildingCode,
     String pin = '',
     String checklistType = 'DEFAULT',
-    String location = 'MOEHE Permanent Headquarters',
+    String location = 'Government HQ Demo',
     bool isActive = true,
   }) async {
     final code = buildingCode?.trim();

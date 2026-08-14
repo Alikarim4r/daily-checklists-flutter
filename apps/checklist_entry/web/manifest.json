@@ -5,7 +5,7 @@
     "display": "standalone",
     "background_color": "#0E6B6A",
     "theme_color": "#14919B",
-    "description": "Secure bilingual daily facility inspection entry for MOEHE.",
+    "description": "Secure bilingual daily facility inspection entry for Demo Org.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

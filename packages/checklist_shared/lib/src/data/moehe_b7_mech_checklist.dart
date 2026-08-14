@@ -1,4 +1,4 @@
-// Canonical seven-language MOEHE Building 7 plant-room checklist (B7-M).
+// Canonical seven-language Demo Org Building 7 plant-room checklist (B7-M).
 const Map<String, List<Map<String, dynamic>>> kMoeheB7MechChecklistLists = {
   'B7_MECH': [
     {

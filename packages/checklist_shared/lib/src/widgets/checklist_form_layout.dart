@@ -17,7 +17,7 @@ import '../utils/storage_path_list.dart';
 import 'checklist_branding_widgets.dart';
 import 'checklist_signature_pad.dart';
 
-/// Paper form matching ViewerEditV2.html + MOEHE Daily Checklist PDF.
+/// Paper form matching ViewerEditV2.html + Daily Checklist PDF.
 class ChecklistFormLayout extends ConsumerWidget {
   const ChecklistFormLayout({
     super.key,
@@ -173,7 +173,7 @@ class ChecklistFormLayout extends ConsumerWidget {
     );
   }
 
-  /// Org-resolved logo + titles (MOEHE assets only when that org has no custom logo).
+  /// Org-resolved logo + titles (default demo assets only when that org has no custom logo).
   Widget _headerRow() {
     return ResolvedOrgHeader(
       siteId: inspection.siteId,
