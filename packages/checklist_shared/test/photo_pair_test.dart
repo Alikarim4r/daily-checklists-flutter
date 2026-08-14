@@ -2,6 +2,15 @@ import 'package:checklist_shared/checklist_shared.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('photo pair ids use web-safe random bounds and remain unique', () {
+    final ids = {for (var i = 0; i < 1000; i++) newPhotoPairId()};
+
+    expect(ids, hasLength(1000));
+    for (final id in ids) {
+      expect(id, matches(RegExp(r'^p_\d+_[0-9a-f]{16}$')));
+    }
+  });
+
   test('v2 encode/decode keeps pair linkage', () {
     final pairs = [
       InspectionPhotoPair(
