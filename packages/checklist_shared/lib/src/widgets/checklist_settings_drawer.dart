@@ -104,7 +104,11 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               children: [
-                _section(ar ? 'المظهر' : 'Appearance', Icons.palette_outlined),
+                _section(
+                  context,
+                  ar ? 'المظهر' : 'Appearance',
+                  Icons.palette_outlined,
+                ),
                 const SizedBox(height: 8),
                 _ThemeModeTiles(
                   language: language,
@@ -118,7 +122,11 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                   },
                 ),
                 const SizedBox(height: 20),
-                _section(ar ? 'اللغة' : 'Language', Icons.translate_outlined),
+                _section(
+                  context,
+                  ar ? 'اللغة' : 'Language',
+                  Icons.translate_outlined,
+                ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
                   initialValue: languages.contains(language)
@@ -150,6 +158,7 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                 ),
                 const SizedBox(height: 20),
                 _section(
+                  context,
                   ar ? 'الإشعارات والتنبيهات' : 'Notifications & feedback',
                   Icons.notifications_active_outlined,
                 ),
@@ -191,7 +200,11 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                       .setEnabled(enabled),
                 ),
                 const SizedBox(height: 20),
-                _section(ar ? 'الحساب' : 'Account', Icons.person_outline),
+                _section(
+                  context,
+                  ar ? 'الحساب' : 'Account',
+                  Icons.person_outline,
+                ),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.lock_outline),
@@ -201,12 +214,16 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                 const SizedBox(height: 8),
                 _biometricTile(context, ref, ar),
                 const SizedBox(height: 12),
-                _section(ar ? 'حول التطبيق' : 'About', Icons.info_outline),
+                _section(
+                  context,
+                  ar ? 'حول التطبيق' : 'About',
+                  Icons.info_outline,
+                ),
                 const SizedBox(height: 6),
                 Text(
                   ar ? 'تطوير وتصميم' : 'Created & developed by',
                   style: theme.textTheme.labelMedium?.copyWith(
-                    color: ChecklistChrome.inkMuted,
+                    color: ChecklistChrome.inkMutedFor(context),
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -214,7 +231,7 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                   'Ali Karim — AliMind',
                   style: theme.textTheme.titleSmall?.copyWith(
                     fontWeight: FontWeight.w800,
-                    color: ChecklistChrome.ink,
+                    color: ChecklistChrome.inkFor(context),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -228,7 +245,7 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                           ? 'الإصدار ${info.version} · البناء ${info.buildNumber}'
                           : 'Version ${info.version} · Build ${info.buildNumber}',
                       style: theme.textTheme.labelMedium?.copyWith(
-                        color: ChecklistChrome.inkMuted,
+                        color: ChecklistChrome.inkMutedFor(context),
                       ),
                     );
                   },
@@ -245,6 +262,7 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                 if (advancedItems.isNotEmpty) ...[
                   const SizedBox(height: 20),
                   _section(
+                    context,
                     ar ? 'أدوات متقدمة' : 'Advanced tools',
                     Icons.handyman_outlined,
                   ),
@@ -279,7 +297,7 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
     );
   }
 
-  Widget _section(String text, IconData icon) {
+  Widget _section(BuildContext context, String text, IconData icon) {
     return Row(
       children: [
         Icon(icon, size: 18, color: ChecklistChrome.accent),
@@ -288,7 +306,7 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
           text,
           style: TextStyle(
             fontWeight: FontWeight.w800,
-            color: ChecklistChrome.ink,
+            color: ChecklistChrome.inkFor(context),
           ),
         ),
       ],

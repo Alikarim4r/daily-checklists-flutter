@@ -669,7 +669,7 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 11,
-                              color: ChecklistChrome.inkMuted,
+                              color: ChecklistChrome.inkMutedFor(context),
                             ),
                           ),
                         ],

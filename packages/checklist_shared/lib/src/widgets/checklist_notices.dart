@@ -309,7 +309,9 @@ Future<void> showChecklistNoticesSheet({
                             ar
                                 ? '${notices.length} تنبيهات تشغيلية'
                                 : '${notices.length} operational alert(s)',
-                            style: TextStyle(color: ChecklistChrome.inkMuted),
+                            style: TextStyle(
+                              color: ChecklistChrome.inkMutedFor(context),
+                            ),
                           ),
                         ],
                       ),

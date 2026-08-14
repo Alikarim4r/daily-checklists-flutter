@@ -2,7 +2,56 @@ import 'package:checklist_shared/checklist_shared.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+double _contrastRatio(Color foreground, Color background) {
+  final lighter = foreground.computeLuminance() > background.computeLuminance()
+      ? foreground
+      : background;
+  final darker = identical(lighter, foreground) ? background : foreground;
+  return (lighter.computeLuminance() + 0.05) /
+      (darker.computeLuminance() + 0.05);
+}
+
 void main() {
+  testWidgets('theme-aware ink tokens follow light and dark color schemes', (
+    tester,
+  ) async {
+    for (final theme in [
+      ChecklistChrome.theme(),
+      ChecklistChrome.darkTheme(),
+    ]) {
+      late Color ink;
+      late Color muted;
+      await tester.pumpWidget(
+        MaterialApp(
+          key: ValueKey(theme.brightness),
+          theme: theme,
+          home: Builder(
+            builder: (context) {
+              ink = ChecklistChrome.inkFor(context);
+              muted = ChecklistChrome.inkMutedFor(context);
+              return const SizedBox.shrink();
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(ink, theme.colorScheme.onSurface);
+      expect(muted, theme.colorScheme.onSurfaceVariant);
+    }
+
+    final darkCard = Color.alphaBlend(
+      ChecklistChrome.darkSurface.withValues(
+        alpha: ChecklistChrome.listSurfaceOpacity,
+      ),
+      ChecklistChrome.darkCanvas,
+    );
+    expect(_contrastRatio(ChecklistChrome.darkInk, darkCard), greaterThan(4.5));
+    expect(
+      _contrastRatio(ChecklistChrome.darkInkMuted, darkCard),
+      greaterThan(4.5),
+    );
+  });
+
   testWidgets('compact operations cards stay readable in dark mode', (
     tester,
   ) async {
