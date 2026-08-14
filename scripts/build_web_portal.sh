@@ -17,10 +17,33 @@ if [[ "$SUPABASE_URL" == *"iqcxgtpcfhoapnklxdyl"* ]]; then
   exit 1
 fi
 
+# Base path the apps are served under.
+#
+# On a custom domain the site is the origin root, so the apps resolve at
+# /entry/, /viewer/, /admin/. On the project Pages URL the site lives under
+# /<repo>/, which stays the default so an unconfigured build is unchanged.
+#
+# Set WEB_BASE_HREF="" (or "/") for a root-served custom domain.
+if [[ -n "${WEB_BASE_HREF+x}" ]]; then
+  BASE_HREF="${WEB_BASE_HREF%/}"        # tolerate a trailing slash
+else
+  BASE_HREF="/daily-checklists-flutter"
+fi
+
+# Written into the published output so the custom domain survives a redeploy:
+# this directory replaces the branch wholesale, so a CNAME created from the
+# repository settings alone would be lost on the next publish.
+PAGES_CNAME="${PAGES_CNAME:-}"
+
 OUT="$ROOT/web_deploy"
 rm -rf "$OUT"
 mkdir -p "$OUT" "$OUT/downloads/android" "$OUT/downloads/macos"
 touch "$OUT/.nojekyll"
+
+if [[ -n "$PAGES_CNAME" ]]; then
+  printf '%s\n' "$PAGES_CNAME" >"$OUT/CNAME"
+  echo "CNAME: $PAGES_CNAME"
+fi
 
 rsync -a --exclude 'downloads' "$ROOT/web_portal/" "$OUT/"
 
@@ -39,9 +62,9 @@ build_web() {
   rsync -a --delete build/web/ "$OUT/$dest/"
 }
 
-build_web apps/checklist_entry entry /daily-checklists-flutter/entry/
-build_web apps/checklist_viewer viewer /daily-checklists-flutter/viewer/
-build_web apps/checklist_admin admin /daily-checklists-flutter/admin/
+build_web apps/checklist_entry entry "$BASE_HREF/entry/"
+build_web apps/checklist_viewer viewer "$BASE_HREF/viewer/"
+build_web apps/checklist_admin admin "$BASE_HREF/admin/"
 
 # Signed Android APKs if already packaged into dist.
 copy_apk() {
