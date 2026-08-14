@@ -53,9 +53,18 @@ String? _cleanPath(dynamic raw) {
 }
 
 String newPhotoPairId() {
-  final r = math.Random();
-  return 'p_${DateTime.now().microsecondsSinceEpoch}_${r.nextInt(1 << 32)}';
+  // Dart's web compiler evaluates bitwise operations as 32-bit JavaScript
+  // operations. `1 << 32` therefore becomes zero in a browser and makes
+  // Random.nextInt throw. Build the entropy from web-safe 16-bit chunks.
+  final entropy = List.generate(
+    4,
+    (_) => _photoPairRandom.nextInt(0x10000).toRadixString(16).padLeft(4, '0'),
+    growable: false,
+  ).join();
+  return 'p_${DateTime.now().microsecondsSinceEpoch}_$entropy';
 }
+
+final math.Random _photoPairRandom = math.Random();
 
 /// Encode pairs as JSON v2 for [issue_image_path].
 String? encodePhotoPairsV2(List<InspectionPhotoPair> pairs) {
