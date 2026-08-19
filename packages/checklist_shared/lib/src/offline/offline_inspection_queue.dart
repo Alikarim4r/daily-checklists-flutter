@@ -74,6 +74,10 @@ class OfflineInspectionQueue {
           'attempts': previousMeta?['attempts'] ?? 0,
           'status': 'pending',
           'lastError': null,
+          // Every enqueue is a new immutable generation. Sync may only remove
+          // the generation it actually processed; a newer user edit must win.
+          'generation':
+              '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}',
         },
       }),
     );
@@ -128,6 +132,52 @@ class OfflineInspectionQueue {
       _decode(_box.get('$_hierarchyPrefix$userId'));
 
   Future<void> remove(String localId) => _box.delete(localId);
+
+  /// Removes [localId] only when it is still the exact queue generation that
+  /// the caller processed. If the user saved a newer edit while sync was in
+  /// flight, that newer generation remains safely queued.
+  Future<bool> removeIfGeneration(
+    String localId,
+    String? expectedGeneration,
+  ) async {
+    final current = _decode(_box.get(localId));
+    if (current == null) return false;
+
+    final currentMeta = current['_queue'] as Map?;
+    final currentGeneration = currentMeta?['generation'] as String?;
+
+    // Legacy entries have no generation. They may be removed only when both
+    // sides are legacy; newly enqueued entries always carry a generation.
+    if (currentGeneration != expectedGeneration) return false;
+
+    await _box.delete(localId);
+    return true;
+  }
+
+  /// Applies a queue-state mutation only if no newer enqueue replaced the
+  /// generation being synchronized.
+  Future<bool> updateStateIfGeneration(
+    String localId,
+    String? expectedGeneration, {
+    required String status,
+    Object? error,
+  }) async {
+    final payload = _decode(_box.get(localId));
+    if (payload == null) return false;
+
+    final meta = Map<String, dynamic>.from(
+      payload['_queue'] as Map? ?? const {},
+    );
+    final currentGeneration = meta['generation'] as String?;
+    if (currentGeneration != expectedGeneration) return false;
+
+    meta['status'] = status;
+    meta['updatedAt'] = DateTime.now().toUtc().toIso8601String();
+    meta['lastError'] = error == null ? null : '$error';
+    payload['_queue'] = meta;
+    await _box.put(localId, jsonEncode(payload));
+    return true;
+  }
 
   List<MapEntry<String, Map<String, dynamic>>> pending() {
     final entries = <MapEntry<String, Map<String, dynamic>>>[];

@@ -415,9 +415,11 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
       final syncErrors = <String>[];
       final draftWarnings = <String>[];
       for (final entry in pending) {
+        final payload = entry.value;
+        final queueMeta = payload['_queue'] as Map?;
+        final queueGeneration = queueMeta?['generation'] as String?;
         try {
           await OfflineInspectionQueue.instance.markAttempt(entry.key);
-          final payload = entry.value;
           final id = payload['inspectionId'] as String;
           final sitePayload = payload['site'];
           final site = sitePayload is Map
@@ -454,7 +456,10 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
               // Submit/approval already won on the server. This is the common
               // crash-recovery case: the network dropped before the local
               // outbox entry could be removed. Never overwrite a final record.
-              await OfflineInspectionQueue.instance.remove(entry.key);
+              await OfflineInspectionQueue.instance.removeIfGeneration(
+                entry.key,
+                queueGeneration,
+              );
               finalizedCount++;
               continue;
             }
@@ -491,7 +496,10 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
                   // save already committed and matches the encrypted outbox.
                   // Keep the server draft, clear the queue, and ask the operator
                   // to correct the explicitly reported validation items.
-                  await OfflineInspectionQueue.instance.remove(entry.key);
+                  await OfflineInspectionQueue.instance.removeIfGeneration(
+                    entry.key,
+                    queueGeneration,
+                  );
                   savedDraftCount++;
                   draftWarnings.add(
                     ChecklistSubmissionValidation.messageFor(
@@ -502,7 +510,10 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
                   continue;
                 }
               }
-              await OfflineInspectionQueue.instance.remove(entry.key);
+              await OfflineInspectionQueue.instance.removeIfGeneration(
+                entry.key,
+                queueGeneration,
+              );
               okCount++;
               continue;
             }
@@ -511,7 +522,10 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
           // A previous attempt may have committed submit successfully and lost
           // connectivity before removing the outbox entry. Treat it as done.
           if (payload['action'] == 'submit' && full.isSubmitted) {
-            await OfflineInspectionQueue.instance.remove(entry.key);
+            await OfflineInspectionQueue.instance.removeIfGeneration(
+              entry.key,
+              queueGeneration,
+            );
             okCount++;
             continue;
           }
@@ -622,7 +636,10 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
               )) {
                 rethrow;
               }
-              await OfflineInspectionQueue.instance.remove(entry.key);
+              await OfflineInspectionQueue.instance.removeIfGeneration(
+                entry.key,
+                queueGeneration,
+              );
               savedDraftCount++;
               draftWarnings.add(
                 ChecklistSubmissionValidation.messageFor(
@@ -633,15 +650,27 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
               continue;
             }
           }
-          await OfflineInspectionQueue.instance.remove(entry.key);
+          await OfflineInspectionQueue.instance.removeIfGeneration(
+            entry.key,
+            queueGeneration,
+          );
           okCount++;
         } catch (error, stack) {
           if (ChecklistConnectivity.isTransportFailure(error)) {
-            await OfflineInspectionQueue.instance.markDeferred(entry.key);
+            await OfflineInspectionQueue.instance.updateStateIfGeneration(
+              entry.key,
+              queueGeneration,
+              status: 'pending',
+            );
             deferredCount++;
             break;
           } else {
-            await OfflineInspectionQueue.instance.markFailure(entry.key, error);
+            await OfflineInspectionQueue.instance.updateStateIfGeneration(
+              entry.key,
+              queueGeneration,
+              status: 'failed',
+              error: error,
+            );
             await StructuredErrorReporter.capture(
               error,
               stack,
