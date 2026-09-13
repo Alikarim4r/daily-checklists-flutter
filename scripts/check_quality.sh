@@ -34,6 +34,7 @@ done
 python3 "$ROOT/scripts/check_web_portal.py"
 if command -v node >/dev/null 2>&1; then
   node --check "$ROOT/web_portal/portal.js"
+  node --test "$ROOT/scripts/test_admin_create_user.mjs"
 else
   echo "Skipping portal JavaScript syntax check: node is unavailable."
 fi

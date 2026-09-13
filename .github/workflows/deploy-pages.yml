@@ -1,0 +1,114 @@
+name: Deploy web portal to GitHub Pages
+
+on:
+  workflow_run:
+    workflows: ["Quality Gate"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      native_release_tag:
+        description: GitHub Release tag containing the matching signed APK and macOS assets
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: 3.44.2
+
+jobs:
+  build:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "build-tools;35.0.0"
+      - name: Require a passing Quality Gate for manual deployments
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          passed="$(gh run list --workflow quality.yml --branch main --commit "$GITHUB_SHA" --status success --limit 1 --json databaseId --jq 'length')"
+          test "$passed" = 1 || { echo "Run Quality Gate successfully on this commit before deploying." >&2; exit 1; }
+      - name: Validate deployment configuration
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          test -n "$SUPABASE_URL" || { echo "Missing SUPABASE_URL secret" >&2; exit 1; }
+          test -n "$SUPABASE_ANON_KEY" || { echo "Missing SUPABASE_ANON_KEY secret" >&2; exit 1; }
+      - name: Validate portal release metadata
+        run: |
+          python3 scripts/check_web_portal.py
+          node --check web_portal/portal.js
+      - name: Restore version-matched native release downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_RELEASE_TAG: ${{ inputs.native_release_tag || vars.NATIVE_RELEASE_TAG }}
+        run: |
+          test -n "$NATIVE_RELEASE_TAG" || { echo "Set NATIVE_RELEASE_TAG to the matching signed release. Existing Pages content is retained." >&2; exit 1; }
+          for app in entry viewer admin; do
+            case "$app" in
+              entry) product=InspectionEntry ;;
+              viewer) product=InspectionViewer ;;
+              admin) product=InspectionAdmin ;;
+            esac
+            mkdir -p "dist/android/checklist_$app" "dist/macos/checklist_$app"
+            gh release download "$NATIVE_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "checklist_$app.apk" --dir "dist/android/checklist_$app"
+            gh release download "$NATIVE_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$product-macOS.zip" --dir "dist/macos/checklist_$app"
+          done
+      - name: Build portal and three Flutter web apps
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          WEB_BASE_HREF: ${{ vars.WEB_BASE_HREF || format('/{0}', github.event.repository.name) }}
+          PAGES_CNAME: ${{ vars.PAGES_CNAME }}
+          RELEASE_APP_ENV: production
+        run: ./scripts/build_web_portal.sh
+      - name: Require all verified downloads before replacing Pages
+        run: |
+          for name in inspection-entry inspection-viewer inspection-admin; do
+            test -s "web_deploy/downloads/android/$name.apk"
+          done
+          for name in Inspection-Entry Inspection-Viewer Inspection-Admin; do
+            test -s "web_deploy/downloads/macos/$name-macOS.zip"
+          done
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web_deploy
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish GitHub Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@v4

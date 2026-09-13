@@ -21,8 +21,13 @@ class OfflineInspectionQueue {
     mOptions: MacOsOptions(usesDataProtectionKeychain: true),
   );
 
-  static Future<void> init() async {
-    await Hive.initFlutter();
+  static Future<void> init({String? storagePath}) async {
+    if (storagePath == null) {
+      await Hive.initFlutter();
+    } else {
+      // Deterministic isolated storage for regression tests.
+      Hive.init(storagePath);
+    }
     if (Hive.isBoxOpen(_boxName)) return;
 
     var encodedKey = await _secure.read(key: _keyName);
@@ -55,12 +60,22 @@ class OfflineInspectionQueue {
     if (legacy.isNotEmpty) await box.putAll(legacy);
   }
 
-  Box<String> get _box => Hive.box<String>(_boxName);
+  bool get isReady => Hive.isBoxOpen(_boxName);
+
+  Box<String> get _box {
+    if (!isReady) {
+      throw StateError('Offline inspection queue is not available');
+    }
+    return Hive.box<String>(_boxName);
+  }
 
   Future<void> enqueue({
     required String localId,
     required Map<String, dynamic> payload,
   }) async {
+    if (!isReady) {
+      throw StateError('Offline inspection queue is not available');
+    }
     final now = DateTime.now().toUtc().toIso8601String();
     final previous = _decode(_box.get(localId));
     final previousMeta = previous?['_queue'] as Map?;
@@ -76,14 +91,41 @@ class OfflineInspectionQueue {
           'lastError': null,
           // Every enqueue is a new immutable generation. Sync may only remove
           // the generation it actually processed; a newer user edit must win.
-          'generation':
-              '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}',
+          'generation': _newGeneration(),
         },
       }),
     );
   }
 
+  static String _newGeneration() {
+    // Bit shifts of 32 bits wrap in JavaScript. Keep every random bound small
+    // so the encrypted browser outbox uses the same safe path as native apps.
+    final random = Random.secure();
+    return base64UrlEncode(List<int>.generate(16, (_) => random.nextInt(256)));
+  }
+
+  /// Runs a full-snapshot save, removing only the outbox generation it covered.
+  /// Partial mutations must save their other pending fields before using this.
+  /// On failure the snapshot remains available for retry/crash recovery.
+  Future<void> saveAndReconcile({
+    required String localId,
+    required Future<void> Function() save,
+    required int Function() editRevision,
+    required Future<void> Function() enqueueLatest,
+  }) async {
+    final generation = generationFor(localId);
+    final revision = editRevision();
+    await save();
+    if (generationFor(localId) != generation) return;
+    if (editRevision() != revision) {
+      await enqueueLatest();
+    } else {
+      await removeIfGeneration(localId, generation);
+    }
+  }
+
   Future<void> markAttempt(String localId) async {
+    if (!isReady) return;
     final payload = _decode(_box.get(localId));
     if (payload == null) return;
     final meta = Map<String, dynamic>.from(
@@ -98,6 +140,7 @@ class OfflineInspectionQueue {
   }
 
   Future<void> markFailure(String localId, Object error) async {
+    if (!isReady) return;
     final payload = _decode(_box.get(localId));
     if (payload == null) return;
     final meta = Map<String, dynamic>.from(
@@ -111,6 +154,7 @@ class OfflineInspectionQueue {
   }
 
   Future<void> markDeferred(String localId) async {
+    if (!isReady) return;
     final payload = _decode(_box.get(localId));
     if (payload == null) return;
     final meta = Map<String, dynamic>.from(
@@ -126,12 +170,30 @@ class OfflineInspectionQueue {
   Future<void> cacheHierarchy({
     required String userId,
     required Map<String, dynamic> payload,
-  }) => _box.put('$_hierarchyPrefix$userId', jsonEncode(payload));
+  }) {
+    if (!isReady) return Future.value();
+    return _box.put('$_hierarchyPrefix$userId', jsonEncode(payload));
+  }
 
   Map<String, dynamic>? cachedHierarchy(String userId) =>
-      _decode(_box.get('$_hierarchyPrefix$userId'));
+      isReady ? _decode(_box.get('$_hierarchyPrefix$userId')) : null;
 
-  Future<void> remove(String localId) => _box.delete(localId);
+  Future<void> remove(String localId) {
+    if (!isReady) return Future.value();
+    return _box.delete(localId);
+  }
+
+  /// Returns the immutable generation currently stored for [localId].
+  ///
+  /// Callers capture this before an authoritative network save and use
+  /// [removeIfGeneration] afterwards. A newer edit enqueued while the request
+  /// was in flight therefore cannot be removed accidentally.
+  String? generationFor(String localId) {
+    if (!isReady) return null;
+    final payload = _decode(_box.get(localId));
+    final meta = payload?['_queue'] as Map?;
+    return meta?['generation'] as String?;
+  }
 
   /// Removes [localId] only when it is still the exact queue generation that
   /// the caller processed. If the user saved a newer edit while sync was in
@@ -140,6 +202,7 @@ class OfflineInspectionQueue {
     String localId,
     String? expectedGeneration,
   ) async {
+    if (!isReady) return false;
     final current = _decode(_box.get(localId));
     if (current == null) return false;
 
@@ -162,6 +225,7 @@ class OfflineInspectionQueue {
     required String status,
     Object? error,
   }) async {
+    if (!isReady) return false;
     final payload = _decode(_box.get(localId));
     if (payload == null) return false;
 
@@ -180,6 +244,7 @@ class OfflineInspectionQueue {
   }
 
   List<MapEntry<String, Map<String, dynamic>>> pending() {
+    if (!isReady) return const [];
     final entries = <MapEntry<String, Map<String, dynamic>>>[];
     for (final key in _box.keys) {
       if (key is String && key.startsWith(_hierarchyPrefix)) continue;
@@ -196,7 +261,7 @@ class OfflineInspectionQueue {
     return entries;
   }
 
-  int get pendingCount => pending().length;
+  int get pendingCount => isReady ? pending().length : 0;
 
   int get failedCount => pending().where((entry) {
     final meta = entry.value['_queue'] as Map?;

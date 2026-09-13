@@ -8,6 +8,15 @@ create role anon nologin;
 create role authenticated nologin;
 create role service_role nologin;
 
+-- Match the hardened Data API behavior used by new Supabase projects: tables
+-- and sequences created by migrations are inaccessible until explicitly
+-- granted. The public schema itself remains discoverable by PostgREST.
+grant usage on schema public to anon, authenticated, service_role;
+alter default privileges in schema public
+  revoke all privileges on tables from public, anon, authenticated;
+alter default privileges in schema public
+  revoke all privileges on sequences from public, anon, authenticated;
+
 create extension pgcrypto with schema extensions;
 
 create function auth.uid()
@@ -17,6 +26,9 @@ stable
 as $$
   select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
 $$;
+
+grant usage on schema auth to anon, authenticated, service_role;
+grant execute on function auth.uid() to anon, authenticated, service_role;
 
 create table auth.users (
   id uuid primary key,

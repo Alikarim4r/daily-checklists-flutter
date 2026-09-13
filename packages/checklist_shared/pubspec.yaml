@@ -34,6 +34,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  http: ^1.6.0
 
 flutter:
   uses-material-design: true
@@ -47,3 +48,8 @@ flutter:
     - assets/buildings.json
     - assets/checklist_lists.json
     - assets/data/checklist_catalog.json
+    - assets/fonts/NotoSans-Regular.ttf
+    - assets/fonts/NotoSans-Bold.ttf
+    - assets/fonts/NotoNaskhArabic-Regular.ttf
+    - assets/fonts/NotoNaskhArabic-Bold.ttf
+    - assets/fonts/OFL.txt

@@ -36,6 +36,7 @@ export 'src/utils/storage_path_list.dart';
 export 'src/utils/photo_pair.dart';
 export 'src/reports/inspection_report_exporter.dart';
 export 'src/reports/ops_report_exporter.dart';
+export 'src/reports/report_font_loader.dart';
 export 'src/reports/report_branding.dart';
 export 'src/reports/report_branding_resolver.dart';
 export 'src/repositories/auth_repository.dart';

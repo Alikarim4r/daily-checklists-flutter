@@ -20,7 +20,21 @@ Future<void> main() async {
   ChecklistChrome.use(ChecklistBrand.entry);
   await bootstrapSupabase();
   StructuredErrorReporter.install(appKey: 'entry');
-  await OfflineInspectionQueue.init();
+
+  if (kIsWeb) {
+    try {
+      await OfflineInspectionQueue.init().timeout(const Duration(seconds: 3));
+    } catch (error, stack) {
+      await StructuredErrorReporter.capture(
+        error,
+        stack,
+        module: 'entry.web_offline_queue_init',
+      );
+    }
+  } else {
+    await OfflineInspectionQueue.init();
+  }
+
   final prefs = await SharedPreferences.getInstance();
   runApp(
     ProviderScope(
@@ -1402,7 +1416,10 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
   final Map<String, Map<String, dynamic>> _pendingMedia = {};
   final Set<String> _pendingMediaDeletes = {};
   Timer? _autoSaveTimer;
-  bool _autoSaving = false;
+  Future<void>? _activeAutoSave;
+  int _editRevision = 0;
+  int _lastQueuedRevision = 0;
+  bool _suppressDirtyTracking = false;
   bool _allowPop = false;
   String? _reinspectionReason;
 
@@ -1429,7 +1446,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
   String _newLocalId() =>
       'local_${widget.profile.id}_${DateTime.now().microsecondsSinceEpoch}';
 
-  Inspection? _restoreQueuedLocalDraft() {
+  Inspection? _restoreQueuedDraftForDate() {
     final dateIso =
         '${date.year.toString().padLeft(4, '0')}-'
         '${date.month.toString().padLeft(2, '0')}-'
@@ -1437,8 +1454,9 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
     final pending = OfflineInspectionQueue.instance.pending().reversed;
     for (final queued in pending) {
       final payload = queued.value;
-      if (payload['isLocalDraft'] != true ||
-          payload['inspectionDate'] != dateIso) {
+      if (payload['inspectionDate'] != dateIso ||
+          (payload['ownerUserId'] != null &&
+              payload['ownerUserId'] != widget.profile.id)) {
         continue;
       }
       final siteRaw = payload['site'];
@@ -1632,7 +1650,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     language = widget.language;
-    _signature.addListener(_scheduleAutoSave);
+    _signature.addListener(_markDirty);
     _loadOrCreate();
   }
 
@@ -1640,7 +1658,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _autoSaveTimer?.cancel();
-    _signature.removeListener(_scheduleAutoSave);
+    _signature.removeListener(_markDirty);
     _signature.dispose();
     super.dispose();
   }
@@ -1657,17 +1675,73 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
 
   void _scheduleAutoSave() {
     final current = inspection;
-    if (current == null || current.isSubmitted || saving) return;
+    if (current == null || current.isSubmitted || saving || loading) return;
     _autoSaveTimer?.cancel();
     _autoSaveTimer = Timer(const Duration(milliseconds: 900), _autoSaveNow);
   }
 
-  Future<void> _autoSaveNow() async {
+  void _markDirty() {
+    if (_suppressDirtyTracking) return;
+    _editRevision += 1;
+    _scheduleAutoSave();
+  }
+
+  void _clearSignatureWithoutDirtyTracking() {
+    _suppressDirtyTracking = true;
+    try {
+      _signature.clear();
+    } finally {
+      _suppressDirtyTracking = false;
+    }
+  }
+
+  Future<void> _waitForActiveAutoSave() async {
+    final active = _activeAutoSave;
+    if (active != null) await active;
+  }
+
+  Future<bool> _flushBeforeNavigation() async {
+    await _autoSaveNow();
+    if (_signature.isNotEmpty && _lastQueuedRevision != _editRevision) {
+      await _autoSaveNow();
+    }
+    if (_lastQueuedRevision == _editRevision) return true;
+    if (mounted) {
+      setState(
+        () => message = language == 'ar'
+            ? 'لم تُحفظ التغييرات بعد. استخدم حفظ وأعد المحاولة قبل مغادرة القائمة.'
+            : 'Changes are not saved yet. Use Save and retry before leaving.',
+      );
+    }
+    return false;
+  }
+
+  Future<void> _autoSaveNow() {
     final current = inspection;
-    if (current == null || current.isSubmitted || _autoSaving || saving) return;
-    _autoSaving = true;
+    if (current == null ||
+        current.isSubmitted ||
+        saving ||
+        loading ||
+        _lastQueuedRevision == _editRevision) {
+      return Future.value();
+    }
+    final active = _activeAutoSave;
+    if (active != null) {
+      return active.then((_) => _autoSaveNow());
+    }
+
+    late final Future<void> operation;
+    operation = _performAutoSave(current).whenComplete(() {
+      if (identical(_activeAutoSave, operation)) _activeAutoSave = null;
+    });
+    _activeAutoSave = operation;
+    return operation;
+  }
+
+  Future<void> _performAutoSave(Inspection current) async {
     try {
       if (_signature.isNotEmpty) {
+        final signatureRevision = _editRevision;
         final raw = await _signature.toPngBytes();
         if (raw != null && raw.isNotEmpty) {
           final previous = current.signaturePath;
@@ -1682,7 +1756,9 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
             contentType: 'image/png',
             bytes: bytes,
           );
-          _signature.clear();
+          if (_editRevision == signatureRevision) {
+            _clearSignatureWithoutDirtyTracking();
+          }
           if (mounted) {
             setState(() {
               _signaturePreviewBytes = bytes;
@@ -1691,9 +1767,21 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
           }
         }
       }
+      final revisionBeforeQueue = _editRevision;
       await _enqueueOffline(current, action: 'save');
-    } finally {
-      _autoSaving = false;
+      // A stroke added while its PNG was being exported is still on the pad.
+      // Schedule another snapshot so leaving the page cannot lose that stroke.
+      if (_signature.isNotEmpty || _editRevision != revisionBeforeQueue) {
+        _lastQueuedRevision = -1;
+      }
+    } catch (error, stack) {
+      await StructuredErrorReporter.capture(
+        error,
+        stack,
+        module: 'entry.auto_save',
+      );
+      // Auto-save is best effort. A temporarily unavailable encrypted outbox
+      // must never prevent the explicit server save/submit path from running.
     }
   }
 
@@ -1703,11 +1791,20 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
   }
 
   Future<void> _refreshSignaturePreview() async {
+    if (!mounted) return;
     final path = inspection?.signaturePath;
     if (path == null || path.isEmpty) {
       setState(() {
         _signaturePreviewUrl = null;
         _signaturePreviewBytes = null;
+      });
+      return;
+    }
+    if (path.startsWith('offline://')) {
+      final encoded = _pendingMedia[path]?['bytesBase64'] as String?;
+      setState(() {
+        _signaturePreviewBytes = encoded == null ? null : base64Decode(encoded);
+        _signaturePreviewUrl = null;
       });
       return;
     }
@@ -1782,7 +1879,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
     current.signaturePath = path;
     if (mounted) {
       setState(() => _signaturePreviewBytes = bytes);
-      _signature.clear();
+      _clearSignatureWithoutDirtyTracking();
     }
     return true;
   }
@@ -1825,13 +1922,26 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
   }
 
   Future<void> _loadOrCreate() async {
+    _autoSaveTimer?.cancel();
+    await _waitForActiveAutoSave();
+    if (!mounted) return;
+    _clearSignatureWithoutDirtyTracking();
+    _pendingMedia.clear();
+    _pendingMediaDeletes.clear();
+    _signaturePreviewBytes = null;
+    _signaturePreviewUrl = null;
+    _lastQueuedRevision = _editRevision;
     setState(() {
       loading = true;
       message = null;
+      inspection = null;
     });
     try {
-      if (!await _isOnline()) {
-        final local = _restoreQueuedLocalDraft() ?? _newOfflineDraft();
+      final queued = _restoreQueuedDraftForDate();
+      if (!await _isOnline() ||
+          (queued != null && _isLocalInspection(queued))) {
+        final local = queued ?? _newOfflineDraft();
+        if (!mounted) return;
         setState(() {
           inspection = local;
           policy = ChecklistOrgPolicy(
@@ -1844,10 +1954,14 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
         return;
       }
       final repo = ref.read(inspectionRepositoryProvider);
-      var existing = await repo.getForSiteDate(
-        siteId: widget.site.id,
-        date: date,
-      );
+      var existing = queued == null
+          ? await repo.getForSiteDate(siteId: widget.site.id, date: date)
+          : await repo.getById(queued.id);
+      if (queued != null && existing == null) {
+        throw StateError(
+          'Queued inspection is unavailable on the server; local work has been retained.',
+        );
+      }
       existing ??= await repo.createDraft(
         site: widget.site,
         date: date,
@@ -1855,6 +1969,51 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
         inspectionTime: DateFormat('h:mm a').format(qatarBusinessNow()),
         language: language,
       );
+      var restoredQueue = false;
+      if (queued != null) {
+        final entry = OfflineInspectionQueue.instance
+            .pending()
+            .where((entry) => entry.key == queued.id)
+            .firstOrNull;
+        if (entry != null) {
+          final resolution = resolveOfflineSync(
+            server: existing,
+            payload: entry.value,
+          );
+          if (resolution == OfflineSyncResolution.conflict) {
+            throw StateError(
+              'Sync conflict: local work has been retained. Review the queued inspection before editing.',
+            );
+          }
+          if (resolution == OfflineSyncResolution.discardFinalizedSnapshot) {
+            await OfflineInspectionQueue.instance.removeIfGeneration(
+              entry.key,
+              (entry.value['_queue'] as Map?)?['generation'] as String?,
+            );
+            _pendingMedia.clear();
+            _pendingMediaDeletes.clear();
+          } else if (resolution == OfflineSyncResolution.applyQueuedChanges) {
+            existing.inspectorName = queued.inspectorName;
+            existing.inspectionTime = queued.inspectionTime;
+            existing.floorLabel = queued.floorLabel;
+            existing.signaturePath = queued.signaturePath;
+            for (final item in existing.items) {
+              final local = queued.items
+                  .where((value) => value.itemIndex == item.itemIndex)
+                  .firstOrNull;
+              if (local == null) continue;
+              item.response = local.response;
+              item.actionsTaken = local.actionsTaken;
+              item.setPhotoPairs(local.photoPairs);
+            }
+            restoredQueue = true;
+          } else {
+            // The saved checkpoint already contains the queued values.
+            _pendingMedia.clear();
+            restoredQueue = true;
+          }
+        }
+      }
       final orgId = widget.site.organizationId.isNotEmpty
           ? widget.site.organizationId
           : existing.organizationId;
@@ -1862,18 +2021,19 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
       if (orgId.isNotEmpty) {
         pol = await ref.read(policyRepositoryProvider).getOrCreate(orgId);
       }
+      if (!mounted) return;
       setState(() {
         inspection = existing;
         policy = pol;
         _reinspectionReason = null;
       });
       await _loadHistory(existing);
-      if (!existing.isSubmitted) {
+      if (!existing.isSubmitted && !restoredQueue) {
         await _carryForwardOpenProblems(existing);
       }
       await _refreshSignaturePreview();
     } catch (e) {
-      setState(() => message = e.toString());
+      if (mounted) setState(() => message = e.toString());
     } finally {
       if (mounted) setState(() => loading = false);
     }
@@ -1888,7 +2048,8 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
     );
     if (!changed) return;
     try {
-      await ref.read(inspectionRepositoryProvider).saveItems(current);
+      _editRevision += 1;
+      await _saveItemsAuthoritatively(current);
       if (mounted) setState(() {});
     } catch (e) {
       if (mounted) {
@@ -2072,10 +2233,12 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
     Inspection current, {
     required String action,
   }) async {
+    final queuedRevision = _editRevision;
     await OfflineInspectionQueue.instance.enqueue(
       localId: current.id,
       payload: {
         'schemaVersion': 2,
+        'ownerUserId': widget.profile.id,
         'action': action,
         'inspectionId': current.id,
         'baseVersion': _isLocalInspection(current) ? null : current.version,
@@ -2107,14 +2270,47 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
         'mediaToDelete': _pendingMediaDeletes.toList(),
       },
     );
+    _lastQueuedRevision = queuedRevision;
+  }
+
+  /// Saves the full in-memory snapshot and reconciles only the outbox
+  /// generation that existed when the request started.
+  ///
+  /// If a user edit somehow arrives while the request is in flight, the newer
+  /// snapshot is queued against the returned server version instead of being
+  /// silently discarded.
+  Future<void> _saveItemsAuthoritatively(
+    Inspection current, {
+    String queuedAction = 'save',
+  }) async {
+    await _waitForActiveAutoSave();
+    final queue = OfflineInspectionQueue.instance;
+    final repository = ref.read(inspectionRepositoryProvider);
+    // Every path (including attaching/removing evidence) must upload previously
+    // autosaved media before sending the complete inspection snapshot.
+    await _uploadPendingMedia(current);
+    if (queue.isReady) {
+      await _enqueueOffline(current, action: queuedAction);
+    }
+    await queue.saveAndReconcile(
+      localId: current.id,
+      editRevision: () => _editRevision,
+      enqueueLatest: () => _enqueueOffline(current, action: queuedAction),
+      save: () async {
+        await repository.saveItems(current);
+        if (queuedAction == 'submit') await repository.submit(current);
+      },
+    );
+    if (!queue.isReady) _lastQueuedRevision = _editRevision;
   }
 
   Future<void> _save() async {
     final current = inspection;
-    if (current == null || current.isSubmitted) return;
+    if (current == null || current.isSubmitted || saving || loading) return;
     _autoSaveTimer?.cancel();
     setState(() => saving = true);
     try {
+      await _waitForActiveAutoSave();
       final signed = await _persistSignature();
       if (!signed &&
           (current.signaturePath == null || current.signaturePath!.isEmpty)) {
@@ -2135,9 +2331,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
         }
         return;
       }
-      await _uploadPendingMedia(current);
-      await ref.read(inspectionRepositoryProvider).saveItems(current);
-      await OfflineInspectionQueue.instance.remove(current.id);
+      await _saveItemsAuthoritatively(current);
       await _deletePendingMedia();
       await _refreshSignaturePreview();
       await ChecklistFeedback.success(
@@ -2179,44 +2373,46 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
 
   Future<void> _submit() async {
     final current = inspection;
-    if (current == null || current.isSubmitted) return;
-    if (!await _gateCompletion()) return;
-    if (!await _gatePhotos()) return;
-    final signedOk = await _persistSignature();
-    if (!mounted) return;
-    if (!signedOk &&
-        (current.signaturePath == null || current.signaturePath!.isEmpty)) {
-      setState(() {
-        message = language == 'ar'
-            ? 'التوقيع مطلوب قبل الإرسال'
-            : 'Signature is required before submit';
-      });
-      return;
-    }
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(L.send),
-        content: Text(
-          language == 'ar'
-              ? 'تأكيد إرسال الفحص للمراجعة؟'
-              : 'Submit this inspection for review?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(L.cancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(L.send),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
+    if (current == null || current.isSubmitted || saving || loading) return;
+    _autoSaveTimer?.cancel();
     setState(() => saving = true);
     try {
+      await _waitForActiveAutoSave();
+      if (!await _gateCompletion()) return;
+      if (!await _gatePhotos()) return;
+      final signedOk = await _persistSignature();
+      if (!mounted) return;
+      if (!signedOk &&
+          (current.signaturePath == null || current.signaturePath!.isEmpty)) {
+        setState(() {
+          message = language == 'ar'
+              ? 'التوقيع مطلوب قبل الإرسال'
+              : 'Signature is required before submit';
+        });
+        return;
+      }
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(L.send),
+          content: Text(
+            language == 'ar'
+                ? 'تأكيد إرسال الفحص للمراجعة؟'
+                : 'Submit this inspection for review?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(L.cancel),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(L.send),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
       if (_isLocalInspection(current) || !await _isOnline()) {
         await _enqueueOffline(current, action: 'submit');
         if (mounted) {
@@ -2232,13 +2428,12 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
         }
         return;
       }
-      await _uploadPendingMedia(current);
-      await ref.read(inspectionRepositoryProvider).saveItems(current);
+      await _saveItemsAuthoritatively(current, queuedAction: 'submit');
       await _deletePendingMedia();
-      await ref.read(inspectionRepositoryProvider).submit(current);
       final full = await ref
           .read(inspectionRepositoryProvider)
           .getById(current.id);
+      if (!mounted) return;
       setState(() => inspection = full);
       await _refreshSignaturePreview();
       await ChecklistFeedback.success(
@@ -2284,18 +2479,20 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
     String? pairId,
   }) async {
     final current = inspection;
-    if (current == null || current.isSubmitted) return;
+    if (current == null || current.isSubmitted || saving || loading) return;
 
-    final source = await _choosePhotoSource();
-    if (source == null) return;
-
+    _autoSaveTimer?.cancel();
+    setState(() => saving = true);
     try {
+      final source = await _choosePhotoSource();
+      if (source == null || !mounted) return;
       final file = await ImagePicker().pickImage(
         source: source,
         imageQuality: 70,
         maxWidth: 1600,
       );
-      if (file == null) return;
+      if (file == null || !mounted || inspection != current) return;
+      await _waitForActiveAutoSave();
       final bytes = await file.readAsBytes();
       final validation = ImageUploadValidation.validate(bytes);
       if (!validation.ok) {
@@ -2366,17 +2563,19 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
           );
         }
       }
+      if (!mounted) return;
       setState(() {
         if (isIssue) {
           item.appendIssueImage(path);
         } else {
           item.appendFixImage(path, pairId: pairId);
         }
+        _editRevision += 1;
       });
       if (path.startsWith('offline://')) {
         await _enqueueOffline(current, action: 'save');
       } else {
-        await ref.read(inspectionRepositoryProvider).saveItems(current);
+        await _saveItemsAuthoritatively(current);
       }
     } catch (e, stack) {
       await StructuredErrorReporter.capture(
@@ -2384,18 +2583,29 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
         stack,
         module: 'entry.photo_upload',
       );
-      setState(() => message = e.toString());
+      if (ChecklistConnectivity.isTransportFailure(e)) {
+        await _enqueueOffline(current, action: 'save');
+        if (mounted) setState(() => message = null);
+      } else if (mounted) {
+        setState(() => message = e.toString());
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              language == 'ar'
+              ChecklistConnectivity.isTransportFailure(e)
+                  ? (language == 'ar'
+                        ? 'حُفظت الصورة محليًا — ستُزامَن عند توفر الشبكة'
+                        : 'Photo saved offline — it will sync when online')
+                  : language == 'ar'
                   ? 'تعذّر إرفاق الصورة. اختر ملفاً من الجهاز.'
                   : 'Could not attach photo. Pick an image from this device.',
             ),
           ),
         );
       }
+    } finally {
+      if (mounted) setState(() => saving = false);
     }
   }
 
@@ -2499,6 +2709,162 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
     );
   }
 
+  Future<void> _clearIssuePhoto(
+    InspectionItem item,
+    String path,
+    String pairId,
+  ) async {
+    final current = inspection;
+    if (current == null || current.isSubmitted || saving) return;
+    if (!_canRemoveEvidenceInEntry(path)) {
+      _showStoredEvidenceDeleteDenied();
+      return;
+    }
+
+    _autoSaveTimer?.cancel();
+    setState(() => saving = true);
+    final previousPairs = [...item.photoPairs];
+    final pendingMedia = _pendingMedia[path];
+    try {
+      await _waitForActiveAutoSave();
+      _removePendingMedia(path);
+      setState(() {
+        item.removeIssueImage(path, pairId: pairId);
+        _editRevision += 1;
+      });
+      if (_isLocalInspection(current) || !await _isOnline()) {
+        await _enqueueOffline(current, action: 'save');
+      } else {
+        await _saveItemsAuthoritatively(current);
+      }
+    } catch (error, stack) {
+      if (ChecklistConnectivity.isTransportFailure(error)) {
+        try {
+          await _enqueueOffline(current, action: 'save');
+          if (mounted) setState(() => message = null);
+          return;
+        } catch (_) {
+          // Restore below when even the encrypted outbox is unavailable.
+        }
+      }
+      if (mounted && _lastQueuedRevision != _editRevision) {
+        setState(() {
+          if (pendingMedia != null) _pendingMedia[path] = pendingMedia;
+          item.setPhotoPairs(previousPairs);
+          _editRevision += 1;
+        });
+      }
+      await StructuredErrorReporter.capture(
+        error,
+        stack,
+        module: 'entry.issue_photo_remove',
+      );
+      if (mounted) {
+        setState(() => message = error.toString());
+      }
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
+  }
+
+  Future<void> _clearFixPhoto(
+    InspectionItem item,
+    String path,
+    String pairId,
+  ) async {
+    final current = inspection;
+    if (current == null || current.isSubmitted || saving) return;
+    final pendingPath = _canRemoveEvidenceInEntry(path);
+    _autoSaveTimer?.cancel();
+    setState(() => saving = true);
+    var previousPairs = [...item.photoPairs];
+    var previousResponse = item.response;
+    final pendingMedia = pendingPath ? _pendingMedia[path] : null;
+    var detachedOnServer = false;
+    try {
+      await _waitForActiveAutoSave();
+      // Lock navigation and edits before awaiting the connectivity probe too.
+      if (!pendingPath && !await _isOnline()) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                language == 'ar'
+                    ? 'إزالة صورة إصلاح محفوظة تتطلب اتصالاً بالخادم.'
+                    : 'Removing a stored fix photo requires a server connection.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+      if (!pendingPath) {
+        // Detaching one photo does not save answers/notes/signatures. Persist
+        // the entire pending snapshot before invoking that partial RPC.
+        await _saveItemsAuthoritatively(current);
+        previousPairs = [...item.photoPairs];
+        previousResponse = item.response;
+      }
+      if (pendingPath) _removePendingMedia(path);
+      setState(() {
+        item.removeFixImage(path, pairId: pairId);
+        _editRevision += 1;
+      });
+      if (pendingPath) {
+        if (_isLocalInspection(current) || !await _isOnline()) {
+          await _enqueueOffline(current, action: 'save');
+        } else {
+          await _saveItemsAuthoritatively(current);
+        }
+      } else {
+        await ref
+            .read(inspectionRepositoryProvider)
+            .detachFixPhoto(inspection: current, item: item, storagePath: path);
+        detachedOnServer = true;
+        await _saveItemsAuthoritatively(current);
+      }
+    } catch (error, stack) {
+      if ((pendingPath || detachedOnServer) &&
+          ChecklistConnectivity.isTransportFailure(error)) {
+        try {
+          await _enqueueOffline(current, action: 'save');
+          if (mounted) setState(() => message = null);
+          return;
+        } catch (_) {
+          // Restore below when even the encrypted outbox is unavailable.
+        }
+      }
+      if (mounted &&
+          !detachedOnServer &&
+          (!pendingPath || _lastQueuedRevision != _editRevision)) {
+        setState(() {
+          if (pendingMedia != null) _pendingMedia[path] = pendingMedia;
+          item.setPhotoPairs(previousPairs);
+          item.response = previousResponse;
+          _editRevision += 1;
+        });
+      }
+      await StructuredErrorReporter.capture(
+        error,
+        stack,
+        module: 'entry.fix_photo_remove',
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              language == 'ar'
+                  ? 'تعذّرت إزالة صورة الإصلاح. تحقق من الاتصال وأعد المحاولة.'
+                  : 'Could not remove the fix photo. Check the connection and retry.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
+  }
+
   /// Desktop and web use the browser/system file picker. This avoids camera
   /// capture constraints that are inconsistent across browsers and desktops.
   Future<ImageSource?> _choosePhotoSource() async {
@@ -2535,13 +2901,15 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
 
   @override
   Widget build(BuildContext context) {
-    final locked = inspection?.isSubmitted == true;
+    final submitted = inspection?.isSubmitted == true;
+    final locked = submitted || saving || loading;
     final site = widget.site;
     return PopScope<void>(
       canPop: _allowPop,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
-        await _autoSaveNow();
+        if (saving) return;
+        if (!await _flushBeforeNavigation()) return;
         if (!mounted) return;
         setState(() => _allowPop = true);
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2578,7 +2946,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
             TextButton(
               onPressed: saving || locked ? null : _submit,
               child: Text(
-                locked ? '✓' : L.send,
+                submitted ? '✓' : L.send,
                 style: TextStyle(color: ChecklistChrome.onAccent),
               ),
             ),
@@ -2616,23 +2984,31 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
                             ),
                           ),
                           OutlinedButton.icon(
-                            onPressed: () async {
-                              final now = qatarBusinessNow();
-                              final today = DateTime(
-                                now.year,
-                                now.month,
-                                now.day,
-                              );
-                              final picked = await showDatePicker(
-                                context: context,
-                                initialDate: date.isAfter(today) ? today : date,
-                                firstDate: DateTime(2024),
-                                lastDate: today,
-                              );
-                              if (picked == null) return;
-                              setState(() => date = picked);
-                              await _loadOrCreate();
-                            },
+                            onPressed: saving || loading
+                                ? null
+                                : () async {
+                                    final now = qatarBusinessNow();
+                                    final today = DateTime(
+                                      now.year,
+                                      now.month,
+                                      now.day,
+                                    );
+                                    final picked = await showDatePicker(
+                                      context: context,
+                                      initialDate: date.isAfter(today)
+                                          ? today
+                                          : date,
+                                      firstDate: DateTime(2024),
+                                      lastDate: today,
+                                    );
+                                    if (picked == null || !mounted || saving) {
+                                      return;
+                                    }
+                                    if (!await _flushBeforeNavigation()) return;
+                                    if (!mounted) return;
+                                    setState(() => date = picked);
+                                    await _loadOrCreate();
+                                  },
                             icon: const Icon(Icons.calendar_today, size: 16),
                             label: Text(DateFormat('yyyy-MM-dd').format(date)),
                           ),
@@ -2673,7 +3049,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
                         ),
                       ),
                     ),
-                  if (locked) ...[
+                  if (submitted) ...[
                     Padding(
                       padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
                       child: ChecklistBrandCard(
@@ -2744,7 +3120,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
                                       _showStoredEvidenceDeleteDenied();
                                       return;
                                     }
-                                    _signature.clear();
+                                    _clearSignatureWithoutDirtyTracking();
                                     if (oldPath != null) {
                                       _removePendingMedia(oldPath);
                                       _queueMediaDeletion(oldPath);
@@ -2754,6 +3130,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
                                       _signaturePreviewUrl = null;
                                       _signaturePreviewBytes = null;
                                     });
+                                    _markDirty();
                                   },
                                 );
                               }
@@ -2790,11 +3167,11 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
                                     );
                                   }
                                   setState(() {});
-                                  _scheduleAutoSave();
+                                  _markDirty();
                                 },
                                 onActions: (v) {
                                   setState(() => item.actionsTaken = v);
-                                  _scheduleAutoSave();
+                                  _markDirty();
                                 },
                                 onPickIssue: ([pairId]) => _pickPhoto(
                                   item,
@@ -2807,113 +3184,10 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
                                   pairId: pairId,
                                 ),
                                 onOpenPhoto: _openEvidencePhoto,
-                                onClearIssue: (path, pairId) async {
-                                  if (!_canRemoveEvidenceInEntry(path)) {
-                                    _showStoredEvidenceDeleteDenied();
-                                    return;
-                                  }
-                                  _removePendingMedia(path);
-                                  _queueMediaDeletion(path);
-                                  setState(() {
-                                    item.removeIssueImage(path, pairId: pairId);
-                                  });
-                                  final current = inspection;
-                                  if (current != null) {
-                                    if (_isLocalInspection(current) ||
-                                        !await _isOnline()) {
-                                      await _enqueueOffline(
-                                        current,
-                                        action: 'save',
-                                      );
-                                    } else {
-                                      await ref
-                                          .read(inspectionRepositoryProvider)
-                                          .saveItems(current);
-                                      await _deletePendingMedia();
-                                    }
-                                  }
-                                },
-                                onClearFix: (path, pairId) async {
-                                  final current = inspection;
-                                  if (current == null) return;
-                                  final pendingPath = _canRemoveEvidenceInEntry(
-                                    path,
-                                  );
-                                  if (!pendingPath && !await _isOnline()) {
-                                    if (context.mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                            language == 'ar'
-                                                ? 'إزالة صورة إصلاح محفوظة تتطلب اتصالاً بالخادم.'
-                                                : 'Removing a stored fix photo requires a server connection.',
-                                          ),
-                                        ),
-                                      );
-                                    }
-                                    return;
-                                  }
-                                  final pendingMedia = pendingPath
-                                      ? _pendingMedia[path]
-                                      : null;
-                                  if (pendingPath) _removePendingMedia(path);
-                                  setState(() {
-                                    item.removeFixImage(path, pairId: pairId);
-                                  });
-                                  try {
-                                    final repository = ref.read(
-                                      inspectionRepositoryProvider,
-                                    );
-                                    if (pendingPath) {
-                                      if (_isLocalInspection(current) ||
-                                          !await _isOnline()) {
-                                        await _enqueueOffline(
-                                          current,
-                                          action: 'save',
-                                        );
-                                      } else {
-                                        await repository.saveItems(current);
-                                      }
-                                    } else {
-                                      await repository.detachFixPhoto(
-                                        inspection: current,
-                                        item: item,
-                                        storagePath: path,
-                                      );
-                                    }
-                                  } catch (error, stack) {
-                                    // Restore the visible relationship if the
-                                    // controlled server edit cannot complete.
-                                    if (mounted) {
-                                      setState(() {
-                                        if (pendingMedia != null) {
-                                          _pendingMedia[path] = pendingMedia;
-                                        }
-                                        item.setFixForPair(pairId, path);
-                                      });
-                                    }
-                                    await StructuredErrorReporter.capture(
-                                      error,
-                                      stack,
-                                      module: 'entry.fix_photo_remove',
-                                    );
-                                    if (context.mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                            language == 'ar'
-                                                ? 'تعذّرت إزالة صورة الإصلاح. تحقق من الاتصال وأعد المحاولة.'
-                                                : 'Could not remove the fix photo. Check the connection and retry.',
-                                          ),
-                                        ),
-                                      );
-                                    }
-                                  }
-                                },
+                                onClearIssue: (path, pairId) =>
+                                    _clearIssuePhoto(item, path, pairId),
+                                onClearFix: (path, pairId) =>
+                                    _clearFixPhoto(item, path, pairId),
                               );
                             },
                           ),

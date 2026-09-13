@@ -5,6 +5,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../models/ops_metrics.dart';
+import 'report_font_loader.dart';
 
 class OpsReportExporter {
   const OpsReportExporter();
@@ -15,13 +16,13 @@ class OpsReportExporter {
     String scopeLabel = '',
   }) async {
     final ar = language == 'ar';
-    final base = await PdfGoogleFonts.notoSansRegular();
-    final bold = await PdfGoogleFonts.notoSansBold();
-    final arabic = await PdfGoogleFonts.notoNaskhArabicRegular();
+    final fonts = await ReportFontLoader.load();
     final theme = pw.ThemeData.withFont(
-      base: base,
-      bold: bold,
-      fontFallback: [arabic],
+      base: ar ? fonts.arabicRegular : fonts.latinRegular,
+      bold: ar ? fonts.arabicBold : fonts.latinBold,
+      fontFallback: ar
+          ? [fonts.latinRegular, fonts.latinBold]
+          : [fonts.arabicRegular, fonts.arabicBold],
     );
     final direction = ar ? pw.TextDirection.rtl : pw.TextDirection.ltr;
     String pct(double value) => '${(value * 100).clamp(0, 100).round()}%';

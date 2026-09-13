@@ -87,5 +87,8 @@ app.*.map.json
 web_deploy/
 dist/
 
+# Supabase CLI link/cache metadata is machine-local and may expose project refs.
+supabase/.temp/
+
 # Flutter build output (never publish app bundles from the source branch)
 build/

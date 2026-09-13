@@ -66,4 +66,5 @@ for migration in "$ROOT"/supabase/migrations/*.sql; do
   "${PSQL[@]}" -f "$migration" >/dev/null
 done
 "${PSQL[@]}" -f "$ROOT/supabase/tests/workflow_smoke.sql" >/dev/null
+"${PSQL[@]}" -f "$ROOT/supabase/tests/rls_access_smoke.sql" >/dev/null
 echo "PostgreSQL migration integration test passed."

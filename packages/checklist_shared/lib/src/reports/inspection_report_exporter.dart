@@ -13,22 +13,9 @@ import '../utils/signature_ink.dart';
 import '../utils/storage_path_list.dart';
 import 'report_branding.dart';
 import 'report_branding_resolver.dart';
+import 'report_font_loader.dart';
 
 enum ReportPhotoMode { links, embedded }
-
-class InspectionReportFonts {
-  const InspectionReportFonts({
-    required this.latinRegular,
-    required this.latinBold,
-    required this.arabicRegular,
-    required this.arabicBold,
-  });
-
-  final pw.Font latinRegular;
-  final pw.Font latinBold;
-  final pw.Font arabicRegular;
-  final pw.Font arabicBold;
-}
 
 enum InspectionReportEvidenceIssue {
   missingSignature,
@@ -164,7 +151,7 @@ class InspectionReportExporter {
     Inspection inspection, {
     String language = 'en',
     FormPaperTheme? paperTheme,
-    ReportPhotoMode photoMode = ReportPhotoMode.links,
+    ReportPhotoMode photoMode = ReportPhotoMode.embedded,
   }) async {
     final bytes = await buildPdfBytes(
       inspection,
@@ -183,7 +170,7 @@ class InspectionReportExporter {
   Future<void> print(
     Inspection inspection, {
     String language = 'en',
-    ReportPhotoMode photoMode = ReportPhotoMode.links,
+    ReportPhotoMode photoMode = ReportPhotoMode.embedded,
   }) async {
     final bytes = await buildPdfBytes(
       inspection,
@@ -214,7 +201,7 @@ class InspectionReportExporter {
   Future<void> share(
     Inspection inspection, {
     String language = 'en',
-    ReportPhotoMode photoMode = ReportPhotoMode.links,
+    ReportPhotoMode photoMode = ReportPhotoMode.embedded,
   }) async {
     final bytes = await buildPdfBytes(
       inspection,
@@ -233,7 +220,7 @@ class InspectionReportExporter {
     String language = 'en',
     ReportBrandingBytes? branding,
     FormPaperTheme? paperTheme,
-    ReportPhotoMode photoMode = ReportPhotoMode.links,
+    ReportPhotoMode photoMode = ReportPhotoMode.embedded,
     InspectionReportFonts? fonts,
   }) async {
     validateInspectionReportEvidence(inspection);
@@ -292,19 +279,11 @@ class InspectionReportExporter {
     final embeddedPhotos = <String, Uint8List>{};
     for (final item in items) {
       for (final photo in item.remarkPhotos) {
-        if (photoLinks.containsKey(photo.path)) continue;
-        final reference = photoReferences[photo.path];
-        final url = await repo().signedUrl(
-          photo.path,
-          expiresIn: 7 * 24 * 3600,
-        );
-        if (url == null || url.isEmpty) {
-          throw InspectionReportEvidenceException(
-            InspectionReportEvidenceIssue.unavailablePhoto,
-            reference: reference,
-          );
+        if (photoLinks.containsKey(photo.path) ||
+            embeddedPhotos.containsKey(photo.path)) {
+          continue;
         }
-        photoLinks[photo.path] = url;
+        final reference = photoReferences[photo.path];
         if (photoMode == ReportPhotoMode.embedded) {
           final bytes = await repo().downloadBytes(photo.path);
           if (bytes == null || bytes.isEmpty) {
@@ -321,18 +300,23 @@ class InspectionReportExporter {
             );
           }
           embeddedPhotos[photo.path] = optimized;
+        } else {
+          final url = await repo().signedUrl(
+            photo.path,
+            expiresIn: 7 * 24 * 3600,
+          );
+          if (url == null || url.isEmpty) {
+            throw InspectionReportEvidenceException(
+              InspectionReportEvidenceIssue.unavailablePhoto,
+              reference: reference,
+            );
+          }
+          photoLinks[photo.path] = url;
         }
       }
     }
 
-    final resolvedFonts =
-        fonts ??
-        InspectionReportFonts(
-          latinRegular: await PdfGoogleFonts.notoSansRegular(),
-          latinBold: await PdfGoogleFonts.notoSansBold(),
-          arabicRegular: await PdfGoogleFonts.notoNaskhArabicRegular(),
-          arabicBold: await PdfGoogleFonts.notoNaskhArabicBold(),
-        );
+    final resolvedFonts = fonts ?? await ReportFontLoader.load();
     final theme = buildInspectionReportTheme(
       arabic: ar,
       latinRegular: resolvedFonts.latinRegular,
@@ -489,7 +473,7 @@ class InspectionReportExporter {
         final reference = photoReferences[photo.path] ?? '${item.itemIndex}';
         widgets.add(
           pw.Container(
-            height: 176,
+            constraints: const pw.BoxConstraints(minHeight: 176),
             margin: const pw.EdgeInsets.only(bottom: 10),
             padding: const pw.EdgeInsets.all(7),
             decoration: pw.BoxDecoration(
@@ -497,7 +481,7 @@ class InspectionReportExporter {
               borderRadius: const pw.BorderRadius.all(pw.Radius.circular(3)),
             ),
             child: pw.Row(
-              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: ar
                   ? [
                       _photoEvidenceDetails(
@@ -531,6 +515,7 @@ class InspectionReportExporter {
 
   pw.Widget _embeddedPhoto(Uint8List bytes) => pw.SizedBox(
     width: 250,
+    height: 160,
     child: pw.Image(pw.MemoryImage(bytes), fit: pw.BoxFit.contain),
   );
 
@@ -564,8 +549,6 @@ class InspectionReportExporter {
           item.descriptionFor(language),
           textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
           textAlign: ar ? pw.TextAlign.right : pw.TextAlign.left,
-          maxLines: 6,
-          overflow: pw.TextOverflow.clip,
           style: const pw.TextStyle(fontSize: 8, lineSpacing: 1.2),
         ),
       ],
@@ -803,7 +786,11 @@ class InspectionReportExporter {
           text,
           textAlign: a,
           style: valueStyle(),
-          textDirection: forceLtr ? pw.TextDirection.ltr : dir,
+          textDirection: RegExp(r'[\u0600-\u06FF]').hasMatch(text)
+              ? pw.TextDirection.rtl
+              : forceLtr
+              ? pw.TextDirection.ltr
+              : dir,
         ),
       );
     }
@@ -1075,7 +1062,8 @@ class InspectionReportExporter {
     );
   }
 
-  /// Fixed data-row height so empty / photo rows match.
+  /// Minimum data-row height. Long multilingual text is allowed to grow so no
+  /// description or action is silently clipped from the official report.
   static const _itemRowH = 36.0;
 
   /// Preferred photo icon width before shrink (≥ 1 cm).
@@ -1167,7 +1155,6 @@ class InspectionReportExporter {
     required Map<String, String> photoReferences,
     required double boxW,
     required double boxH,
-    required bool hasText,
     required bool ar,
   }) {
     if (photos.isEmpty || boxW <= 0 || boxH <= 0) return pw.SizedBox();
@@ -1182,8 +1169,7 @@ class InspectionReportExporter {
     final gaps = innerGaps + betweenGap * betweenCount;
     final fitW = ((boxW - gaps) / n).clamp(3.0, boxW);
     final w = fitW < _photoMinWidthCm ? fitW : _photoMinWidthCm;
-    final photoBandH = hasText ? (boxH * 0.55).clamp(6.0, boxH) : boxH;
-    final h = photoBandH.clamp(5.0, boxH);
+    final h = boxH.clamp(5.0, boxH);
 
     return pw.SizedBox(
       width: boxW,
@@ -1222,7 +1208,7 @@ class InspectionReportExporter {
     ),
   }) {
     return pw.Container(
-      height: _itemRowH,
+      constraints: const pw.BoxConstraints(minHeight: _itemRowH),
       alignment: alignment,
       padding: padding,
       child: child,
@@ -1239,15 +1225,12 @@ class InspectionReportExporter {
     final text = item.actionsTaken.trim();
     final hasText = text.isNotEmpty;
     final photos = item.remarkPhotos;
-    // Inner size of the fixed remarks box (cell padding accounted for).
+    // Inner width of the remarks cell (cell padding accounted for).
     const padX = 6.0;
-    const padY = 4.0;
     final boxW = (_remarksColWidth - padX).clamp(40.0, _remarksColWidth);
-    final boxH = (_itemRowH - padY).clamp(12.0, _itemRowH);
 
-    return pw.SizedBox(
-      width: boxW,
-      height: boxH,
+    return pw.ConstrainedBox(
+      constraints: pw.BoxConstraints(maxWidth: boxW),
       child: pw.Column(
         crossAxisAlignment: ar
             ? pw.CrossAxisAlignment.end
@@ -1260,25 +1243,20 @@ class InspectionReportExporter {
               photoLinks: photoLinks,
               photoReferences: photoReferences,
               boxW: boxW,
-              boxH: hasText ? boxH : boxH,
-              hasText: hasText,
+              boxH: hasText ? 18 : 24,
               ar: ar,
             ),
           if (photos.isNotEmpty && hasText) pw.SizedBox(height: 1),
           if (hasText)
-            pw.Expanded(
-              child: pw.Text(
-                text,
-                style: const pw.TextStyle(
-                  fontSize: 6.5,
-                  color: PdfColors.black,
-                  lineSpacing: 1.05,
-                ),
-                textAlign: descAlign,
-                textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
-                maxLines: photos.isEmpty ? 3 : 2,
-                overflow: pw.TextOverflow.clip,
+            pw.Text(
+              text,
+              style: const pw.TextStyle(
+                fontSize: 6.5,
+                color: PdfColors.black,
+                lineSpacing: 1.05,
               ),
+              textAlign: descAlign,
+              textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
             ),
         ],
       ),
@@ -1333,8 +1311,6 @@ class InspectionReportExporter {
           ),
           textAlign: descAlign,
           textDirection: ar ? pw.TextDirection.rtl : pw.TextDirection.ltr,
-          maxLines: 3,
-          overflow: pw.TextOverflow.clip,
         ),
       ),
       _markCell(item, ChecklistResponse.yes),
@@ -1378,7 +1354,7 @@ class InspectionReportExporter {
       columnWidths: widths,
       defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
       children: [
-        pw.TableRow(children: headerRow),
+        pw.TableRow(repeat: true, children: headerRow),
         for (final item in items)
           pw.TableRow(
             verticalAlignment: pw.TableCellVerticalAlignment.middle,

@@ -62,21 +62,26 @@ class AuthRepository {
     await _client.auth.signOut();
   }
 
-  /// Create Auth user + pending profile (owner / super_admin RPC).
+  /// Create an Auth user through a trusted Edge Function using Auth Admin API.
   Future<String> createUser({
     required String email,
     required String password,
     String? fullName,
   }) async {
-    final id = await _client.rpc(
-      'admin_create_user',
-      params: {
-        'p_email': email.trim(),
-        'p_password': password,
-        'p_full_name': fullName,
+    final response = await _client.functions.invoke(
+      'admin-create-user',
+      body: {
+        'email': email.trim(),
+        'password': password,
+        'full_name': fullName?.trim(),
       },
     );
-    return id as String;
+    final data = response.data;
+    final id = data is Map ? data['id'] as String? : null;
+    if (id == null || id.isEmpty) {
+      throw StateError('User creation returned no user id');
+    }
+    return id;
   }
 
   Future<void> updatePassword(String newPassword) async {

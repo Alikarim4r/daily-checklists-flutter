@@ -20,6 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -48,6 +51,7 @@ jobs:
         run: |
           python3 scripts/check_web_portal.py
           node --check web_portal/portal.js
+          node --test scripts/test_admin_create_user.mjs
 
   flutter-quality:
     runs-on: ubuntu-latest
@@ -75,7 +79,7 @@ jobs:
       - name: Run browser-specific photo compatibility regression
         if: matrix.project == 'packages/checklist_shared'
         working-directory: packages/checklist_shared
-        run: flutter test --no-pub --platform chrome test/photo_pair_test.dart
+        run: flutter test --no-pub --platform chrome test/photo_pair_test.dart test/offline_queue_web_test.dart
 
   web-release-build:
     needs: [format-and-sql, flutter-quality]

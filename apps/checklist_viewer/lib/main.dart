@@ -126,28 +126,28 @@ Future<ReportPhotoMode?> _pickReportPhotoMode(
         mainAxisSize: MainAxisSize.min,
         children: [
           ListTile(
-            leading: const Icon(Icons.link_outlined),
-            title: Text(
-              ar ? 'مراجع وروابط الصور' : 'Photo references & secure links',
-            ),
-            subtitle: Text(
-              ar
-                  ? 'تقرير خفيف مع مرجع ثابت ورابط آمن لكل صورة'
-                  : 'Lightweight report with a stable reference and secure link',
-            ),
-            onTap: () => Navigator.pop(context, ReportPhotoMode.links),
-          ),
-          ListTile(
             leading: const Icon(Icons.photo_library_outlined),
             title: Text(
               ar ? 'تضمين الصور في التقرير' : 'Include photos in PDF',
             ),
             subtitle: Text(
               ar
-                  ? 'يضيف قسم أدلة الصور مع مراجع البنود'
-                  : 'Adds a structured evidence section with item references',
+                  ? 'الخيار الموصى به: أدلة دائمة داخل ملف PDF نفسه'
+                  : 'Recommended: permanent evidence inside the PDF itself',
             ),
             onTap: () => Navigator.pop(context, ReportPhotoMode.embedded),
+          ),
+          ListTile(
+            leading: const Icon(Icons.link_outlined),
+            title: Text(
+              ar ? 'مراجع وروابط الصور' : 'Photo references & secure links',
+            ),
+            subtitle: Text(
+              ar
+                  ? 'ملف أخف؛ تنتهي صلاحية روابط الصور بعد 7 أيام'
+                  : 'Smaller file; photo links expire after 7 days',
+            ),
+            onTap: () => Navigator.pop(context, ReportPhotoMode.links),
           ),
           const SizedBox(height: 8),
         ],

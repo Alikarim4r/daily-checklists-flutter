@@ -12,11 +12,19 @@ import '../theme/form_theme_resolution.dart';
 import '../utils/storage_path_list.dart';
 import 'catalog_repository.dart';
 
+Iterable<List<T>> _chunks<T>(List<T> values, int chunkSize) sync* {
+  for (var start = 0; start < values.length; start += chunkSize) {
+    yield values.sublist(start, math.min(start + chunkSize, values.length));
+  }
+}
+
 class InspectionRepository {
   InspectionRepository(this._client);
 
   final SupabaseClient _client;
   static const bucket = 'checklist-media';
+  static const _readPageSize = 500;
+  static const _inFilterChunkSize = 100;
 
   ChecklistCatalogRepository get _catalog =>
       ChecklistCatalogRepository(_client);
@@ -36,24 +44,29 @@ class InspectionRepository {
     final unresolvedSiteIds = rowsBySiteId.keys.toSet();
 
     try {
-      final raw = await _client.rpc(
-        'resolve_checklist_form_themes',
-        params: {'p_site_ids': rowsBySiteId.keys.toList()},
-      );
-      for (final value in raw as List) {
-        final resolved = Map<String, dynamic>.from(value as Map);
-        final siteId = resolved['site_id'] as String?;
-        if (siteId == null) continue;
-        final theme = resolved['theme_key'] as String?;
-        if (theme == null || theme.trim().isEmpty || theme == 'inherit') {
-          continue;
+      for (final siteIds in _chunks(
+        rowsBySiteId.keys.toList(),
+        _inFilterChunkSize,
+      )) {
+        final raw = await _client.rpc(
+          'resolve_checklist_form_themes',
+          params: {'p_site_ids': siteIds},
+        );
+        for (final value in raw as List) {
+          final resolved = Map<String, dynamic>.from(value as Map);
+          final siteId = resolved['site_id'] as String?;
+          if (siteId == null) continue;
+          final theme = resolved['theme_key'] as String?;
+          if (theme == null || theme.trim().isEmpty || theme == 'inherit') {
+            continue;
+          }
+          for (final row in rowsBySiteId[siteId] ?? const []) {
+            row['_resolved_form_theme'] = theme;
+            row['_resolved_form_theme_accent'] = resolved['accent_hex'];
+            row['_form_theme_source'] = resolved['source_scope'];
+          }
+          unresolvedSiteIds.remove(siteId);
         }
-        for (final row in rowsBySiteId[siteId] ?? const []) {
-          row['_resolved_form_theme'] = theme;
-          row['_resolved_form_theme_accent'] = resolved['accent_hex'];
-          row['_form_theme_source'] = resolved['source_scope'];
-        }
-        unresolvedSiteIds.remove(siteId);
       }
       if (unresolvedSiteIds.isEmpty) return;
     } catch (_) {
@@ -71,17 +84,21 @@ class InspectionRepository {
   }) async {
     final ids = values.where((value) => value.isNotEmpty).toSet().toList();
     if (ids.isEmpty) return const [];
-    try {
-      final rows = await _client
-          .from(table)
-          .select(columns)
-          .inFilter(filterColumn, ids);
-      return [
-        for (final row in rows as List) Map<String, dynamic>.from(row as Map),
-      ];
-    } catch (_) {
-      return const [];
+    final result = <Map<String, dynamic>>[];
+    for (final chunk in _chunks(ids, _inFilterChunkSize)) {
+      try {
+        final rows = await _client
+            .from(table)
+            .select(columns)
+            .inFilter(filterColumn, chunk);
+        result.addAll([
+          for (final row in rows as List) Map<String, dynamic>.from(row as Map),
+        ]);
+      } catch (_) {
+        // A missing optional theme source must not block the checklist list.
+      }
     }
+    return result;
   }
 
   FormThemeScopeValue? _themeCandidate(
@@ -214,30 +231,41 @@ class InspectionRepository {
     ReviewStatus? reviewStatus,
     List<ReviewStatus>? reviewStatuses,
   }) async {
-    var q = _client
-        .from('checklist_inspections')
-        .select(
-          '*, sites(name_en, name_ar, pin, organization_id, checklist_type, parent_site_id, zone_id, form_theme, form_theme_accent)',
+    final maps = <Map<String, dynamic>>[];
+    for (var offset = 0; ; offset += _readPageSize) {
+      var query = _client
+          .from('checklist_inspections')
+          .select(
+            '*, sites(name_en, name_ar, pin, organization_id, checklist_type, parent_site_id, zone_id, form_theme, form_theme_accent)',
+          );
+      if (siteId != null && siteId.isNotEmpty) {
+        query = query.eq('site_id', siteId);
+      }
+      if (date != null) {
+        final iso =
+            '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+        query = query.eq('inspection_date', iso);
+      }
+      if (status != null) query = query.eq('status', status.dbValue);
+      if (reviewStatus != null) {
+        query = query.eq('review_status', reviewStatus.dbValue);
+      } else if (reviewStatuses != null && reviewStatuses.isNotEmpty) {
+        query = query.inFilter(
+          'review_status',
+          reviewStatuses.map((e) => e.dbValue).toList(),
         );
-    if (siteId != null && siteId.isNotEmpty) q = q.eq('site_id', siteId);
-    if (date != null) {
-      final iso =
-          '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-      q = q.eq('inspection_date', iso);
+      }
+      final rows = await query
+          .order('inspection_date', ascending: false)
+          .order('created_at', ascending: false)
+          .order('id', ascending: false)
+          .range(offset, offset + _readPageSize - 1);
+      final page = [
+        for (final row in rows as List) Map<String, dynamic>.from(row as Map),
+      ];
+      maps.addAll(page);
+      if (page.length < _readPageSize) break;
     }
-    if (status != null) q = q.eq('status', status.dbValue);
-    if (reviewStatus != null) {
-      q = q.eq('review_status', reviewStatus.dbValue);
-    } else if (reviewStatuses != null && reviewStatuses.isNotEmpty) {
-      q = q.inFilter(
-        'review_status',
-        reviewStatuses.map((e) => e.dbValue).toList(),
-      );
-    }
-    final rows = await q.order('inspection_date', ascending: false);
-    final maps = [
-      for (final row in rows as List) Map<String, dynamic>.from(row as Map),
-    ];
     await _attachResolvedThemeData(maps);
     return maps.map(Inspection.fromJson).toList();
   }
@@ -253,34 +281,46 @@ class InspectionRepository {
         '${from.year.toString().padLeft(4, '0')}-${from.month.toString().padLeft(2, '0')}-${from.day.toString().padLeft(2, '0')}';
     final toIso =
         '${asOfDate.year.toString().padLeft(4, '0')}-${asOfDate.month.toString().padLeft(2, '0')}-${asOfDate.day.toString().padLeft(2, '0')}';
-    final rows = await _client
-        .from('checklist_inspections')
-        .select(
-          '*, sites(name_en, name_ar, pin, organization_id, checklist_type, parent_site_id, zone_id, form_theme, form_theme_accent)',
-        )
-        .eq('site_id', siteId)
-        .gte('inspection_date', fromIso)
-        .lte('inspection_date', toIso)
-        .order('inspection_date', ascending: false)
-        .order('created_at', ascending: false);
-    final maps = [
-      for (final row in rows as List) Map<String, dynamic>.from(row as Map),
-    ];
+    final maps = <Map<String, dynamic>>[];
+    for (var offset = 0; ; offset += _readPageSize) {
+      final rows = await _client
+          .from('checklist_inspections')
+          .select(
+            '*, sites(name_en, name_ar, pin, organization_id, checklist_type, parent_site_id, zone_id, form_theme, form_theme_accent)',
+          )
+          .eq('site_id', siteId)
+          .gte('inspection_date', fromIso)
+          .lte('inspection_date', toIso)
+          .order('inspection_date', ascending: false)
+          .order('created_at', ascending: false)
+          .order('id', ascending: false)
+          .range(offset, offset + _readPageSize - 1);
+      final page = [
+        for (final row in rows as List) Map<String, dynamic>.from(row as Map),
+      ];
+      maps.addAll(page);
+      if (page.length < _readPageSize) break;
+    }
     await _attachResolvedThemeData(maps);
-    final list = <Inspection>[];
+    final checklistTypeByInspectionId = <String, String>{};
     for (final map in maps) {
       final site = map['sites'] as Map<String, dynamic>?;
-      final checklistType =
+      checklistTypeByInspectionId[map['id'] as String] =
           (site?['checklist_type'] as String?)?.trim().isNotEmpty == true
           ? site!['checklist_type'] as String
           : 'DEFAULT';
-      final items = await listItems(
-        map['id'] as String,
-        checklistType: checklistType,
-      );
-      list.add(Inspection.fromJson(map, items: items));
     }
-    return list;
+    final itemsByInspection = await listItemsForInspections(
+      inspectionIds: checklistTypeByInspectionId.keys,
+      checklistTypeByInspectionId: checklistTypeByInspectionId,
+    );
+    return [
+      for (final map in maps)
+        Inspection.fromJson(
+          map,
+          items: itemsByInspection[map['id'] as String] ?? const [],
+        ),
+    ];
   }
 
   Future<Inspection?> getById(String id) async {
@@ -340,22 +380,30 @@ class InspectionRepository {
     final ids = inspectionIds.where((id) => id.isNotEmpty).toSet().toList();
     if (ids.isEmpty) return const {};
 
-    final rows = await _client
-        .from('checklist_inspection_items')
-        .select()
-        .inFilter('inspection_id', ids)
-        .order('inspection_id')
-        .order('item_index');
     final grouped = <String, List<InspectionItem>>{
       for (final id in ids) id: <InspectionItem>[],
     };
-    for (final value in rows as List) {
-      final row = Map<String, dynamic>.from(value as Map);
-      final inspectionId = row['inspection_id'] as String?;
-      if (inspectionId == null) continue;
-      grouped
-          .putIfAbsent(inspectionId, () => <InspectionItem>[])
-          .add(InspectionItem.fromJson(row));
+    for (final idChunk in _chunks(ids, _inFilterChunkSize)) {
+      for (var offset = 0; ; offset += _readPageSize) {
+        final rows = await _client
+            .from('checklist_inspection_items')
+            .select()
+            .inFilter('inspection_id', idChunk)
+            .order('inspection_id')
+            .order('item_index')
+            .order('id')
+            .range(offset, offset + _readPageSize - 1);
+        final page = rows as List;
+        for (final value in page) {
+          final row = Map<String, dynamic>.from(value as Map);
+          final inspectionId = row['inspection_id'] as String?;
+          if (inspectionId == null) continue;
+          grouped
+              .putIfAbsent(inspectionId, () => <InspectionItem>[])
+              .add(InspectionItem.fromJson(row));
+        }
+        if (page.length < _readPageSize) break;
+      }
     }
     for (final entry in grouped.entries) {
       entry.value.sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
@@ -726,25 +774,48 @@ class InspectionRepository {
   }
 
   Future<List<Inspection>> listPendingReview({String? siteId}) async {
-    var q = _client
-        .from('checklist_inspections')
-        .select(
-          '*, sites(name_en, name_ar, pin, organization_id, checklist_type, parent_site_id, zone_id, form_theme, form_theme_accent)',
-        );
-    q = q.eq('review_status', ReviewStatus.submitted.dbValue);
-    if (siteId != null && siteId.isNotEmpty) q = q.eq('site_id', siteId);
-    final rows = await q.order('inspection_date', ascending: false);
-    final maps = [
-      for (final row in rows as List) Map<String, dynamic>.from(row as Map),
-    ];
-    await _attachResolvedThemeData(maps);
-    final list = <Inspection>[];
-    for (final map in maps) {
-      final id = map['id'] as String;
-      final items = await listItems(id);
-      list.add(Inspection.fromJson(map, items: items));
+    final maps = <Map<String, dynamic>>[];
+    for (var offset = 0; ; offset += _readPageSize) {
+      var query = _client
+          .from('checklist_inspections')
+          .select(
+            '*, sites(name_en, name_ar, pin, organization_id, checklist_type, parent_site_id, zone_id, form_theme, form_theme_accent)',
+          )
+          .eq('review_status', ReviewStatus.submitted.dbValue);
+      if (siteId != null && siteId.isNotEmpty) {
+        query = query.eq('site_id', siteId);
+      }
+      final rows = await query
+          .order('inspection_date', ascending: false)
+          .order('created_at', ascending: false)
+          .order('id', ascending: false)
+          .range(offset, offset + _readPageSize - 1);
+      final page = [
+        for (final row in rows as List) Map<String, dynamic>.from(row as Map),
+      ];
+      maps.addAll(page);
+      if (page.length < _readPageSize) break;
     }
-    return list;
+    await _attachResolvedThemeData(maps);
+    final checklistTypeByInspectionId = <String, String>{};
+    for (final map in maps) {
+      final site = map['sites'] as Map<String, dynamic>?;
+      checklistTypeByInspectionId[map['id'] as String] =
+          (site?['checklist_type'] as String?)?.trim().isNotEmpty == true
+          ? site!['checklist_type'] as String
+          : 'DEFAULT';
+    }
+    final itemsByInspection = await listItemsForInspections(
+      inspectionIds: checklistTypeByInspectionId.keys,
+      checklistTypeByInspectionId: checklistTypeByInspectionId,
+    );
+    return [
+      for (final map in maps)
+        Inspection.fromJson(
+          map,
+          items: itemsByInspection[map['id'] as String] ?? const [],
+        ),
+    ];
   }
 
   Future<void> deleteInspection(Inspection inspection) async {
