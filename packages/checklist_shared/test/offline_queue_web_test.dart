@@ -28,9 +28,9 @@ void main() {
         expect(queue.generationFor('browser-test'), isNot(first));
         expect(await queue.removeIfGeneration('browser-test', first), isFalse);
         expect(queue.pending().single.value['baseVersion'], 2);
-    } finally {
-      await Hive.box<String>('checklist_offline_queue').close();
-      await Hive.deleteBoxFromDisk('checklist_offline_queue');
+      } finally {
+        await Hive.box<String>('checklist_offline_queue').close();
+        await Hive.deleteBoxFromDisk('checklist_offline_queue');
       }
     },
   );

@@ -10,6 +10,13 @@ PROJECTS=(
 )
 
 cd "$ROOT"
+# The formatter reads each package's language version from package_config.json.
+# Resolve dependencies first so clean checkouts match developer workspaces.
+for project in "${PROJECTS[@]}"; do
+  echo "=== $project: dependencies ==="
+  (cd "$ROOT/$project" && flutter pub get)
+done
+
 dart format --output=none --set-exit-if-changed \
   apps/checklist_entry/lib \
   apps/checklist_entry/test \
@@ -21,8 +28,6 @@ dart format --output=none --set-exit-if-changed \
   packages/checklist_shared/test
 
 for project in "${PROJECTS[@]}"; do
-  echo "=== $project: dependencies ==="
-  (cd "$ROOT/$project" && flutter pub get)
   echo "=== $project: analyzer ==="
   (cd "$ROOT/$project" && flutter analyze --no-pub)
   echo "=== $project: tests ==="

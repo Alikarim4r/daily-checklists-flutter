@@ -34,6 +34,11 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
       - run: pip install -r requirements-dev.txt
+      - name: Resolve package language versions before formatting
+        run: |
+          for project in packages/checklist_shared apps/checklist_entry apps/checklist_viewer apps/checklist_admin; do
+            (cd "$project" && flutter pub get)
+          done
       - name: Verify formatting
         run: >-
           dart format --output=none --set-exit-if-changed
