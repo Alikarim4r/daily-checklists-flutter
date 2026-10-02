@@ -1,7 +1,7 @@
 name: checklist_admin
-description: Demo Org Facility Daily Inspection — admin permissions and corrections.
+description: Daily Checklists administration app for users, hierarchy, policies, and checklist configuration.
 publish_to: "none"
-version: 1.3.5+12
+version: 1.3.6+13
 
 environment:
   sdk: ^3.12.2

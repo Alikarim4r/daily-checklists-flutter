@@ -211,6 +211,42 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                   title: Text(ar ? 'تغيير كلمة المرور' : 'Change password'),
                   onTap: () => _changePassword(context, ref, ar),
                 ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.privacy_tip_outlined),
+                  title: Text(ar ? 'سياسة الخصوصية' : 'Privacy policy'),
+                  subtitle: Text(
+                    ar
+                        ? 'كيفية جمع البيانات واستخدامها وحمايتها'
+                        : 'How data is collected, used, and protected',
+                  ),
+                  onTap: () => _openExternal(
+                    Uri.parse(
+                      'https://inspection.alielhassan.com/privacy.html',
+                    ),
+                  ),
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    Icons.person_remove_outlined,
+                    color: theme.colorScheme.error,
+                  ),
+                  title: Text(
+                    ar ? 'طلب حذف الحساب' : 'Request account deletion',
+                    style: TextStyle(color: theme.colorScheme.error),
+                  ),
+                  subtitle: Text(
+                    ar
+                        ? 'بدء طلب حذف الحساب والبيانات المرتبطة به'
+                        : 'Start a request to delete your account and associated data',
+                  ),
+                  onTap: () => _openExternal(
+                    Uri.parse(
+                      'https://inspection.alielhassan.com/delete-account.html',
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 8),
                 _biometricTile(context, ref, ar),
                 const SizedBox(height: 12),
@@ -295,6 +331,10 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  Future<void> _openExternal(Uri uri) async {
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   Widget _section(BuildContext context, String text, IconData icon) {
