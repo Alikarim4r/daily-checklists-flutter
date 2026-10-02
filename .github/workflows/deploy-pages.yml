@@ -7,9 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       native_release_tag:
-        description: GitHub Release tag containing the matching signed APK and macOS assets
+        description: GitHub Release tag containing the matching signed native assets
         required: true
         type: string
+      allow_legacy_macos:
+        description: Publish current web/Android; retain only previously published Mac packages with actual version labels, or mark Mac unavailable
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -36,6 +41,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -69,6 +75,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NATIVE_RELEASE_TAG: ${{ inputs.native_release_tag || vars.NATIVE_RELEASE_TAG }}
+          ALLOW_LEGACY_MACOS: ${{ (inputs.allow_legacy_macos || vars.ALLOW_LEGACY_MACOS == '1') && '1' || '0' }}
         run: |
           test -n "$NATIVE_RELEASE_TAG" || { echo "Set NATIVE_RELEASE_TAG to the matching signed release. Existing Pages content is retained." >&2; exit 1; }
           for app in entry viewer admin; do
@@ -79,7 +86,11 @@ jobs:
             esac
             mkdir -p "dist/android/checklist_$app" "dist/macos/checklist_$app"
             gh release download "$NATIVE_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "checklist_$app.apk" --dir "dist/android/checklist_$app"
-            gh release download "$NATIVE_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$product-macOS.zip" --dir "dist/macos/checklist_$app"
+            if [[ "$ALLOW_LEGACY_MACOS" == 1 ]]; then
+              gh release download "$NATIVE_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$product-macOS.zip" --dir "dist/macos/checklist_$app" || true
+            else
+              gh release download "$NATIVE_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$product-macOS.zip" --dir "dist/macos/checklist_$app"
+            fi
           done
       - name: Build portal and three Flutter web apps
         env:
@@ -88,15 +99,17 @@ jobs:
           WEB_BASE_HREF: ${{ vars.WEB_BASE_HREF || format('/{0}', github.event.repository.name) }}
           PAGES_CNAME: ${{ vars.PAGES_CNAME }}
           RELEASE_APP_ENV: production
+          ALLOW_LEGACY_MACOS: ${{ (inputs.allow_legacy_macos || vars.ALLOW_LEGACY_MACOS == '1') && '1' || '0' }}
         run: ./scripts/build_web_portal.sh
-      - name: Require all verified downloads before replacing Pages
+      - name: Require a verified and accurately labeled release before replacing Pages
+        env:
+          ALLOW_LEGACY_MACOS: ${{ (inputs.allow_legacy_macos || vars.ALLOW_LEGACY_MACOS == '1') && '1' || '0' }}
         run: |
-          for name in inspection-entry inspection-viewer inspection-admin; do
-            test -s "web_deploy/downloads/android/$name.apk"
-          done
-          for name in Inspection-Entry Inspection-Viewer Inspection-Admin; do
-            test -s "web_deploy/downloads/macos/$name-macOS.zip"
-          done
+          if [[ "$ALLOW_LEGACY_MACOS" == 1 ]]; then
+            python3 scripts/check_web_portal.py --deploy web_deploy --allow-legacy-macos
+          else
+            python3 scripts/check_web_portal.py --deploy web_deploy
+          fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
