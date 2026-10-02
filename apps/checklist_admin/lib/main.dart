@@ -153,6 +153,28 @@ class _AdminShellState extends ConsumerState<AdminShell> {
               );
             },
           ),
+          if (p.homeOrganizationId != null)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.workspace_premium_outlined),
+              title: Text(ar ? 'الاشتراك' : 'Subscription'),
+              subtitle: Text(
+                ar
+                    ? 'الخطة والحدود وحالة الخدمة'
+                    : 'Plan, limits and service status',
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => SubscriptionScreen(
+                      profile: p,
+                      language: widget.language,
+                    ),
+                  ),
+                );
+              },
+            ),
           if (p.isPlatformOwner)
             ListTile(
               contentPadding: EdgeInsets.zero,
