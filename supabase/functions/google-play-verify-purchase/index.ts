@@ -1,0 +1,22 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
+import { PLAY_PACKAGE } from "../_shared/google_play.ts";
+import { syncPurchase } from "../_shared/google_play_sync.ts";
+const cors={"Access-Control-Allow-Origin":"*","Access-Control-Allow-Headers":"authorization, x-client-info, apikey, content-type","Access-Control-Allow-Methods":"POST, OPTIONS"};
+const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,"Content-Type":"application/json"}});
+Deno.serve(async(req)=>{try{
+ if(req.method==="OPTIONS") return new Response("ok",{headers:cors});
+ if(req.method!=="POST") return json({error:"Method not allowed"},405);
+ const url=Deno.env.get("SUPABASE_URL"), anon=Deno.env.get("SUPABASE_ANON_KEY"), service=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+ if(!url||!anon||!service) return json({error:"Server configuration is incomplete"},500);
+ const jwt=(req.headers.get("Authorization")??"").replace(/^Bearer\s+/i,"").trim(); if(!jwt) return json({error:"Authentication required"},401);
+ const caller=createClient(url,anon,{auth:{persistSession:false,autoRefreshToken:false}}); const {data:ud,error:ue}=await caller.auth.getUser(jwt);
+ if(ue||!ud.user) return json({error:"Invalid or expired session"},401);
+ const body=await req.json(); const org=String(body.organization_id??""); const pkg=String(body.package_name??""); const product=String(body.product_id??""); const token=String(body.purchase_token??"");
+ if(!org||!product||token.length<20) return json({error:"Invalid purchase payload"},400); if(pkg!==PLAY_PACKAGE) return json({error:"Unexpected Android package"},400);
+ const admin=createClient(url,service,{auth:{persistSession:false,autoRefreshToken:false}});
+ const {data:profile}=await admin.from("profiles").select("role,is_active,approval_status,home_organization_id").eq("id",ud.user.id).maybeSingle();
+ const {data:owner}=await admin.from("platform_owners").select("user_id").eq("user_id",ud.user.id).maybeSingle();
+ const allowed=owner?.user_id===ud.user.id || (profile?.role==="super_admin"&&profile?.is_active===true&&profile?.approval_status==="approved"&&profile?.home_organization_id===org);
+ if(!allowed) return json({error:"Only an organization administrator can buy a subscription"},403);
+ const result=await syncPurchase(admin,{packageName:pkg,purchaseToken:token,organizationId:org,purchasedBy:ud.user.id,expectedProductId:product}); return json(result);
+}catch(e){console.error(e);return json({error:"Purchase could not be verified"},502);}});

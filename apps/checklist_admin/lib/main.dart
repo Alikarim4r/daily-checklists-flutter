@@ -12,6 +12,7 @@ import 'screens/delete_tab.dart';
 import 'screens/policies_screen.dart';
 import 'screens/structure_tab.dart';
 import 'screens/users_tab.dart';
+import 'screens/google_play_subscription_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -153,6 +154,28 @@ class _AdminShellState extends ConsumerState<AdminShell> {
               );
             },
           ),
+          if (p.homeOrganizationId != null)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.workspace_premium_outlined),
+              title: Text(ar ? 'الاشتراك' : 'Subscription'),
+              subtitle: Text(
+                ar
+                    ? 'الخطة والحدود وحالة الخدمة'
+                    : 'Plan, limits and service status',
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => GooglePlaySubscriptionScreen(
+                      profile: p,
+                      language: widget.language,
+                    ),
+                  ),
+                );
+              },
+            ),
           if (p.isPlatformOwner)
             ListTile(
               contentPadding: EdgeInsets.zero,
