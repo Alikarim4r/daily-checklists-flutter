@@ -35,6 +35,18 @@ fi
 # repository settings alone would be lost on the next publish.
 PAGES_CNAME="${PAGES_CNAME:-}"
 
+# Explicitly approved partial rollout: preserve only bytes from the verified
+# previously published Pages ref, never arbitrary locally signed bundles.
+ALLOW_LEGACY_MACOS="${ALLOW_LEGACY_MACOS:-0}"
+if [[ "$ALLOW_LEGACY_MACOS" != 0 && "$ALLOW_LEGACY_MACOS" != 1 ]]; then
+  echo "ALLOW_LEGACY_MACOS must be 0 or 1" >&2
+  exit 1
+fi
+if [[ "$ALLOW_LEGACY_MACOS" == 1 ]]; then
+  python3 "$ROOT/scripts/release_manifest.py" preserve-macos \
+    --git-ref "${LEGACY_MACOS_GIT_REF:-origin/gh-pages}"
+fi
+
 OUT="$ROOT/web_deploy"
 rm -rf "$OUT"
 mkdir -p "$OUT" "$OUT/downloads/android" "$OUT/downloads/macos"
@@ -46,6 +58,7 @@ if [[ -n "$PAGES_CNAME" ]]; then
 fi
 
 rsync -a --exclude 'downloads' "$ROOT/web_portal/" "$OUT/"
+python3 "$ROOT/scripts/release_manifest.py" init "$OUT"
 
 build_web() {
   local dir="$1" dest="$2" href="$3"
@@ -97,6 +110,7 @@ copy_apk() {
     return
   fi
   cp "$src" "$OUT/downloads/android/$name"
+  python3 "$ROOT/scripts/release_manifest.py" record "$OUT" android "${app_dir#checklist_}"
   echo "apk $name ($expected)"
 }
 copy_apk "$ROOT/dist/android/checklist_entry/checklist_entry.apk" inspection-entry.apk checklist_entry
@@ -136,10 +150,18 @@ zip_mac() {
   fi
   rm -rf "$verify_dir"
   cp "$src" "$OUT/downloads/macos/$zipname"
+  python3 "$ROOT/scripts/release_manifest.py" record "$OUT" macos "${app_dir#checklist_}"
   echo "mac $zipname ($expected)"
 }
 zip_mac "$ROOT/dist/macos/checklist_entry/InspectionEntry-macOS.zip" Inspection-Entry-macOS.zip checklist_entry InspectionEntry
 zip_mac "$ROOT/dist/macos/checklist_viewer/InspectionViewer-macOS.zip" Inspection-Viewer-macOS.zip checklist_viewer InspectionViewer
 zip_mac "$ROOT/dist/macos/checklist_admin/InspectionAdmin-macOS.zip" Inspection-Admin-macOS.zip checklist_admin InspectionAdmin
+
+if [[ "$ALLOW_LEGACY_MACOS" == 1 ]]; then
+  python3 "$ROOT/scripts/release_manifest.py" restore-macos "$OUT"
+  python3 "$ROOT/scripts/check_web_portal.py" --deploy "$OUT" --allow-legacy-macos
+else
+  python3 "$ROOT/scripts/check_web_portal.py" --deploy "$OUT"
+fi
 
 echo "web_deploy ready: $OUT"

@@ -52,13 +52,15 @@
       dlHeroTitle: "تحميل التطبيقات",
       dlHeroLead:
         "حمّل أندرويد وماك، أو افتح تطبيقات الويب على iPhone/iPad عبر Safari.",
-      currentRelease: "إصدار الويب الحالي 1.3.5 (12) — 12 سبتمبر 2026",
+      currentRelease: "إصدار الويب الحالي 1.3.5 (12) — 20 سبتمبر 2026",
       available: "متاح",
+      legacyAvailable: "إصدار سابق — ليس التحديث الحالي",
+      distributionPending: "بانتظار حزمة توزيع موثقة",
       artifactPending: "بانتظار حزمة موقعة",
       webReady: "ويب متاح",
       dlAndroidBody: "ملفات APK لتطبيقات الإدخال والعرض والإدارة.",
       dlMacBody:
-        "ملفات ZIP لتطبيقات .app. بعد فك الضغط قد تحتاج السماح من إعدادات الأمان.",
+        "يظهر رقم الإصدار الحقيقي بجوار كل تنزيل. الإصدار السابق، إن توفر، لا يتضمن التحديث الحالي. عند عدم توفر حزمة توزيع موثقة، استخدم الويب.",
       dlIosBody:
         "استخدم تطبيقات الويب من Safari إلى حين نشر TestFlight.",
       dlEntryApk: "تحميل فحص إدخال",
@@ -71,7 +73,7 @@
       dlViewIos: "فتح فحص عرض في Safari",
       dlAdminIos: "فتح فحص إدارة في Safari",
       dlNote:
-        "تثبيت APK يتطلب السماح بمصادر غير المتجر. تطبيقات الماك قد تحتاج «فتح على أي حال».",
+        "تحقق من رقم الإصدار بجوار التنزيل. الإصدار الأحدث متاح عبر الويب حتى اكتمال تجهيز حزمة توزيع Mac.",
       creatorTitle: "تم الإنشاء والتطوير بواسطة",
       footerNote: "بوابة منصة الفحص اليومي — AliMind",
     },
@@ -127,13 +129,15 @@
       dlHeroTitle: "Download apps",
       dlHeroLead:
         "Download Android and Mac builds, or open web apps on iPhone/iPad via Safari.",
-      currentRelease: "Current web release 1.3.5 (12) — September 12, 2026",
+      currentRelease: "Current web release 1.3.5 (12) — September 20, 2026",
       available: "Available",
+      legacyAvailable: "Previous release — not the current update",
+      distributionPending: "Verified distribution build pending",
       artifactPending: "Signed build pending",
       webReady: "Web ready",
       dlAndroidBody: "APK files for Entry, Viewer, and Admin.",
       dlMacBody:
-        "ZIP files with .app bundles. After unzip you may need Privacy & Security allow.",
+        "Each download shows its actual version. A previous release, when available, does not include the current update. Use the web app while a verified distribution package is pending.",
       dlIosBody: "Use Safari web apps until TestFlight is published.",
       dlEntryApk: "Download Entry",
       dlViewApk: "Download Viewer",
@@ -145,7 +149,7 @@
       dlViewIos: "Open Viewer in Safari",
       dlAdminIos: "Open Admin in Safari",
       dlNote:
-        "Android APK needs unknown sources. macOS apps may need Open Anyway.",
+        "Check the version beside each download. The latest release is available on the web while the Mac distribution package is being prepared.",
       creatorTitle: "Created and developed by",
       footerNote: "Daily Inspection portal — AliMind",
     },
@@ -181,31 +185,69 @@
   const updateDownloadAvailability = async () => {
     const links = [...document.querySelectorAll("[data-artifact]")];
     if (!links.length) return;
+    const lang = localStorage.getItem("dc-lang") || "ar";
+    const dict = I18N[lang] || I18N.ar;
+    let manifest;
+    try {
+      const response = await fetch("./downloads/release-manifest.json", { cache: "no-store" });
+      if (!response.ok) throw new Error("Missing download manifest");
+      manifest = await response.json();
+      if (manifest.schemaVersion !== 1 || manifest.webVersion !== "1.3.5+12") {
+        throw new Error("Wrong download manifest version");
+      }
+    } catch (_) {
+      manifest = { artifacts: {} };
+    }
     const results = await Promise.all(
       links.map(async (link) => {
+        let detail = link.nextElementSibling;
+        if (!detail || !detail.hasAttribute("data-artifact-detail")) {
+          detail = document.createElement("small");
+          detail.setAttribute("data-artifact-detail", "");
+          detail.setAttribute("aria-live", "polite");
+          link.after(detail);
+        }
         try {
-          const response = await fetch(link.href, {
+          const artifact = manifest.artifacts[`${link.dataset.artifact}-${link.dataset.app}`];
+          const expectedPath = new URL(link.getAttribute("href"), document.baseURI).pathname;
+          const target = new URL(`./${artifact?.path}`, document.baseURI);
+          if (!artifact || target.origin !== location.origin || target.pathname !== expectedPath ||
+              !["current", "legacy"].includes(artifact.status) ||
+              !/^[0-9a-f]{64}$/.test(artifact.sha256) ||
+              !/^[0-9][0-9A-Za-z.-]*\+[0-9]+$/.test(artifact.version) ||
+              !Number.isSafeInteger(artifact.size) || artifact.size <= 0 ||
+              (artifact.status === "current" && artifact.version !== manifest.webVersion) ||
+              (artifact.status === "legacy" && link.dataset.artifact !== "macos")) {
+            throw new Error("Missing or invalid native release metadata");
+          }
+          target.searchParams.set("v", `${artifact.version.replace("+", "-")}-${artifact.sha256.slice(0, 12)}`);
+          const response = await fetch(target, {
             method: "HEAD",
             cache: "no-store",
           });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const size = response.headers.get("content-length");
+          if (size && Number(size) !== artifact.size) throw new Error("Native download size mismatch");
+          link.href = target.href;
           link.classList.remove("is-disabled");
           link.removeAttribute("aria-disabled");
-          return { group: link.dataset.artifact, ready: true };
+          const label = artifact.status === "legacy" ? dict.legacyAvailable : dict.available;
+          detail.textContent = `${artifact.version.replace("+", " (")}) — ${label}`;
+          return { group: link.dataset.artifact, ready: true, legacy: artifact.status === "legacy" };
         } catch (_) {
           link.classList.add("is-disabled");
           link.setAttribute("aria-disabled", "true");
+          detail.textContent = dict.distributionPending;
           return { group: link.dataset.artifact, ready: false };
         }
       }),
     );
-    const lang = localStorage.getItem("dc-lang") || "ar";
-    const dict = I18N[lang] || I18N.ar;
     document.querySelectorAll("[data-artifact-status]").forEach((badge) => {
       const group = badge.dataset.artifactStatus;
       const groupResults = results.filter((result) => result.group === group);
       const ready = groupResults.length > 0 && groupResults.every((result) => result.ready);
-      badge.textContent = ready ? dict.available : dict.artifactPending;
+      const legacy = groupResults.some((result) => result.legacy);
+      badge.textContent = ready ? (legacy ? dict.legacyAvailable : dict.available) : dict.distributionPending;
       badge.classList.toggle("badge-ready", ready);
     });
   };
