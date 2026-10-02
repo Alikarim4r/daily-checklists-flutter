@@ -13,21 +13,18 @@ All three must target API 36 or newer, use the same AliMind upload keystore, and
 ## Store listing copy
 
 ### Entry
-English title: Daily Checklists Entry
+Google Play title: CheckIn
 Short: Field inspections with photos, signatures, offline work and secure sync.
-Arabic title: قوائم الفحص - إدخال
 Short: فحص ميداني بالصور والتوقيع والعمل دون اتصال والمزامنة الآمنة.
 
 ### Viewer
-English title: Daily Checklists Viewer
+Google Play title: CheckView
 Short: Review inspections, approve records, follow corrective actions and export reports.
-Arabic title: قوائم الفحص - عرض
 Short: مراجعة واعتماد الفحوص ومتابعة الإجراءات التصحيحية وتصدير التقارير.
 
 ### Admin
-English title: Daily Checklists Admin
+Google Play title: CheckAdmin
 Short: Manage users, sites, checklist catalogs, policies and operational configuration.
-Arabic title: قوائم الفحص - إدارة
 Short: إدارة المستخدمين والمواقع وقوائم الفحص والسياسات والإعدادات التشغيلية.
 
 ## Play Console declarations
