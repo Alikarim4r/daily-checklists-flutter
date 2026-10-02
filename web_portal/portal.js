@@ -7,6 +7,7 @@
       titleDownloads: "التحميلات — منصة الفحص اليومي",
       titlePrivacy: "الخصوصية — منصة الفحص اليومي",
       titleSupport: "الدعم — منصة الفحص اليومي",
+      titleDeleteAccount: "حذف الحساب — منصة الفحص اليومي",
       navAbout: "التعريف",
       navApps: "التطبيقات",
       navDownloads: "التحميلات",
@@ -52,7 +53,7 @@
       dlHeroTitle: "تحميل التطبيقات",
       dlHeroLead:
         "حمّل أندرويد وماك، أو افتح تطبيقات الويب على iPhone/iPad عبر Safari.",
-      currentRelease: "إصدار الويب الحالي 1.3.5 (12) — 20 سبتمبر 2026",
+      currentRelease: "إصدار الويب الحالي 1.3.6 (13) — 2 أكتوبر 2026",
       available: "متاح",
       legacyAvailable: "إصدار سابق — ليس التحديث الحالي",
       distributionPending: "بانتظار حزمة توزيع موثقة",
@@ -84,6 +85,7 @@
       titleDownloads: "Downloads — Daily Inspection Platform",
       titlePrivacy: "Privacy — Daily Inspection Platform",
       titleSupport: "Support — Daily Inspection Platform",
+      titleDeleteAccount: "Delete account — Daily Inspection Platform",
       navAbout: "About",
       navApps: "Apps",
       navDownloads: "Downloads",
@@ -129,7 +131,7 @@
       dlHeroTitle: "Download apps",
       dlHeroLead:
         "Download Android and Mac builds, or open web apps on iPhone/iPad via Safari.",
-      currentRelease: "Current web release 1.3.5 (12) — September 20, 2026",
+      currentRelease: "Current web release 1.3.6 (13) — October 2, 2026",
       available: "Available",
       legacyAvailable: "Previous release — not the current update",
       distributionPending: "Verified distribution build pending",
@@ -168,6 +170,7 @@
       downloads: "titleDownloads",
       privacy: "titlePrivacy",
       support: "titleSupport",
+      "delete-account": "titleDeleteAccount",
     }[document.body.dataset.page];
     if (titleKey && dict[titleKey]) document.title = dict[titleKey];
     document.querySelectorAll("[data-i18n]").forEach((el) => {
@@ -192,7 +195,7 @@
       const response = await fetch("./downloads/release-manifest.json", { cache: "no-store" });
       if (!response.ok) throw new Error("Missing download manifest");
       manifest = await response.json();
-      if (manifest.schemaVersion !== 1 || manifest.webVersion !== "1.3.5+12") {
+      if (manifest.schemaVersion !== 1 || manifest.webVersion !== "1.3.6+13") {
         throw new Error("Wrong download manifest version");
       }
     } catch (_) {
