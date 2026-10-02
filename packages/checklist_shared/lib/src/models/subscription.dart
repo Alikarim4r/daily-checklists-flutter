@@ -1,4 +1,4 @@
-enum SubscriptionPlan { trial, starter, professional, enterprise }
+enum SubscriptionPlan { trial, starter, professional, business, enterprise }
 
 enum SubscriptionStatus {
   trialing,
@@ -27,7 +27,12 @@ class SubscriptionPlanInfo {
   static const professional = SubscriptionPlanInfo(
     plan: SubscriptionPlan.professional,
     maxUsers: 50,
-    maxSites: 25,
+    maxSites: 5,
+  );
+  static const business = SubscriptionPlanInfo(
+    plan: SubscriptionPlan.business,
+    maxUsers: 200,
+    maxSites: 20,
   );
   static const enterprise = SubscriptionPlanInfo(
     plan: SubscriptionPlan.enterprise,

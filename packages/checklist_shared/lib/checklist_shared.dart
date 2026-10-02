@@ -17,6 +17,7 @@ export 'src/models/ops_metrics.dart';
 export 'src/models/organization.dart';
 export 'src/models/profile.dart';
 export 'src/models/subscription.dart';
+export 'src/models/subscription_plan.dart';
 export 'src/models/workflow_notification.dart';
 export 'src/providers/providers.dart';
 export 'src/providers/preferences_providers.dart';

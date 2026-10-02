@@ -1,28 +1,34 @@
 # Daily Checklists monetization architecture
 
 ## Commercial model
+Daily Checklists is sold as one B2B SaaS subscription per organization. CheckIn, CheckView and CheckAdmin share the same entitlement.
 
-Daily Checklists is sold as one B2B SaaS subscription per organization. CheckIn, CheckView and CheckAdmin are clients of the same entitlement; customers do not buy three separate subscriptions.
+## Approved pricing
+| Plan | Monthly | Annual | Users | Sites | Storage |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Trial | Free for 30 days | — | 10 | 1 | 5 GB |
+| Starter | QAR 199 | QAR 1,990 | 10 | 1 | 5 GB |
+| Professional | QAR 499 | QAR 4,990 | 50 | 5 | 25 GB |
+| Business | QAR 999 | QAR 9,990 | 200 | 20 | 100 GB |
+| Enterprise | Custom | From QAR 20,000 | Contract | Contract | Contract |
 
-### Plans
+Professional is the recommended/default commercial tier. Annual pricing gives the equivalent of two months free.
 
-- Starter: up to 10 users and 1 site.
-- Professional: up to 50 users and 25 sites; recommended default for facilities teams.
-- Enterprise: contract-defined users/sites, onboarding and commercial terms.
-- Trial: temporary entitlement for evaluation; duration is set server-side.
-
-Prices are intentionally not hard-coded in the apps. The commercial price can change without an app release and Play-facing prices must come from the configured billing product where an in-app Play purchase is offered.
+## Enforcement
+Plan catalog and organization entitlements are server-owned. Authenticated clients may read them but cannot change billing state. Active user and site limits are enforced in PostgreSQL triggers, not only in Flutter. Expired, canceled, or unpaid organizations cannot activate additional users/sites. Platform billing recovery remains server-controlled.
 
 ## Billing channels
+The entitlement ledger supports `google_play`, `external_contract`, and `manual`. Provider receipts/tokens must be verified by a trusted server before changing `organization_subscriptions`.
 
-The entitlement ledger supports `google_play`, `external_contract`, and `manual`. Provider receipts/tokens must be verified by a trusted server before changing `organization_subscriptions`. Mobile clients have SELECT-only access to subscription state.
+For Google Play distribution, do not add a web checkout link inside Android unless the applicable Play program/market rules permit it. If a subscription is purchased in-app, use Google Play Billing and verify purchases server-side. Existing B2B contract customers can sign in to a consumption-only deployment without an in-app checkout.
 
-For Google Play distribution, do not add a web checkout link inside the Android apps unless the relevant Google Play program/market rules explicitly permit it. If digital SaaS is purchased in-app, integrate Google Play Billing and verify purchases server-side. A consumption-only B2B deployment can allow existing contracted customers to sign in without offering an in-app purchase flow.
+## Google Play product mapping
+Create monthly and annual Play base plans for Starter, Professional, and Business. Store Play product/base-plan IDs in trusted server configuration, never in entitlement logic. Enterprise remains sales/contract led unless a later Play-supported purchase flow is deliberately added.
 
-## Access policy
-
-Billing is organization-scoped. Expired/past-due state must be enforced server-side for paid capabilities; UI gating alone is not security. Platform owners retain an operational recovery path. Existing production organizations receive a launch-period Professional entitlement during migration so deployment cannot accidentally lock out the current tenant.
-
-## Next provider step
-
-Before accepting real money: create the commercial products in Play Console (if using in-app Play subscriptions), configure server credentials/notifications, implement verified purchase lifecycle handling, then map provider product IDs to Starter/Professional/Enterprise without storing secret credentials in Flutter.
+## Production activation checklist
+1. Create Play Console subscription products/base plans.
+2. Configure Google Play Developer API service credentials on the server.
+3. Implement server-side purchase-token verification and idempotent billing events.
+4. Configure Real-time Developer Notifications for renewals, cancellations, grace periods and revocations.
+5. Map verified provider state to `organization_subscriptions`.
+6. Test purchase, renewal, cancellation, grace, restore and refund in Internal Testing before production.
