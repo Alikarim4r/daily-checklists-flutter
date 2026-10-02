@@ -18,3 +18,11 @@ port = 54323
 
 [functions.admin-create-user]
 verify_jwt = true
+
+[functions.google-play-verify-purchase]
+verify_jwt = true
+
+# Google Pub/Sub push does not carry a Supabase user JWT. This endpoint has its
+# own high-entropy shared-secret gate and performs server-side Google verification.
+[functions.google-play-rtdn]
+verify_jwt = false

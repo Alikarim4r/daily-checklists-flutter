@@ -37,6 +37,26 @@ class SubscriptionRepository {
     );
   }
 
+  Future<void> verifyGooglePlayPurchase({
+    required String organizationId,
+    required String packageName,
+    required String productId,
+    required String purchaseToken,
+  }) async {
+    final response = await _client.functions.invoke(
+      'google-play-verify-purchase',
+      body: {
+        'organization_id': organizationId,
+        'package_name': packageName,
+        'product_id': productId,
+        'purchase_token': purchaseToken,
+      },
+    );
+    if (response.status < 200 || response.status >= 300) {
+      throw StateError('Purchase verification failed (${response.status})');
+    }
+  }
+
   Future<OrganizationSubscription?> getForOrganization(
     String organizationId,
   ) async {

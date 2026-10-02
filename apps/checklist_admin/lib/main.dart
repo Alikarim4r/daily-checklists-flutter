@@ -12,6 +12,7 @@ import 'screens/delete_tab.dart';
 import 'screens/policies_screen.dart';
 import 'screens/structure_tab.dart';
 import 'screens/users_tab.dart';
+import 'screens/google_play_subscription_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -167,7 +168,7 @@ class _AdminShellState extends ConsumerState<AdminShell> {
                 Navigator.pop(context);
                 Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => SubscriptionScreen(
+                    builder: (_) => GooglePlaySubscriptionScreen(
                       profile: p,
                       language: widget.language,
                     ),

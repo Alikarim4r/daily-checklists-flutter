@@ -12,6 +12,10 @@ class SubscriptionPlanCatalogItem {
     required this.storageGb,
     required this.isRecommended,
     required this.features,
+    this.googlePlayProductId,
+    this.googlePlayMonthlyBasePlanId,
+    this.googlePlayAnnualBasePlanId,
+    this.googlePlayTrialOfferId,
   });
 
   final SubscriptionPlan plan;
@@ -24,6 +28,10 @@ class SubscriptionPlanCatalogItem {
   final int storageGb;
   final bool isRecommended;
   final Map<String, dynamic> features;
+  final String? googlePlayProductId;
+  final String? googlePlayMonthlyBasePlanId;
+  final String? googlePlayAnnualBasePlanId;
+  final String? googlePlayTrialOfferId;
 
   factory SubscriptionPlanCatalogItem.fromJson(Map<String, dynamic> json) =>
       SubscriptionPlanCatalogItem(
@@ -42,6 +50,12 @@ class SubscriptionPlanCatalogItem {
         features: Map<String, dynamic>.from(
           json['features'] as Map? ?? const {},
         ),
+        googlePlayProductId: json['google_play_product_id'] as String?,
+        googlePlayMonthlyBasePlanId:
+            json['google_play_monthly_base_plan_id'] as String?,
+        googlePlayAnnualBasePlanId:
+            json['google_play_annual_base_plan_id'] as String?,
+        googlePlayTrialOfferId: json['google_play_trial_offer_id'] as String?,
       );
 }
 
