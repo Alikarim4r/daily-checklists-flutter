@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../design/checkadmin_errors.dart';
 import 'report_logo_crop_dialog.dart';
 
 /// Single logo slot with pick → crop → upload to [kReportLogosBucket].
@@ -99,11 +100,7 @@ class _ReportLogoSlotEditorState extends ConsumerState<ReportLogoSlotEditor> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _t('Logo upload failed: $error', 'فشل رفع الشعار: $error'),
-          ),
-        ),
+        SnackBar(content: Text(checkAdminUserMessage(error, widget.language))),
       );
     } finally {
       if (mounted) setState(() => _busy = false);

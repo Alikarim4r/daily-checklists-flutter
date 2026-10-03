@@ -35,6 +35,13 @@ class SessionSecurityStore {
     await prefs.setBool(_prefsBio, value);
   }
 
+  Future<void> clear() async {
+    biometricEnabled = false;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefsBio);
+    await _clearLegacyCredentials();
+  }
+
   Future<void> _clearLegacyCredentials() async {
     try {
       await _secure.delete(key: _secureEmail);

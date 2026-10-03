@@ -6,11 +6,13 @@
       titleApps: "التطبيقات — منصة الفحص اليومي",
       titleDownloads: "التحميلات — منصة الفحص اليومي",
       titlePrivacy: "الخصوصية — منصة الفحص اليومي",
+      titleDeletion: "حذف الحساب — منصة الفحص اليومي",
       titleSupport: "الدعم — منصة الفحص اليومي",
       navAbout: "التعريف",
       navApps: "التطبيقات",
       navDownloads: "التحميلات",
       footerPrivacy: "الخصوصية",
+      footerDeletion: "حذف الحساب",
       footerSupport: "الدعم",
       themeToggle: "داكن",
       langToggle: "EN",
@@ -52,7 +54,7 @@
       dlHeroTitle: "تحميل التطبيقات",
       dlHeroLead:
         "حمّل أندرويد وماك، أو افتح تطبيقات الويب على iPhone/iPad عبر Safari.",
-      currentRelease: "إصدار الويب الحالي 1.3.4 (11) — 14 أغسطس 2026",
+      currentRelease: "إصدار الويب الحالي 1.3.5 (12) — 3 أكتوبر 2026",
       available: "متاح",
       artifactPending: "بانتظار حزمة موقعة",
       webReady: "ويب متاح",
@@ -73,7 +75,7 @@
       dlNote:
         "تثبيت APK يتطلب السماح بمصادر غير المتجر. تطبيقات الماك قد تحتاج «فتح على أي حال».",
       creatorTitle: "تم الإنشاء والتطوير بواسطة",
-      footerNote: "بوابة منصة الفحص اليومي — AliMind",
+      footerNote: "بوابة منصة الفحص اليومي",
     },
     en: {
       brand: "Daily Checklists",
@@ -81,11 +83,13 @@
       titleApps: "Apps — Daily Inspection Platform",
       titleDownloads: "Downloads — Daily Inspection Platform",
       titlePrivacy: "Privacy — Daily Inspection Platform",
+      titleDeletion: "Account deletion — Daily Inspection Platform",
       titleSupport: "Support — Daily Inspection Platform",
       navAbout: "About",
       navApps: "Apps",
       navDownloads: "Downloads",
       footerPrivacy: "Privacy",
+      footerDeletion: "Account deletion",
       footerSupport: "Support",
       themeToggle: "Light",
       langToggle: "ع",
@@ -127,7 +131,7 @@
       dlHeroTitle: "Download apps",
       dlHeroLead:
         "Download Android and Mac builds, or open web apps on iPhone/iPad via Safari.",
-      currentRelease: "Current web release 1.3.4 (11) — August 14, 2026",
+      currentRelease: "Current web release 1.3.5 (12) — October 3, 2026",
       available: "Available",
       artifactPending: "Signed build pending",
       webReady: "Web ready",
@@ -147,7 +151,7 @@
       dlNote:
         "Android APK needs unknown sources. macOS apps may need Open Anyway.",
       creatorTitle: "Created and developed by",
-      footerNote: "Daily Inspection portal — AliMind",
+      footerNote: "Daily Inspection portal",
     },
   };
 
@@ -163,6 +167,7 @@
       apps: "titleApps",
       downloads: "titleDownloads",
       privacy: "titlePrivacy",
+      deletion: "titleDeletion",
       support: "titleSupport",
     }[document.body.dataset.page];
     if (titleKey && dict[titleKey]) document.title = dict[titleKey];

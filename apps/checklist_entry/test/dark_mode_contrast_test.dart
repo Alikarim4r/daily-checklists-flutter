@@ -1,4 +1,6 @@
 import 'package:checklist_entry/main.dart';
+import 'package:checklist_entry/design/checkin_theme.dart';
+import 'package:checklist_entry/design/checkin_tokens.dart';
 import 'package:checklist_shared/checklist_shared.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,7 +10,7 @@ void main() {
   testWidgets('zone hierarchy text stays readable in dark mode', (
     tester,
   ) async {
-    ChecklistChrome.use(ChecklistBrand.entry);
+    ChecklistChrome.use(checkInBrand);
     const profile = Profile(
       id: 'user-1',
       fullName: 'Field User',
@@ -42,7 +44,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         child: MaterialApp(
-          theme: ChecklistChrome.darkTheme(),
+          theme: CheckInTheme.dark,
           home: EntryZonesScreen(
             profile: profile,
             section: section,
@@ -56,15 +58,15 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(
       tester.widget<Text>(find.text('Select a zone')).style?.color,
-      ChecklistChrome.darkInkMuted,
+      CheckInColors.dark.ink,
     );
     expect(
       tester.widget<Text>(find.text('Doha Center')).style?.color,
-      ChecklistChrome.darkInk,
+      CheckInColors.dark.ink,
     );
     expect(
       tester.widget<Text>(find.text('2 sites')).style?.color,
-      ChecklistChrome.darkInkMuted,
+      CheckInColors.dark.inkMuted,
     );
   });
 }

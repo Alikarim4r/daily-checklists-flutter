@@ -447,9 +447,15 @@ begin
 
   if not exists (
     select 1 from public.client_error_logs
-    where user_id = v_technician and app_key = 'smoke'
+    where user_id is null and app_key = 'smoke'
   ) then
-    raise exception 'structured client error log was not stored';
+    raise exception 'structured client error log was not stored anonymously';
+  end if;
+  if exists (
+    select 1 from public.client_error_logs
+    where user_id is not null and app_key = 'smoke'
+  ) then
+    raise exception 'structured client error log retained a user identifier';
   end if;
 end;
 $$;
@@ -798,6 +804,90 @@ begin
       and not tgisinternal
   ) then
     raise exception 'inspection translation snapshot trigger is missing';
+  end if;
+end;
+$$;
+
+-- Account deletion must remove the login/profile while retaining only
+-- anonymized operational history.
+do $$
+declare
+  v_user uuid := '10000000-0000-4000-8000-00000000d001';
+  v_email text := 'delete-smoke@example.invalid';
+  v_name text := 'Delete Smoke User';
+  v_inspection uuid;
+  v_item uuid;
+  v_correction uuid;
+begin
+  insert into auth.users (id, email, raw_user_meta_data)
+  values (v_user, v_email, jsonb_build_object('full_name', v_name));
+
+  select inspection.id, item.id
+  into v_inspection, v_item
+  from public.checklist_inspections inspection
+  join public.checklist_inspection_items item on item.inspection_id = inspection.id
+  order by inspection.created_at, item.item_index
+  limit 1;
+
+  insert into public.checklist_corrections (
+    inspection_id, item_id, field_name, old_value, new_value,
+    reason, corrected_by
+  ) values (
+    v_inspection, v_item, 'response', 'no', 'yes',
+    'account deletion smoke', v_user
+  ) returning id into v_correction;
+
+  insert into public.client_error_logs (
+    user_id, app_key, error_type, error_message, stack_summary
+  ) values (
+    v_user, 'delete-smoke', 'SmokeError', 'safe', 'safe'
+  );
+
+  insert into public.checklist_audit_log (
+    actor_user_id, actor_name, action, entity_type, entity_id,
+    old_value, new_value, metadata
+  ) values (
+    v_user, v_name, 'smoke.delete', 'profiles', v_user::text,
+    jsonb_build_object('id', v_user, 'full_name', v_name, 'email', v_email),
+    jsonb_build_object('id', v_user, 'full_name', v_name, 'email', v_email),
+    jsonb_build_object('user_id', v_user)
+  );
+
+  delete from auth.users where id = v_user;
+
+  if exists (select 1 from public.profiles where id = v_user) then
+    raise exception 'profile survived auth account deletion';
+  end if;
+
+  if not exists (
+    select 1 from public.checklist_corrections
+    where id = v_correction and corrected_by is null
+  ) then
+    raise exception 'historical correction did not unlink deleted user';
+  end if;
+
+  if not exists (
+    select 1 from public.client_error_logs
+    where app_key = 'delete-smoke' and user_id is null
+  ) then
+    raise exception 'diagnostic did not survive anonymously';
+  end if;
+
+  if exists (
+    select 1 from public.checklist_audit_log
+    where action = 'smoke.delete'
+      and (
+        actor_user_id is not null
+        or actor_name = v_name
+        or entity_id = v_user::text
+        or coalesce(old_value::text, '') like '%' || v_user::text || '%'
+        or coalesce(new_value::text, '') like '%' || v_user::text || '%'
+        or metadata::text like '%' || v_user::text || '%'
+        or coalesce(old_value::text, '') like '%' || v_email || '%'
+        or coalesce(new_value::text, '') like '%' || v_email || '%'
+      )
+  ) then
+    raise exception 'audit history retained deleted account identity';
   end if;
 end;
 $$;

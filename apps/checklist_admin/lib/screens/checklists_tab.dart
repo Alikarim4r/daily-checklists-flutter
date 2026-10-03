@@ -2,6 +2,10 @@ import 'package:checklist_shared/checklist_shared.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../design/checkadmin_errors.dart';
+import '../design/checkadmin_tokens.dart';
+import '../design/checkadmin_widgets.dart';
+
 import 'form_theme_picker_dialog.dart';
 
 /// Default templates + site effective lists (template inherited + custom extras).
@@ -80,7 +84,7 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
       }
       if (selectedSite != null) await _loadSiteDetail();
     } catch (e) {
-      setState(() => message = '$e');
+      setState(() => message = checkAdminUserMessage(e, widget.language));
     } finally {
       if (mounted) setState(() => loading = false);
     }
@@ -162,29 +166,33 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
   Future<void> _bindTemplateToSite(String code) async {
     final site = selectedSite;
     if (site == null || !canEditSites) return;
-    await ref
-        .read(siteRepositoryProvider)
-        .updateChecklistType(site: site, checklistType: code);
-    final refreshed = await ref
-        .read(siteRepositoryProvider)
-        .listAccessibleSites(profile: widget.profile);
-    final match = refreshed.where((s) => s.id == site.id);
-    setState(() {
-      sites = refreshed;
-      if (match.isNotEmpty) selectedSite = match.first;
-    });
-    await _loadSiteDetail();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _t(
-              'Bound ${site.buildingCode} → $code',
-              'تم ربط ${site.buildingCode} بـ $code',
+    try {
+      await ref
+          .read(siteRepositoryProvider)
+          .updateChecklistType(site: site, checklistType: code);
+      final refreshed = await ref
+          .read(siteRepositoryProvider)
+          .listAccessibleSites(profile: widget.profile);
+      final match = refreshed.where((s) => s.id == site.id);
+      setState(() {
+        sites = refreshed;
+        if (match.isNotEmpty) selectedSite = match.first;
+      });
+      await _loadSiteDetail();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _t(
+                'Bound ${site.buildingCode} → $code',
+                'تم ربط ${site.buildingCode} بـ $code',
+              ),
             ),
           ),
-        ),
-      );
+        );
+      }
+    } catch (e) {
+      _showWriteError(e);
     }
   }
 
@@ -203,6 +211,7 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setLocal) => AlertDialog(
+          scrollable: true,
           title: Text(
             existing == null
                 ? _t('New template item', 'بند جديد في القالب')
@@ -291,25 +300,30 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
     if (ok != true) return;
     final idx = int.tryParse(indexCtrl.text.trim()) ?? 1;
     overdueDays = int.tryParse(overdueCtrl.text.trim()) ?? 3;
-    await ref
-        .read(catalogRepositoryProvider)
-        .upsertTemplateItem(
-          templateId: selected!.id,
-          item: CatalogItem(
-            id: existing?.id,
-            itemIndex: idx,
-            defaultAnswer: def,
-            descriptionEn: en.text.trim(),
-            descriptionAr: arCtrl.text.trim().isEmpty
-                ? null
-                : arCtrl.text.trim(),
-            localizedDescriptions: existing?.localizedDescriptions ?? const {},
-            sortOrder: idx,
-            overdueAfterDays: overdueDays.clamp(0, 365),
-          ),
-        );
-    await _selectTemplate(selected!.id);
-    if (selectedSite != null) await _loadSiteDetail();
+    try {
+      await ref
+          .read(catalogRepositoryProvider)
+          .upsertTemplateItem(
+            templateId: selected!.id,
+            item: CatalogItem(
+              id: existing?.id,
+              itemIndex: idx,
+              defaultAnswer: def,
+              descriptionEn: en.text.trim(),
+              descriptionAr: arCtrl.text.trim().isEmpty
+                  ? null
+                  : arCtrl.text.trim(),
+              localizedDescriptions:
+                  existing?.localizedDescriptions ?? const {},
+              sortOrder: idx,
+              overdueAfterDays: overdueDays.clamp(0, 365),
+            ),
+          );
+      await _selectTemplate(selected!.id);
+      if (selectedSite != null) await _loadSiteDetail();
+    } catch (e) {
+      _showWriteError(e);
+    }
   }
 
   Future<void> _deleteTemplateItem(CatalogItem item) async {
@@ -330,7 +344,10 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
             child: Text(_t('Cancel', 'إلغاء')),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             onPressed: () => Navigator.pop(context, true),
             child: Text(_t('Delete', 'حذف')),
           ),
@@ -338,9 +355,13 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
       ),
     );
     if (ok != true) return;
-    await ref.read(catalogRepositoryProvider).deleteTemplateItem(item.id!);
-    await _selectTemplate(selected!.id);
-    if (selectedSite != null) await _loadSiteDetail();
+    try {
+      await ref.read(catalogRepositoryProvider).deleteTemplateItem(item.id!);
+      await _selectTemplate(selected!.id);
+      if (selectedSite != null) await _loadSiteDetail();
+    } catch (e) {
+      _showWriteError(e);
+    }
   }
 
   Future<void> _editSiteExtra([CatalogItem? existing]) async {
@@ -358,6 +379,7 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setLocal) => AlertDialog(
+          scrollable: true,
           title: Text(
             existing == null
                 ? _t('Site-specific item', 'بند خاص بقائمة الفحص')
@@ -432,25 +454,30 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
     if (ok != true) return;
     final idx = int.tryParse(indexCtrl.text.trim()) ?? 901;
     overdueDays = int.tryParse(overdueCtrl.text.trim()) ?? 3;
-    await ref
-        .read(catalogRepositoryProvider)
-        .upsertSiteExtraItem(
-          siteId: site.id,
-          item: CatalogItem(
-            id: existing?.id,
-            itemIndex: idx,
-            defaultAnswer: def,
-            descriptionEn: en.text.trim(),
-            descriptionAr: arCtrl.text.trim().isEmpty
-                ? null
-                : arCtrl.text.trim(),
-            localizedDescriptions: existing?.localizedDescriptions ?? const {},
-            sortOrder: idx,
-            isCustom: true,
-            overdueAfterDays: overdueDays.clamp(0, 365),
-          ),
-        );
-    await _loadSiteDetail();
+    try {
+      await ref
+          .read(catalogRepositoryProvider)
+          .upsertSiteExtraItem(
+            siteId: site.id,
+            item: CatalogItem(
+              id: existing?.id,
+              itemIndex: idx,
+              defaultAnswer: def,
+              descriptionEn: en.text.trim(),
+              descriptionAr: arCtrl.text.trim().isEmpty
+                  ? null
+                  : arCtrl.text.trim(),
+              localizedDescriptions:
+                  existing?.localizedDescriptions ?? const {},
+              sortOrder: idx,
+              isCustom: true,
+              overdueAfterDays: overdueDays.clamp(0, 365),
+            ),
+          );
+      await _loadSiteDetail();
+    } catch (e) {
+      _showWriteError(e);
+    }
   }
 
   Future<void> _deleteSiteExtra(CatalogItem item) async {
@@ -471,7 +498,10 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
             child: Text(_t('Cancel', 'إلغاء')),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             onPressed: () => Navigator.pop(context, true),
             child: Text(_t('Delete', 'حذف')),
           ),
@@ -479,8 +509,12 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
       ),
     );
     if (ok != true) return;
-    await ref.read(catalogRepositoryProvider).deleteSiteExtraItem(item.id!);
-    await _loadSiteDetail();
+    try {
+      await ref.read(catalogRepositoryProvider).deleteSiteExtraItem(item.id!);
+      await _loadSiteDetail();
+    } catch (e) {
+      _showWriteError(e);
+    }
   }
 
   Future<void> _createTemplate() async {
@@ -491,6 +525,7 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: Text(_t('New default list', 'قائمة افتراضية جديدة')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -529,15 +564,26 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
       ),
     );
     if (ok != true) return;
-    final t = await ref
-        .read(catalogRepositoryProvider)
-        .createTemplate(
-          code: code.text.trim().toUpperCase(),
-          nameEn: en.text.trim(),
-          nameAr: arCtrl.text.trim(),
-        );
-    await _load();
-    await _selectTemplate(t.id);
+    try {
+      final t = await ref
+          .read(catalogRepositoryProvider)
+          .createTemplate(
+            code: code.text.trim().toUpperCase(),
+            nameEn: en.text.trim(),
+            nameAr: arCtrl.text.trim(),
+          );
+      await _load();
+      await _selectTemplate(t.id);
+    } catch (e) {
+      _showWriteError(e);
+    }
+  }
+
+  void _showWriteError(Object error) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(checkAdminUserMessage(error, widget.language))),
+    );
   }
 
   Future<String?> _askVersionReason(String title) async {
@@ -588,7 +634,11 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
       await _load();
       await _selectTemplate(id);
     } catch (exception) {
-      if (mounted) setState(() => message = '$exception');
+      if (mounted) {
+        setState(
+          () => message = checkAdminUserMessage(exception, widget.language),
+        );
+      }
     }
   }
 
@@ -605,7 +655,11 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
           .publishTemplateVersion(templateId: template.id, reason: reason);
       await _load();
     } catch (exception) {
-      if (mounted) setState(() => message = '$exception');
+      if (mounted) {
+        setState(
+          () => message = checkAdminUserMessage(exception, widget.language),
+        );
+      }
     }
   }
 
@@ -643,13 +697,10 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
         ? item.descriptionEn
         : (item.descriptionAr ?? '');
     return ListTile(
-      leading: CircleAvatar(
-        radius: 15,
-        backgroundColor: ChecklistChrome.accentSoft,
-        child: Text(
-          '${item.itemIndex}',
-          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
-        ),
+      leading: CaCodeBadge(
+        code: '${item.itemIndex}',
+        width: 36,
+        tone: CaTone.accent,
       ),
       title: Text(desc, style: const TextStyle(fontWeight: FontWeight.w600)),
       subtitle: Text(
@@ -686,9 +737,9 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
                   PopupMenuItem(
                     value: 'delete',
                     child: ListTile(
-                      leading: const Icon(
+                      leading: Icon(
                         Icons.delete_outline,
-                        color: Colors.red,
+                        color: Theme.of(context).colorScheme.error,
                       ),
                       title: Text(_t('Delete', 'حذف')),
                     ),
@@ -706,12 +757,17 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
                 ],
                 if (editable && onEdit != null)
                   IconButton(
+                    tooltip: _t('Edit', 'تعديل'),
                     icon: const Icon(Icons.edit_outlined),
                     onPressed: onEdit,
                   ),
                 if (editable && onDelete != null)
                   IconButton(
-                    icon: const Icon(Icons.delete_outline, color: Colors.red),
+                    tooltip: _t('Delete', 'حذف'),
+                    icon: Icon(
+                      Icons.delete_outline,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
                     onPressed: onDelete,
                   ),
               ],
@@ -719,95 +775,525 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
     );
   }
 
-  Widget _compactTemplatePicker() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: DropdownButtonFormField<String>(
-              initialValue: selected?.id,
-              isExpanded: true,
-              decoration: InputDecoration(
-                labelText: _t('Default list', 'القائمة الافتراضية'),
-                prefixIcon: const Icon(Icons.list_alt_outlined),
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-              items: [
-                for (final t in templates)
-                  DropdownMenuItem(
-                    value: t.id,
-                    child: Text(
-                      '${t.familyCode} · v${t.versionNumber} · ${t.lifecycleStatus} — ${t.nameFor(widget.language)}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+  Future<void> _showTemplateSelector() async {
+    if (templates.isEmpty) return;
+    final chosen = await showModalBottomSheet<String>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        final c = CheckAdminColors.of(sheetContext);
+        return FractionallySizedBox(
+          heightFactor: .72,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsetsDirectional.fromSTEB(16, 4, 8, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _t('Select a default list', 'اختر قائمة افتراضية'),
+                        style: Theme.of(sheetContext).textTheme.titleLarge,
+                      ),
                     ),
-                  ),
-              ],
-              onChanged: (id) {
-                if (id != null) _selectTemplate(id);
-              },
+                    if (canEditTemplates)
+                      TextButton.icon(
+                        onPressed: () => Navigator.pop(sheetContext, '__new__'),
+                        icon: const Icon(Icons.add, size: 18),
+                        label: Text(_t('New list', 'قائمة جديدة')),
+                      ),
+                  ],
+                ),
+              ),
+              Divider(height: 1, color: c.rule),
+              Expanded(
+                child: ListView.separated(
+                  itemCount: templates.length,
+                  separatorBuilder: (_, _) =>
+                      Divider(height: 1, color: c.rule, indent: CaSpace.gutter),
+                  itemBuilder: (context, i) {
+                    final t = templates[i];
+                    final active = t.id == selected?.id;
+                    return ListTile(
+                      minTileHeight: 56,
+                      selected: active,
+                      selectedTileColor: c.primarySoft.withValues(alpha: .55),
+                      leading: CaCodeBadge(
+                        code:
+                            '${t.familyCode.isEmpty ? t.code : t.familyCode} · v${t.versionNumber}',
+                        width: 82,
+                        tone: active ? CaTone.accent : CaTone.neutral,
+                      ),
+                      title: Text(t.nameFor(widget.language)),
+                      subtitle: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: t.isPublishedVersion ? c.good : c.warning,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            t.lifecycleStatus,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                      trailing: active
+                          ? Icon(Icons.check_rounded, color: c.primaryStrong)
+                          : null,
+                      onTap: () => Navigator.pop(context, t.id),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (!mounted || chosen == null) return;
+    if (chosen == '__new__') {
+      await _createTemplate();
+      return;
+    }
+    await _selectTemplate(chosen);
+  }
+
+  Widget _compactTemplatePicker() {
+    final template = selected;
+    if (template == null) {
+      return CaSelectorRow(
+        title: _t('Select a default list', 'اختر قائمة افتراضية'),
+        subtitle: _t('No list selected', 'لم يتم اختيار قائمة'),
+        onTap: templates.isEmpty ? null : _showTemplateSelector,
+      );
+    }
+    final c = CheckAdminColors.of(context);
+    return CaSelectorRow(
+      title: template.nameFor(widget.language),
+      subtitle:
+          '${template.familyCode.isEmpty ? template.code : template.familyCode} · v${template.versionNumber}',
+      status: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(
+              color: template.isPublishedVersion ? c.good : c.warning,
+              shape: BoxShape.circle,
             ),
           ),
-          if (canEditTemplates) ...[
-            const SizedBox(width: 8),
-            IconButton.filledTonal(
-              tooltip: _t('New list', 'قائمة جديدة'),
-              onPressed: _createTemplate,
-              icon: const Icon(Icons.add),
+          const SizedBox(width: 4),
+          Text(
+            template.lifecycleStatus,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: template.isPublishedVersion ? c.good : c.warning,
             ),
-          ],
+          ),
         ],
       ),
+      onTap: _showTemplateSelector,
     );
   }
 
-  String _sitePickerLabel(ChecklistSite site) {
-    final group = campusGroups
-        .where((g) => g.checklists.any((s) => s.id == site.id))
-        .firstOrNull;
-    final parent = group?.titleFor(widget.language);
-    return parent == null || parent.isEmpty
-        ? '${site.buildingCode} — ${site.nameFor(widget.language)}'
-        : '$parent › ${site.buildingCode}';
+  Future<void> _showSiteSelector() async {
+    if (sites.isEmpty) return;
+    final chosen = await showModalBottomSheet<String>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        final c = CheckAdminColors.of(sheetContext);
+        return FractionallySizedBox(
+          heightFactor: .72,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsetsDirectional.fromSTEB(16, 4, 8, 8),
+                child: Text(
+                  _t('Select a checklist unit', 'اختر وحدة قائمة الفحص'),
+                  style: Theme.of(sheetContext).textTheme.titleLarge,
+                ),
+              ),
+              Divider(height: 1, color: c.rule),
+              Expanded(
+                child: ListView.separated(
+                  itemCount: sites.length,
+                  separatorBuilder: (_, _) =>
+                      Divider(height: 1, color: c.rule, indent: CaSpace.gutter),
+                  itemBuilder: (context, i) {
+                    final site = sites[i];
+                    final active = site.id == selectedSite?.id;
+                    return ListTile(
+                      minTileHeight: 56,
+                      selected: active,
+                      selectedTileColor: c.primarySoft.withValues(alpha: .55),
+                      leading: CaCodeBadge(
+                        code: site.buildingCode,
+                        width: 72,
+                        tone: active ? CaTone.accent : CaTone.neutral,
+                      ),
+                      title: Text(site.nameFor(widget.language)),
+                      subtitle: Text(site.checklistType),
+                      trailing: active
+                          ? Icon(Icons.check_rounded, color: c.primaryStrong)
+                          : null,
+                      onTap: () => Navigator.pop(context, site.id),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (!mounted || chosen == null) return;
+    final match = sites.where((site) => site.id == chosen).firstOrNull;
+    if (match == null) return;
+    setState(() => selectedSite = match);
+    await _loadSiteDetail();
   }
 
   Widget _compactSitePicker() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-      child: DropdownButtonFormField<String>(
-        initialValue: selectedSite?.id,
-        isExpanded: true,
-        decoration: InputDecoration(
-          labelText: _t('Checklist unit', 'وحدة قائمة الفحص'),
-          prefixIcon: const Icon(Icons.account_tree_outlined),
-          border: const OutlineInputBorder(),
-          isDense: true,
+    final site = selectedSite;
+    if (site == null) {
+      return CaSelectorRow(
+        title: _t('Select a checklist unit', 'اختر وحدة قائمة الفحص'),
+        subtitle: _t('No unit selected', 'لم يتم اختيار وحدة'),
+        onTap: sites.isEmpty ? null : _showSiteSelector,
+      );
+    }
+    return CaSelectorRow(
+      title: site.nameFor(widget.language),
+      subtitle: '${site.buildingCode} · ${site.checklistType}',
+      onTap: _showSiteSelector,
+    );
+  }
+
+  Widget _mobileTemplatesPane() {
+    final template = selected;
+    final c = CheckAdminColors.of(context);
+    final linkedCount = template == null
+        ? 0
+        : sites.where((s) => s.checklistType == template.code).length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _compactTemplatePicker(),
+        Divider(height: 1, color: c.rule),
+        CaSectionLabel(
+          title: _t('Items', 'البنود'),
+          count: items.length,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (template != null)
+                Tooltip(
+                  message: template.paperTheme.key.labelFor(widget.language),
+                  child: IconButton(
+                    onPressed: canEditSelectedVersion
+                        ? _editSelectedTemplateTheme
+                        : null,
+                    icon: Stack(
+                      alignment: Alignment.bottomRight,
+                      children: [
+                        const Icon(Icons.palette_outlined, size: 21),
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: template.paperTheme.accent,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (template != null && canEditTemplates)
+                if (canEditSelectedVersion)
+                  IconButton(
+                    tooltip: _t('Add item', 'إضافة بند'),
+                    onPressed: () => _editItem(),
+                    icon: const Icon(Icons.add_rounded),
+                  )
+                else
+                  OutlinedButton.icon(
+                    onPressed: _cloneSelectedVersion,
+                    icon: const Icon(Icons.add, size: 17),
+                    label: Text(_t('New version', 'إصدار جديد')),
+                  ),
+            ],
+          ),
         ),
-        items: [
-          for (final site in sites)
-            DropdownMenuItem(
-              value: site.id,
+        if (template != null && canEditSelectedVersion)
+          Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(
+              CaSpace.gutter,
+              0,
+              CaSpace.gutter,
+              CaSpace.sm,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _t(
+                      '$linkedCount linked units · draft version',
+                      '$linkedCount وحدات مرتبطة · إصدار مسودة',
+                    ),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed: _publishSelectedVersion,
+                  icon: const Icon(Icons.publish_outlined, size: 17),
+                  label: Text(_t('Publish', 'نشر')),
+                ),
+              ],
+            ),
+          ),
+        Expanded(
+          child: template == null
+              ? CaEmptyState(
+                  icon: Icons.list_alt_outlined,
+                  title: _t('Select a default list', 'اختر قائمة افتراضية'),
+                )
+              : items.isEmpty
+              ? CaEmptyState(
+                  icon: Icons.playlist_add_outlined,
+                  title: _t('No items yet', 'لا توجد بنود بعد'),
+                  message: _t(
+                    'Add the first item to this version.',
+                    'أضف أول بند إلى هذا الإصدار.',
+                  ),
+                  action: canEditSelectedVersion
+                      ? CaCreateButton(
+                          onPressed: () => _editItem(),
+                          icon: Icons.add,
+                          label: _t('Add item', 'إضافة بند'),
+                        )
+                      : null,
+                )
+              : ListView(
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.viewPaddingOf(context).bottom + 16,
+                  ),
+                  children: [
+                    CaLedger(
+                      children: [
+                        for (final item in items)
+                          _itemTile(
+                            item: item,
+                            editable: canEditSelectedVersion,
+                            onEdit: () => _editItem(item),
+                            onDelete: item.id == null
+                                ? null
+                                : () => _deleteTemplateItem(item),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _showBindingSelector() async {
+    final site = selectedSite;
+    if (site == null || !canEditSites) return;
+    final published = templates.where((t) => t.isPublishedVersion).toList();
+    if (published.isEmpty) return;
+    final code = await showModalBottomSheet<String>(
+      context: context,
+      useSafeArea: true,
+      builder: (sheetContext) {
+        final c = CheckAdminColors.of(sheetContext);
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(16, 4, 16, 10),
               child: Text(
-                _sitePickerLabel(site),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                _t('Bind default list', 'ربط القائمة الافتراضية'),
+                style: Theme.of(sheetContext).textTheme.titleLarge,
               ),
             ),
-        ],
-        onChanged: (id) async {
-          final match = sites.where((site) => site.id == id).firstOrNull;
-          if (match == null) return;
-          setState(() => selectedSite = match);
-          await _loadSiteDetail();
-        },
-      ),
+            Divider(height: 1, color: c.rule),
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: published.length,
+                separatorBuilder: (_, _) =>
+                    Divider(height: 1, color: c.rule, indent: CaSpace.gutter),
+                itemBuilder: (context, i) {
+                  final t = published[i];
+                  final active = t.code == site.checklistType;
+                  return ListTile(
+                    minTileHeight: 56,
+                    selected: active,
+                    selectedTileColor: c.primarySoft.withValues(alpha: .55),
+                    leading: CaCodeBadge(
+                      code:
+                          '${t.familyCode.isEmpty ? t.code : t.familyCode} · v${t.versionNumber}',
+                      width: 82,
+                      tone: active ? CaTone.accent : CaTone.neutral,
+                    ),
+                    title: Text(t.nameFor(widget.language)),
+                    trailing: active
+                        ? Icon(Icons.check_rounded, color: c.primaryStrong)
+                        : null,
+                    onTap: () => Navigator.pop(context, t.code),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    if (code != null && mounted) await _bindTemplateToSite(code);
+  }
+
+  Widget _mobileSitesPane() {
+    final site = selectedSite;
+    final c = CheckAdminColors.of(context);
+    final bound = site == null
+        ? null
+        : templates
+              .where(
+                (t) => t.isPublishedVersion && t.code == site.checklistType,
+              )
+              .firstOrNull;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _compactSitePicker(),
+        Divider(height: 1, color: c.rule),
+        if (site != null)
+          CaSelectorRow(
+            title: bound?.nameFor(widget.language) ?? site.checklistType,
+            subtitle: bound == null
+                ? site.checklistType
+                : '${bound.familyCode.isEmpty ? bound.code : bound.familyCode} · v${bound.versionNumber}',
+            status: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: c.good,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _t('Bound', 'مرتبط'),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: c.good),
+                ),
+              ],
+            ),
+            onTap: canEditSites ? _showBindingSelector : null,
+          ),
+        CaSectionLabel(
+          title: _t('Effective checklist', 'القائمة الفعلية'),
+          count: effectiveItems.length,
+          trailing: site != null && canEditSites
+              ? IconButton(
+                  tooltip: _t('Add site item', 'إضافة بند خاص بالموقع'),
+                  onPressed: () => _editSiteExtra(),
+                  icon: const Icon(Icons.add_rounded),
+                )
+              : null,
+        ),
+        Expanded(
+          child: site == null
+              ? CaEmptyState(
+                  icon: Icons.location_city_outlined,
+                  title: _t('Select a checklist unit', 'اختر وحدة قائمة الفحص'),
+                )
+              : ListView(
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.viewPaddingOf(context).bottom + 16,
+                  ),
+                  children: [
+                    if (effectiveItems.isEmpty)
+                      SizedBox(
+                        height: 128,
+                        child: CaEmptyState(
+                          icon: Icons.playlist_remove_outlined,
+                          title: _t('No resolved items', 'لا توجد بنود فعلية'),
+                        ),
+                      )
+                    else
+                      CaLedger(
+                        children: [
+                          for (final item in effectiveItems)
+                            _itemTile(
+                              item: item,
+                              showSource: true,
+                              editable: canEditSites && item.isCustom,
+                              onEdit: item.isCustom
+                                  ? () {
+                                      final match = siteExtras
+                                          .where((e) => e.id == item.id)
+                                          .toList();
+                                      _editSiteExtra(
+                                        match.isNotEmpty ? match.first : item,
+                                      );
+                                    }
+                                  : null,
+                              onDelete: item.isCustom && item.id != null
+                                  ? () => _deleteSiteExtra(item)
+                                  : null,
+                            ),
+                        ],
+                      ),
+                    if (siteExtras.isNotEmpty) ...[
+                      CaSectionLabel(
+                        title: _t('Site-only items', 'بنود الموقع فقط'),
+                        count: siteExtras.length,
+                      ),
+                      CaLedger(
+                        children: [
+                          for (final item in siteExtras)
+                            _itemTile(
+                              item: item,
+                              showSource: true,
+                              editable: canEditSites,
+                              onEdit: () => _editSiteExtra(item),
+                              onDelete: item.id == null
+                                  ? null
+                                  : () => _deleteSiteExtra(item),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+        ),
+      ],
     );
   }
 
   Widget _templatesPane() {
     final narrow = MediaQuery.sizeOf(context).width < 720;
+    if (narrow) return _mobileTemplatesPane();
     final list = Column(
       children: [
         ListTile(
@@ -872,10 +1358,8 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(10, 6, 10, 4),
-                child: ChecklistBrandCard(
-                  borderColor: selected!.paperTheme.accent.withValues(
-                    alpha: 0.55,
-                  ),
+                child: CaPanel(
+                  tone: CaTone.accent,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -1022,15 +1506,6 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
             ],
           );
 
-    if (narrow) {
-      return Column(
-        children: [
-          _compactTemplatePicker(),
-          const Divider(height: 1),
-          Expanded(child: detail),
-        ],
-      );
-    }
     return Row(
       children: [
         SizedBox(width: 280, child: list),
@@ -1041,11 +1516,12 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
   }
 
   Widget _sitesPane() {
+    final narrow = MediaQuery.sizeOf(context).width < 720;
+    if (narrow) return _mobileSitesPane();
     final codes = templates
         .where((template) => template.isPublishedVersion)
         .map((template) => template.code)
         .toList();
-    final narrow = MediaQuery.sizeOf(context).width < 720;
     final picker = ListView(
       children: [
         ListTile(
@@ -1143,8 +1619,8 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
                     : null,
               ),
               const SizedBox(height: 18),
-              ChecklistBrandCard(
-                borderColor: const Color(0xFF2563EB).withValues(alpha: 0.3),
+              CaPanel(
+                tone: CaTone.accent,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -1235,15 +1711,6 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
             ],
           );
 
-    if (narrow) {
-      return Column(
-        children: [
-          _compactSitePicker(),
-          const Divider(height: 1),
-          Expanded(child: detail),
-        ],
-      );
-    }
     return Row(
       children: [
         SizedBox(width: 300, child: picker),
@@ -1255,57 +1722,78 @@ class _ChecklistsTabState extends ConsumerState<ChecklistsTab> {
 
   @override
   Widget build(BuildContext context) {
-    if (loading) return const Center(child: CircularProgressIndicator());
+    final publishedCount = templates.where((t) => t.isPublishedVersion).length;
+    final draftCount = templates.length - publishedCount;
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        CaMetaStrip(
+          items: [
+            _t('${templates.length} versions', '${templates.length} إصدارات'),
+            _t('${sites.length} checklist units', '${sites.length} وحدات فحص'),
+          ],
+          warningItem: draftCount > 0
+              ? _t('$draftCount drafts', '$draftCount مسودات')
+              : null,
+        ),
+        if (loading)
+          LinearProgressIndicator(
+            minHeight: 2,
+            color: CheckAdminColors.of(context).primaryStrong,
+            backgroundColor: Colors.transparent,
+          ),
         if (message != null)
           Padding(
-            padding: const EdgeInsets.all(8),
-            child: Text(message!, style: const TextStyle(color: Colors.red)),
+            padding: const EdgeInsets.fromLTRB(
+              CaSpace.gutter,
+              CaSpace.md,
+              CaSpace.gutter,
+              0,
+            ),
+            child: CaInlineNotice(
+              message: message!,
+              tone: CaTone.danger,
+              onDismiss: () => setState(() => message = null),
+            ),
           ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-          child: SegmentedButton<int>(
-            expandedInsets: EdgeInsets.zero,
-            segments: [
-              ButtonSegment(
-                value: 0,
-                label: Text(_t('Default lists', 'القوائم الافتراضية')),
-                icon: const Icon(Icons.list_alt),
-              ),
-              ButtonSegment(
-                value: 1,
-                label: Text(_t('Site lists', 'قوائم المواقع')),
-                icon: const Icon(Icons.account_tree_outlined),
-              ),
-            ],
-            selected: {mode},
-            onSelectionChanged: (s) => setState(() => mode = s.first),
+          padding: const EdgeInsetsDirectional.fromSTEB(
+            CaSpace.gutter,
+            CaSpace.sm,
+            CaSpace.gutter,
+            CaSpace.sm,
           ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Align(
-            alignment: AlignmentDirectional.centerStart,
-            child: Text(
-              mode == 0
-                  ? _t(
-                      'Edit shared defaults: ideal answer + overdue SLA used by Entry/Viewer.',
-                      'تحرير الافتراضي: الجواب المثالي ومهلة الأوفر ديو المستخدمة في الإدخال/العرض.',
-                    )
-                  : _t(
-                      'Preview what technicians see: inherited defaults + site custom items.',
-                      'معاينة ما يراه الفني: بنود موروثة من الافتراضي + بنود مخصّصة للموقع.',
-                    ),
-              style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
+          child: SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<int>(
+              showSelectedIcon: false,
+              segments: [
+                ButtonSegment(
+                  value: 0,
+                  label: Text(_t('Default lists', 'القوائم الافتراضية')),
+                ),
+                ButtonSegment(
+                  value: 1,
+                  label: Text(_t('Site composition', 'تركيب المواقع')),
+                ),
+              ],
+              selected: {mode},
+              onSelectionChanged: loading
+                  ? null
+                  : (values) => setState(() => mode = values.first),
             ),
           ),
         ),
-        const SizedBox(height: 6),
-        Expanded(child: mode == 0 ? _templatesPane() : _sitesPane()),
+        Expanded(
+          child: loading && templates.isEmpty && sites.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.all(CaSpace.gutter),
+                  child: CaSkeletonList(rows: 6),
+                )
+              : mode == 0
+              ? _templatesPane()
+              : _sitesPane(),
+        ),
       ],
     );
   }

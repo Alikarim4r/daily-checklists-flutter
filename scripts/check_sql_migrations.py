@@ -16,10 +16,25 @@ MIGRATIONS = ROOT / "supabase" / "migrations"
 paths = sorted(MIGRATIONS.glob("*.sql"))
 errors: list[str] = []
 
-numbers = [int(path.name.split("_", 1)[0]) for path in paths]
-expected = list(range(1, max(numbers, default=0) + 1))
-if numbers != expected:
-    errors.append(f"Migration sequence is not contiguous: {numbers}")
+legacy_paths = [path for path in paths if re.match(r"^\d{3}_", path.name)]
+timestamp_paths = [path for path in paths if re.match(r"^\d{14}_", path.name)]
+unknown_paths = [path for path in paths if path not in legacy_paths and path not in timestamp_paths]
+
+legacy_numbers = [int(path.name[:3]) for path in legacy_paths]
+legacy_expected = list(range(1, max(legacy_numbers, default=0) + 1))
+if legacy_numbers != legacy_expected:
+    errors.append(f"Legacy migration sequence is not contiguous: {legacy_numbers}")
+
+timestamps = [path.name[:14] for path in timestamp_paths]
+if len(timestamps) != len(set(timestamps)):
+    errors.append(f"Timestamp migration prefixes are not unique: {timestamps}")
+if timestamps != sorted(timestamps):
+    errors.append(f"Timestamp migrations are not ordered: {timestamps}")
+if unknown_paths:
+    errors.append(
+        "Migration names must begin with a 3-digit legacy sequence or "
+        f"14-digit timestamp: {[path.name for path in unknown_paths]}"
+    )
 
 for path in paths:
     try:
@@ -51,6 +66,12 @@ b7_binding = (MIGRATIONS / "026_repair_b7_m_site_binding.sql").read_text(
 )
 immutable_cleanup = (
     MIGRATIONS / "033_immutable_storage_and_safe_cleanup.sql"
+).read_text(encoding="utf-8")
+privacy_hardening = (
+    MIGRATIONS / "20261003170000_account_deletion_privacy_hardening.sql"
+).read_text(encoding="utf-8")
+subscription_plan_switching = (
+    MIGRATIONS / "20261003171000_subscription_plan_switching.sql"
 ).read_text(encoding="utf-8")
 
 required_hardening = (
@@ -176,6 +197,30 @@ for fragment in required_immutable_cleanup:
     if fragment not in immutable_cleanup.lower():
         errors.append(f"033 is missing immutable cleanup invariant: {fragment}")
 
+required_privacy_hardening = (
+    "create or replace function public.prepare_profile_for_account_deletion",
+    "create trigger profiles_prepare_account_deletion",
+    "create or replace function public.unlink_client_error_log_identity",
+    "on delete set null",
+    "update public.checklist_inspections",
+    "inspector_name = v_deleted_label",
+    "update public.checklist_audit_log",
+    "delete from public.checklist_notifications",
+)
+for fragment in required_privacy_hardening:
+    if fragment not in privacy_hardening.lower():
+        errors.append(f"Account deletion migration is missing invariant: {fragment}")
+
+required_subscription_switching = (
+    "add column if not exists base_plan_id",
+    "add column if not exists offer_id",
+    "drop function if exists public.current_subscription_entitlement()",
+    "grant execute on function public.current_subscription_entitlement() to authenticated",
+)
+for fragment in required_subscription_switching:
+    if fragment not in subscription_plan_switching.lower():
+        errors.append(f"Subscription plan migration is missing invariant: {fragment}")
+
 if re.search(
     r"signingConfig\s*=\s*signingConfigs\.getByName\([\"']debug[\"']\)",
     "\n".join(
@@ -202,6 +247,21 @@ for app in ("checklist_entry", "checklist_viewer", "checklist_admin"):
         errors.append(f"{app} still permits Android application backup")
     if 'android:fullBackupContent="false"' not in manifest:
         errors.append(f"{app} still permits Android full backup content")
+    forbidden_permissions = (
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.MANAGE_EXTERNAL_STORAGE",
+    )
+    for permission in forbidden_permissions:
+        if permission in manifest:
+            errors.append(
+                f"{app} requests unnecessary sensitive permission: {permission}"
+            )
 
 if errors:
     print("Migration/security checks failed:", file=sys.stderr)

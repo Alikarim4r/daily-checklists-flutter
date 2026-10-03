@@ -8,6 +8,7 @@ import '../data/checklist_lists.dart';
 import '../models/enums.dart';
 import '../models/inspection.dart';
 import '../models/profile.dart';
+import '../photos/storage_image_optimizer.dart';
 import '../theme/form_theme_resolution.dart';
 import '../utils/storage_path_list.dart';
 import 'catalog_repository.dart';
@@ -834,7 +835,11 @@ class InspectionRepository {
     String? evidenceItemId,
     String? evidenceKind,
   }) async {
-    final contentHash = sha256.convert(bytes).toString();
+    final isCompressiblePhoto = contentType == 'image/jpeg' || contentType == 'image/jpg';
+    final uploadBytes = isCompressiblePhoto
+        ? StorageImageOptimizer.optimize(bytes)
+        : bytes;
+    final contentHash = sha256.convert(uploadBytes).toString();
     final immutableName = _contentAddressedFileName(fileName, contentHash);
     final path = '$organizationId/$siteId/$inspectionId/$immutableName';
     try {
@@ -842,7 +847,7 @@ class InspectionRepository {
           .from(bucket)
           .uploadBinary(
             path,
-            bytes,
+            uploadBytes,
             fileOptions: FileOptions(contentType: contentType, upsert: false),
           );
     } catch (error) {

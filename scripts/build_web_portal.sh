@@ -39,9 +39,14 @@ build_web() {
   rsync -a --delete build/web/ "$OUT/$dest/"
 }
 
-build_web apps/checklist_entry entry /daily-checklists-flutter/entry/
-build_web apps/checklist_viewer viewer /daily-checklists-flutter/viewer/
-build_web apps/checklist_admin admin /daily-checklists-flutter/admin/
+# GitHub Pages uses the custom domain as the site root in production.
+# Override WEB_BASE_PREFIX (for example /daily-checklists-flutter/) only when
+# intentionally building for repository-path hosting without the custom domain.
+WEB_BASE_PREFIX="${WEB_BASE_PREFIX:-/}"
+[[ "$WEB_BASE_PREFIX" == */ ]] || WEB_BASE_PREFIX="$WEB_BASE_PREFIX/"
+build_web apps/checklist_entry entry "${WEB_BASE_PREFIX}entry/"
+build_web apps/checklist_viewer viewer "${WEB_BASE_PREFIX}viewer/"
+build_web apps/checklist_admin admin "${WEB_BASE_PREFIX}admin/"
 
 # Signed Android APKs if already packaged into dist.
 copy_apk() {

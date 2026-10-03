@@ -1,6 +1,6 @@
 {
-    "name": "Inspection Viewer",
-    "short_name": "Inspection Viewer",
+    "name": "CheckView",
+    "short_name": "CheckView",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#1B2430",

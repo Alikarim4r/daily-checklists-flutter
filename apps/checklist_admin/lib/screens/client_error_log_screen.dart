@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../design/checkadmin_errors.dart';
+import '../design/checkadmin_widgets.dart';
+
 class ClientErrorLogScreen extends ConsumerStatefulWidget {
   const ClientErrorLogScreen({super.key, required this.language});
 
@@ -50,7 +53,11 @@ class _ClientErrorLogScreenState extends ConsumerState<ClientErrorLogScreen> {
         stack,
         module: 'admin.client_error_log',
       );
-      if (mounted) setState(() => error = '$exception');
+      if (mounted) {
+        setState(
+          () => error = checkAdminUserMessage(exception, widget.language),
+        );
+      }
     } finally {
       if (mounted) setState(() => loading = false);
     }
@@ -69,117 +76,131 @@ class _ClientErrorLogScreenState extends ConsumerState<ClientErrorLogScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Material(
-            color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.8),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Wrap(
-                spacing: 12,
-                runSpacing: 10,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  DropdownButton<int>(
-                    value: days,
-                    items: [
-                      for (final value in const [1, 7, 30, 90])
-                        DropdownMenuItem(
-                          value: value,
-                          child: Text(
-                            ar ? 'آخر $value يوم' : 'Last $value days',
+      body: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              child: CaPanel(
+                padding: const EdgeInsets.all(12),
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 10,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    DropdownButton<int>(
+                      value: days,
+                      items: [
+                        for (final value in const [1, 7, 30, 90])
+                          DropdownMenuItem(
+                            value: value,
+                            child: Text(
+                              ar ? 'آخر $value يوم' : 'Last $value days',
+                            ),
                           ),
+                      ],
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setState(() => days = value);
+                        _load();
+                      },
+                    ),
+                    DropdownButton<String?>(
+                      value: appKey,
+                      hint: Text(ar ? 'كل التطبيقات' : 'All apps'),
+                      items: [
+                        DropdownMenuItem<String?>(
+                          value: null,
+                          child: Text(ar ? 'كل التطبيقات' : 'All apps'),
                         ),
-                    ],
-                    onChanged: (value) {
-                      if (value == null) return;
-                      setState(() => days = value);
-                      _load();
-                    },
-                  ),
-                  DropdownButton<String?>(
-                    value: appKey,
-                    hint: Text(ar ? 'كل التطبيقات' : 'All apps'),
-                    items: [
-                      DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text(ar ? 'كل التطبيقات' : 'All apps'),
-                      ),
-                      for (final value in const ['entry', 'viewer', 'admin'])
-                        DropdownMenuItem(value: value, child: Text(value)),
-                    ],
-                    onChanged: (value) {
-                      setState(() => appKey = value);
-                      _load();
-                    },
-                  ),
-                  Text(
-                    ar ? '${events.length} خطأ' : '${events.length} errors',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ],
+                        for (final value in const ['entry', 'viewer', 'admin'])
+                          DropdownMenuItem(value: value, child: Text(value)),
+                      ],
+                      onChanged: (value) {
+                        setState(() => appKey = value);
+                        _load();
+                      },
+                    ),
+                    Text(
+                      ar ? '${events.length} خطأ' : '${events.length} errors',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-          if (error != null)
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(error!, style: const TextStyle(color: Colors.red)),
-            ),
-          Expanded(
-            child: loading
-                ? const Center(child: CircularProgressIndicator())
-                : events.isEmpty
-                ? Center(
-                    child: Text(
-                      ar ? 'لا توجد أخطاء ضمن الفترة' : 'No errors in range',
-                    ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-                    itemCount: events.length,
-                    itemBuilder: (context, index) {
-                      final event = events[index];
-                      return Card(
-                        child: ExpansionTile(
-                          leading: const CircleAvatar(
-                            child: Icon(Icons.bug_report_outlined),
-                          ),
-                          title: Text(
-                            '${event.appKey} · ${event.errorType}',
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          subtitle: Text(
-                            '${event.platform} · ${event.module}\n'
-                            '${DateFormat('yyyy-MM-dd HH:mm:ss').format(event.occurredAt.toLocal())}',
-                          ),
-                          childrenPadding: const EdgeInsets.fromLTRB(
-                            16,
-                            0,
-                            16,
-                            16,
-                          ),
-                          children: [
-                            _detail(
-                              ar ? 'الإصدار' : 'Version',
-                              '${event.appVersion}+${event.buildNumber}',
-                            ),
-                            _detail(
-                              ar ? 'الرسالة المنقحة' : 'Sanitized message',
-                              event.errorMessage,
-                            ),
-                            if (event.stackSummary.isNotEmpty)
-                              _detail(
-                                ar ? 'ملخص التتبع' : 'Stack summary',
-                                event.stackSummary,
+            if (error != null)
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: CaInlineNotice(
+                  message: error!,
+                  tone: CaTone.danger,
+                  onDismiss: () => setState(() => error = null),
+                ),
+              ),
+            Expanded(
+              child: loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : events.isEmpty
+                  ? Center(
+                      child: Text(
+                        ar ? 'لا توجد أخطاء ضمن الفترة' : 'No errors in range',
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+                      itemCount: events.length,
+                      itemBuilder: (context, index) {
+                        final event = events[index];
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: CaPanel(
+                            padding: EdgeInsets.zero,
+                            tone: CaTone.warning,
+                            child: ExpansionTile(
+                              leading: const CircleAvatar(
+                                child: Icon(Icons.bug_report_outlined),
                               ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ],
+                              title: Text(
+                                '${event.appKey} · ${event.errorType}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              subtitle: Text(
+                                '${event.platform} · ${event.module}\n'
+                                '${DateFormat('yyyy-MM-dd HH:mm:ss').format(event.occurredAt.toLocal())}',
+                              ),
+                              childrenPadding: const EdgeInsets.fromLTRB(
+                                16,
+                                0,
+                                16,
+                                16,
+                              ),
+                              children: [
+                                _detail(
+                                  ar ? 'الإصدار' : 'Version',
+                                  '${event.appVersion}+${event.buildNumber}',
+                                ),
+                                _detail(
+                                  ar ? 'الرسالة المنقحة' : 'Sanitized message',
+                                  event.errorMessage,
+                                ),
+                                if (event.stackSummary.isNotEmpty)
+                                  _detail(
+                                    ar ? 'ملخص التتبع' : 'Stack summary',
+                                    event.stackSummary,
+                                  ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }

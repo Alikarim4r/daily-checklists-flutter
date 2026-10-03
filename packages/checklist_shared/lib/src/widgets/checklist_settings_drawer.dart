@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../account/account_deletion_flow.dart';
+import '../billing/subscription_management_screen.dart';
 import '../l10n/app_labels.dart';
 import '../models/profile.dart';
 import '../providers/preferences_providers.dart';
@@ -20,6 +22,7 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
     this.languages = const ['en', 'ar'],
     this.advancedItems = const [],
     this.appIconAsset,
+    this.allowAccountDeletion = false,
   });
 
   final Profile profile;
@@ -30,6 +33,10 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
 
   /// Optional path to launcher-style branding asset (نقوش).
   final String? appIconAsset;
+
+  /// Enable only in apps that offer self-registration. Platform owners are
+  /// protected from self-deletion to avoid orphaning platform governance.
+  final bool allowAccountDeletion;
 
   static final Future<PackageInfo> _packageInfo = PackageInfo.fromPlatform();
 
@@ -212,52 +219,113 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
                   onTap: () => _changePassword(context, ref, ar),
                 ),
                 const SizedBox(height: 8),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.workspace_premium_outlined),
+                  title: Text(ar ? 'الاشتراك' : 'Subscription'),
+                  subtitle: Text(
+                    ar
+                        ? 'الخطة الحالية وإدارة اشتراك Google Play'
+                        : 'Current plan and Google Play subscription',
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => SubscriptionManagementScreen(
+                          profile: profile,
+                          language: language,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 8),
                 _biometricTile(context, ref, ar),
+                if (allowAccountDeletion && !profile.isPlatformOwner) ...[
+                  const SizedBox(height: 8),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      Icons.delete_forever_outlined,
+                      color: theme.colorScheme.error,
+                    ),
+                    title: Text(
+                      ar ? 'حذف الحساب' : 'Delete account',
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                    subtitle: Text(
+                      ar
+                          ? 'حذف تسجيل الدخول والبيانات الشخصية المرتبطة به نهائيًا'
+                          : 'Permanently remove your login and linked personal data',
+                    ),
+                    onTap: () => showChecklistAccountDeletionFlow(
+                      context: context,
+                      ref: ref,
+                      language: language,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 _section(
                   context,
-                  ar ? 'حول التطبيق' : 'About',
-                  Icons.info_outline,
+                  ar ? 'الدعم والخصوصية' : 'Support & privacy',
+                  Icons.shield_outlined,
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  ar ? 'تطوير وتصميم' : 'Created & developed by',
-                  style: theme.textTheme.labelMedium?.copyWith(
-                    color: ChecklistChrome.inkMutedFor(context),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.mail_outline),
+                  title: const Text(checklistSupportEmail),
+                  subtitle: Text(
+                    ar ? 'البريد الرسمي للدعم' : 'Official support email',
+                  ),
+                  onTap: () => _launchExternal(
+                    context,
+                    Uri.parse('mailto:$checklistSupportEmail'),
+                    ar,
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  'Ali Karim — AliMind',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: ChecklistChrome.inkFor(context),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.privacy_tip_outlined),
+                  title: Text(ar ? 'سياسة الخصوصية' : 'Privacy policy'),
+                  trailing: const Icon(Icons.open_in_new, size: 18),
+                  onTap: () => _launchExternal(
+                    context,
+                    Uri.parse(checklistPrivacyPolicyUrl),
+                    ar,
                   ),
                 ),
-                const SizedBox(height: 8),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.manage_accounts_outlined),
+                  title: Text(
+                    ar ? 'معلومات حذف الحساب' : 'Account deletion information',
+                  ),
+                  trailing: const Icon(Icons.open_in_new, size: 18),
+                  onTap: () => _launchExternal(
+                    context,
+                    Uri.parse(checklistAccountDeletionUrl),
+                    ar,
+                  ),
+                ),
                 FutureBuilder<PackageInfo>(
                   future: _packageInfo,
                   builder: (context, snapshot) {
                     final info = snapshot.data;
                     if (info == null) return const SizedBox.shrink();
-                    return Text(
-                      ar
-                          ? 'الإصدار ${info.version} · البناء ${info.buildNumber}'
-                          : 'Version ${info.version} · Build ${info.buildNumber}',
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: ChecklistChrome.inkMutedFor(context),
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        ar
+                            ? 'الإصدار ${info.version} · البناء ${info.buildNumber}'
+                            : 'Version ${info.version} · Build ${info.buildNumber}',
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: ChecklistChrome.inkMutedFor(context),
+                        ),
                       ),
                     );
                   },
-                ),
-                InkWell(
-                  onTap: () => launchUrl(Uri.parse('tel:+97430058899')),
-                  child: const Text('+974 3005 8899'),
-                ),
-                InkWell(
-                  onTap: () =>
-                      launchUrl(Uri.parse('mailto:Support@alielhassan.com')),
-                  child: const Text('Support@alielhassan.com'),
                 ),
                 if (advancedItems.isNotEmpty) ...[
                   const SizedBox(height: 20),
@@ -426,12 +494,38 @@ class ChecklistSettingsDrawer extends ConsumerWidget {
           ),
         );
       }
-    } catch (e) {
+    } catch (_) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              ar
+                  ? 'تعذر تحديث كلمة المرور. تحقق من الاتصال ثم حاول مرة أخرى.'
+                  : 'Could not update the password. Check your connection and try again.',
+            ),
+          ),
+        );
       }
+    }
+  }
+
+  Future<void> _launchExternal(BuildContext context, Uri uri, bool ar) async {
+    var opened = false;
+    try {
+      opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      opened = false;
+    }
+    if (!opened && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            ar
+                ? 'تعذر فتح الرابط. استخدم $checklistSupportEmail للدعم.'
+                : 'Could not open the link. Contact $checklistSupportEmail for support.',
+          ),
+        ),
+      );
     }
   }
 }

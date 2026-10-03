@@ -227,39 +227,46 @@ class _ThemeChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        width: 118,
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: selected ? Colors.blue : Colors.black26,
-            width: selected ? 2 : 1,
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 118,
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: selected
+                  ? Theme.of(context).colorScheme.primary
+                  : Theme.of(context).colorScheme.outline,
+              width: selected ? 2 : 1,
+            ),
+            borderRadius: BorderRadius.circular(8),
           ),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Column(
-          children: [
-            Container(
-              height: 28,
-              decoration: BoxDecoration(
-                color: swatch,
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: Colors.black12),
+          child: Column(
+            children: [
+              Container(
+                height: 28,
+                decoration: BoxDecoration(
+                  color: swatch,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: Colors.black12),
+                ),
               ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              const SizedBox(height: 6),
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

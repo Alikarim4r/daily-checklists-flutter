@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.moehe.checklists" "\0"
-            VALUE "FileDescription", "checklist_entry" "\0"
+            VALUE "FileDescription", "CheckIn" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "checklist_entry" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.moehe.checklists. All rights reserved." "\0"
             VALUE "OriginalFilename", "checklist_entry.exe" "\0"
-            VALUE "ProductName", "checklist_entry" "\0"
+            VALUE "ProductName", "CheckIn" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

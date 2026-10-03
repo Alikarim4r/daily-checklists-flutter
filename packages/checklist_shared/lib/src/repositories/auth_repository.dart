@@ -83,6 +83,45 @@ class AuthRepository {
     await _client.auth.updateUser(UserAttributes(password: newPassword));
   }
 
+  /// Permanently deletes the signed-in account after password re-authentication.
+  ///
+  /// The server owns all destructive work. The client never receives the
+  /// service-role credential and never attempts to delete database rows itself.
+  Future<void> deleteAccount({required String currentPassword}) async {
+    final user = currentUser;
+    final email = user?.email?.trim();
+    if (user == null || email == null || email.isEmpty) {
+      throw StateError('account_reauthentication_unavailable');
+    }
+
+    final reauthenticated = await _client.auth.signInWithPassword(
+      email: email,
+      password: currentPassword,
+    );
+    if (reauthenticated.session == null) {
+      throw StateError('account_reauthentication_failed');
+    }
+
+    final response = await _client.functions.invoke(
+      'delete-account',
+      body: const {'confirm': true},
+    );
+    if (response.status < 200 || response.status >= 300) {
+      throw StateError('account_deletion_failed');
+    }
+    final data = response.data;
+    if (data is! Map || data['deleted'] != true) {
+      throw StateError('account_deletion_failed');
+    }
+
+    try {
+      await _client.auth.signOut(scope: SignOutScope.local);
+    } catch (_) {
+      // The remote user is already gone; local auth listeners will refresh on
+      // the next auth operation even if session cleanup itself reports an error.
+    }
+  }
+
   Future<Profile?> fetchCurrentProfile() async {
     final user = currentUser;
     if (user == null) return null;

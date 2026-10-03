@@ -168,6 +168,15 @@ class OfflineInspectionQueue {
     return raw == null ? null : DateTime.tryParse(raw)?.toLocal();
   }
 
+  /// Removes every user-bound local draft/cache after account deletion while
+  /// keeping the encrypted Hive box open for a future sign-in.
+  Future<void> purgeUserData() async {
+    if (Hive.isBoxOpen(_boxName)) {
+      await _box.clear();
+    }
+    await _secure.delete(key: _lastSyncKey);
+  }
+
   Map<String, dynamic>? _decode(String? raw) {
     if (raw == null || raw.isEmpty) return null;
     try {

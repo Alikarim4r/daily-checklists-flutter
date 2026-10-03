@@ -2,15 +2,22 @@ import 'package:checklist_shared/checklist_shared.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../design/checkadmin_errors.dart';
+import '../design/checkadmin_tokens.dart';
+import '../design/checkadmin_widgets.dart';
+
 class UsersTab extends ConsumerStatefulWidget {
-  const UsersTab({super.key, required this.profile});
+  const UsersTab({super.key, required this.profile, required this.language});
   final Profile profile;
+  final String language;
 
   @override
   ConsumerState<UsersTab> createState() => _UsersTabState();
 }
 
 class _UsersTabState extends ConsumerState<UsersTab> {
+  bool get ar => widget.language == 'ar';
+  String _t(String en, String arText) => ar ? arText : en;
   List<Profile> users = [];
   List<ChecklistSite> sites = [];
   List<Organization> organizations = [];
@@ -38,13 +45,17 @@ class _UsersTabState extends ConsumerState<UsersTab> {
       final orgList = await ref
           .read(organizationRepositoryProvider)
           .listOrganizations(activeOnly: true);
+      final hasAttention = list.any(
+        (u) => u.approvalStatus != ApprovalStatus.approved,
+      );
       setState(() {
         users = list;
         sites = siteList;
         organizations = orgList;
+        if (!hasAttention) segment = 1;
       });
     } catch (e) {
-      setState(() => message = e.toString());
+      setState(() => message = checkAdminUserMessage(e, widget.language));
     } finally {
       if (mounted) setState(() => loading = false);
     }
@@ -74,6 +85,7 @@ class _UsersTabState extends ConsumerState<UsersTab> {
         sites: sites,
         organizations: organizations,
         actor: widget.profile,
+        language: widget.language,
       ),
     );
     if (result == null) return;
@@ -89,12 +101,12 @@ class _UsersTabState extends ConsumerState<UsersTab> {
           );
       await _load();
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('تم اعتماد المستخدم')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_t('User approved', 'تم اعتماد المستخدم'))),
+        );
       }
     } catch (e) {
-      setState(() => message = e.toString());
+      setState(() => message = checkAdminUserMessage(e, widget.language));
     }
   }
 
@@ -108,6 +120,7 @@ class _UsersTabState extends ConsumerState<UsersTab> {
         user: user,
         allSites: sites,
         initialAccess: access,
+        language: widget.language,
         onSaved: _load,
       ),
     );
@@ -120,7 +133,7 @@ class _UsersTabState extends ConsumerState<UsersTab> {
           .setUserStatus(userId: user.id, status: status);
       await _load();
     } catch (e) {
-      setState(() => message = e.toString());
+      setState(() => message = checkAdminUserMessage(e, widget.language));
     }
   }
 
@@ -148,7 +161,8 @@ class _UsersTabState extends ConsumerState<UsersTab> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('إضافة مستخدم'),
+        scrollable: true,
+        title: Text(_t('Add user', 'إضافة مستخدم')),
         content: SizedBox(
           width: 420,
           child: Column(
@@ -156,8 +170,8 @@ class _UsersTabState extends ConsumerState<UsersTab> {
             children: [
               TextField(
                 controller: name,
-                decoration: const InputDecoration(
-                  labelText: 'الاسم',
+                decoration: InputDecoration(
+                  labelText: _t('Full name', 'الاسم'),
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -165,8 +179,8 @@ class _UsersTabState extends ConsumerState<UsersTab> {
               TextField(
                 controller: email,
                 keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(
-                  labelText: 'البريد',
+                decoration: InputDecoration(
+                  labelText: _t('Email', 'البريد'),
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -174,15 +188,21 @@ class _UsersTabState extends ConsumerState<UsersTab> {
               TextField(
                 controller: password,
                 obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'كلمة المرور (8 أحرف على الأقل)',
+                decoration: InputDecoration(
+                  labelText: _t(
+                    'Password (at least 8 characters)',
+                    'كلمة المرور (8 أحرف على الأقل)',
+                  ),
                   border: OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
-                'يُنشأ الحساب بانتظار الاعتماد — ثم عيّن الدور والمواقع.',
-                style: TextStyle(fontSize: 12, color: Colors.black54),
+              Text(
+                _t(
+                  'The account is created pending approval. Assign the role and sites next.',
+                  'يُنشأ الحساب بانتظار الاعتماد — ثم عيّن الدور والمواقع.',
+                ),
+                style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
           ),
@@ -190,11 +210,11 @@ class _UsersTabState extends ConsumerState<UsersTab> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('إلغاء'),
+            child: Text(_t('Cancel', 'إلغاء')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('إنشاء'),
+            child: Text(_t('Create', 'إنشاء')),
           ),
         ],
       ),
@@ -218,103 +238,329 @@ class _UsersTabState extends ConsumerState<UsersTab> {
         }
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم إنشاء المستخدم — اعتمده الآن')),
+        SnackBar(
+          content: Text(
+            _t(
+              'User created. Approve the account now.',
+              'تم إنشاء المستخدم — اعتمده الآن',
+            ),
+          ),
+        ),
       );
       if (created != null) await _approve(created);
     } catch (e) {
-      setState(() => message = e.toString());
+      setState(() => message = checkAdminUserMessage(e, widget.language));
     }
+  }
+
+  CaTone _userTone(Profile u) => switch (u.approvalStatus) {
+    ApprovalStatus.approved => CaTone.good,
+    ApprovalStatus.pending => CaTone.warning,
+    ApprovalStatus.suspended || ApprovalStatus.rejected => CaTone.danger,
+  };
+
+  String _statusLabel(Profile u) => ar
+      ? u.approvalStatus.labelAr
+      : u.approvalStatus.dbValue.replaceAll('_', ' ');
+
+  String _roleLabel(Profile u) =>
+      ar ? u.role.labelAr : u.role.dbValue.replaceAll('_', ' ');
+
+  bool _isElevated(Profile u) =>
+      u.isPlatformOwner ||
+      u.role == UserRole.superAdmin ||
+      u.role == UserRole.siteAdmin;
+
+  String _initials(Profile u) {
+    final source = u.fullName.trim().isEmpty
+        ? u.email.trim()
+        : u.fullName.trim();
+    final parts = source
+        .split(RegExp(r'\\s+'))
+        .where((e) => e.isNotEmpty)
+        .toList();
+    if (parts.isEmpty) return '?';
+    if (parts.length == 1) {
+      final value = parts.first;
+      return value.substring(0, value.length.clamp(0, 2)).toUpperCase();
+    }
+    return '${parts.first.characters.first}${parts.last.characters.first}'
+        .toUpperCase();
+  }
+
+  Widget _avatar(Profile u) {
+    final c = CheckAdminColors.of(context);
+    final elevated = _isElevated(u);
+    return Container(
+      width: 36,
+      height: 36,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: c.surfaceRaised,
+        borderRadius: BorderRadius.circular(CaRadius.control),
+        border: elevated ? Border.all(color: c.brass, width: 1.5) : null,
+      ),
+      child: Text(
+        _initials(u),
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+          color: elevated ? c.brass : c.inkMuted,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleUserMenu(Profile u, String action) async {
+    switch (action) {
+      case 'access':
+        await _editSiteFlags(u);
+      case 'suspend':
+        await _setStatus(u, ApprovalStatus.suspended);
+      case 'reject':
+        await _setStatus(u, ApprovalStatus.rejected);
+      case 'approve':
+        await _approve(u);
+    }
+  }
+
+  Widget _userTrailing(Profile u) {
+    final canAct = _canActOn(u);
+    final pending = u.approvalStatus != ApprovalStatus.approved;
+    final elevated = _isElevated(u);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        CaRoleBadge(
+          label: _roleLabel(u),
+          tone: elevated ? CaTone.brass : CaTone.neutral,
+        ),
+        if (pending && canAct) ...[
+          const SizedBox(width: 6),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(48, 48),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              tapTargetSize: MaterialTapTargetSize.padded,
+            ),
+            onPressed: () => _approve(u),
+            child: Text(_t('Approve', 'اعتماد')),
+          ),
+        ],
+        if (canAct)
+          PopupMenuButton<String>(
+            tooltip: _t('More actions', 'إجراءات إضافية'),
+            onSelected: (value) => _handleUserMenu(u, value),
+            itemBuilder: (context) => [
+              if (u.approvalStatus == ApprovalStatus.approved)
+                PopupMenuItem(
+                  value: 'access',
+                  child: ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.admin_panel_settings_outlined),
+                    title: Text(_t('Access', 'الصلاحيات')),
+                  ),
+                ),
+              if (u.approvalStatus == ApprovalStatus.approved)
+                PopupMenuItem(
+                  value: 'suspend',
+                  child: ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.pause_circle_outline),
+                    title: Text(_t('Suspend', 'إيقاف')),
+                  ),
+                ),
+              if (u.approvalStatus == ApprovalStatus.pending)
+                PopupMenuItem(
+                  value: 'reject',
+                  child: ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.block_outlined),
+                    title: Text(_t('Reject', 'رفض')),
+                  ),
+                ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _userRow(Profile u) {
+    final pending = u.approvalStatus != ApprovalStatus.approved;
+    return CaCommandRow(
+      minHeight: 64,
+      leading: _avatar(u),
+      title: u.fullName.trim().isEmpty ? u.email : u.fullName,
+      subtitle: u.fullName.trim().isEmpty ? _roleLabel(u) : u.email,
+      meta: pending ? [CaMeta(_statusLabel(u), tone: _userTone(u))] : const [],
+      trailing: _userTrailing(u),
+      showChevron: false,
+      onTap: _canActOn(u)
+          ? () => pending ? _approve(u) : _editSiteFlags(u)
+          : null,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    if (loading) return const Center(child: CircularProgressIndicator());
+    final pendingCount = users
+        .where((u) => u.approvalStatus != ApprovalStatus.approved)
+        .length;
+    final activeCount = users
+        .where((u) => u.approvalStatus == ApprovalStatus.approved)
+        .length;
     final list = _filtered;
+    final c = CheckAdminColors.of(context);
+
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-          child: Row(
-            children: [
-              Expanded(
-                child: SegmentedButton<int>(
-                  segments: const [
-                    ButtonSegment(value: 0, label: Text('بانتظار الاعتماد')),
-                    ButtonSegment(value: 1, label: Text('المعتمدون')),
-                  ],
-                  selected: {segment},
-                  onSelectionChanged: (s) => setState(() => segment = s.first),
-                ),
+        if (pendingCount > 0)
+          Container(
+            constraints: const BoxConstraints(minHeight: 48),
+            decoration: BoxDecoration(
+              color: c.surface,
+              border: BorderDirectional(
+                start: BorderSide(color: c.warning, width: 2),
+                bottom: BorderSide(color: c.rule),
               ),
-              if (_canCreate) ...[
+            ),
+            padding: const EdgeInsetsDirectional.fromSTEB(
+              CaSpace.gutter,
+              CaSpace.sm,
+              CaSpace.sm,
+              CaSpace.sm,
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.schedule_outlined, size: 18, color: c.warning),
                 const SizedBox(width: 8),
-                FilledButton.icon(
-                  onPressed: _createUser,
-                  icon: const Icon(Icons.person_add_alt_1),
-                  label: const Text('إضافة'),
+                Expanded(
+                  child: Text(
+                    _t(
+                      '$pendingCount accounts need attention',
+                      '$pendingCount حسابات تحتاج إجراء',
+                    ),
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: c.warning,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => setState(() => segment = 0),
+                  child: Text(_t('Review', 'مراجعة')),
                 ),
               ],
+            ),
+          ),
+        if (pendingCount > 0)
+          Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(
+              CaSpace.gutter,
+              CaSpace.sm,
+              CaSpace.gutter,
+              0,
+            ),
+            child: SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<int>(
+                showSelectedIcon: false,
+                segments: [
+                  ButtonSegment(
+                    value: 0,
+                    label: Text(
+                      _t(
+                        'Needs action $pendingCount',
+                        'يحتاج إجراء $pendingCount',
+                      ),
+                    ),
+                  ),
+                  ButtonSegment(
+                    value: 1,
+                    label: Text(
+                      _t('Active $activeCount', 'المعتمدون $activeCount'),
+                    ),
+                  ),
+                ],
+                selected: {segment},
+                onSelectionChanged: loading
+                    ? null
+                    : (v) => setState(() => segment = v.first),
+              ),
+            ),
+          ),
+        if (message != null)
+          Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(
+              CaSpace.gutter,
+              CaSpace.sm,
+              CaSpace.gutter,
+              0,
+            ),
+            child: CaInlineNotice(
+              message: message!,
+              tone: CaTone.danger,
+              onDismiss: () => setState(() => message = null),
+            ),
+          ),
+        CaSectionLabel(
+          title: segment == 0 && pendingCount > 0
+              ? _t('Needs action', 'يحتاج إجراء')
+              : _t('Access', 'الوصول'),
+          count: list.length,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: _t('Refresh', 'تحديث'),
+                onPressed: loading ? null : _load,
+                icon: const Icon(Icons.refresh_rounded),
+              ),
+              if (_canCreate)
+                CaCreateButton(
+                  onPressed: loading ? null : _createUser,
+                  icon: Icons.person_add_alt_1,
+                  label: _t('New user', 'مستخدم جديد'),
+                  compactLabel: _t('User', 'مستخدم'),
+                ),
             ],
           ),
         ),
-        if (message != null)
-          Padding(
-            padding: const EdgeInsets.all(8),
-            child: Text(message!, style: const TextStyle(color: Colors.red)),
-          ),
         Expanded(
-          child: list.isEmpty
-              ? const Center(child: Text('لا يوجد مستخدمون في هذه القائمة'))
-              : ListView.builder(
-                  itemCount: list.length,
-                  itemBuilder: (context, i) {
-                    final u = list[i];
-                    return Card(
-                      margin: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
-                      child: ListTile(
-                        title: Text(u.fullName.isEmpty ? u.email : u.fullName),
-                        subtitle: Text(
-                          '${u.email}\n'
-                          '${u.role.labelAr} • ${u.approvalStatus.labelAr}'
-                          '${u.isPlatformOwner ? ' • مالك' : ''}',
-                        ),
-                        isThreeLine: true,
-                        trailing: Wrap(
-                          spacing: 4,
-                          children: [
-                            if (u.approvalStatus != ApprovalStatus.approved &&
-                                _canActOn(u))
-                              FilledButton(
-                                onPressed: () => _approve(u),
-                                child: const Text('اعتماد'),
-                              ),
-                            if (u.approvalStatus == ApprovalStatus.approved &&
-                                _canActOn(u)) ...[
-                              TextButton(
-                                onPressed: () => _editSiteFlags(u),
-                                child: const Text('صلاحيات'),
-                              ),
-                              TextButton(
-                                onPressed: () =>
-                                    _setStatus(u, ApprovalStatus.suspended),
-                                child: const Text('إيقاف'),
-                              ),
-                            ],
-                            if (u.approvalStatus == ApprovalStatus.pending &&
-                                _canActOn(u))
-                              TextButton(
-                                onPressed: () =>
-                                    _setStatus(u, ApprovalStatus.rejected),
-                                child: const Text('رفض'),
-                              ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
+          child: loading && users.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.all(CaSpace.gutter),
+                  child: CaSkeletonList(rows: 6),
+                )
+              : list.isEmpty
+              ? CaEmptyState(
+                  icon: segment == 0
+                      ? Icons.verified_user_outlined
+                      : Icons.people_outline,
+                  title: segment == 0
+                      ? _t(
+                          'Nothing needs attention',
+                          'لا توجد حسابات تحتاج إجراء',
+                        )
+                      : _t('No approved users', 'لا يوجد مستخدمون معتمدون'),
+                  message: segment == 0
+                      ? _t(
+                          'New registration requests will appear here.',
+                          'ستظهر طلبات التسجيل الجديدة هنا.',
+                        )
+                      : null,
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: EdgeInsets.only(
+                      bottom: MediaQuery.viewPaddingOf(context).bottom + 16,
+                    ),
+                    children: [
+                      CaLedger(children: [for (final u in list) _userRow(u)]),
+                    ],
+                  ),
                 ),
         ),
       ],
@@ -341,18 +587,22 @@ class _ApproveUserDialog extends StatefulWidget {
     required this.sites,
     required this.organizations,
     required this.actor,
+    required this.language,
   });
 
   final Profile user;
   final List<ChecklistSite> sites;
   final List<Organization> organizations;
   final Profile actor;
+  final String language;
 
   @override
   State<_ApproveUserDialog> createState() => _ApproveUserDialogState();
 }
 
 class _ApproveUserDialogState extends State<_ApproveUserDialog> {
+  bool get ar => widget.language == 'ar';
+  String _t(String en, String arText) => ar ? arText : en;
   late UserRole role;
   final selected = <String>{};
   final noteCtrl = TextEditingController();
@@ -396,7 +646,9 @@ class _ApproveUserDialogState extends State<_ApproveUserDialog> {
     final needsSites = role != UserRole.superAdmin;
     final needsOrg = role == UserRole.superAdmin;
     return AlertDialog(
-      title: Text('اعتماد — ${widget.user.email}'),
+      title: Text(
+        _t('Approve ${widget.user.email}', 'اعتماد — ${widget.user.email}'),
+      ),
       content: SizedBox(
         width: 440,
         child: SingleChildScrollView(
@@ -406,13 +658,18 @@ class _ApproveUserDialogState extends State<_ApproveUserDialog> {
             children: [
               DropdownButtonFormField<UserRole>(
                 initialValue: role,
-                decoration: const InputDecoration(
-                  labelText: 'الدور',
+                decoration: InputDecoration(
+                  labelText: _t('Role', 'الدور'),
                   border: OutlineInputBorder(),
                 ),
                 items: [
                   for (final r in _roleChoices)
-                    DropdownMenuItem(value: r, child: Text(r.labelAr)),
+                    DropdownMenuItem(
+                      value: r,
+                      child: Text(
+                        ar ? r.labelAr : r.dbValue.replaceAll('_', ' '),
+                      ),
+                    ),
                 ],
                 onChanged: (v) {
                   if (v == null) return;
@@ -423,15 +680,22 @@ class _ApproveUserDialogState extends State<_ApproveUserDialog> {
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
                   initialValue: organizationId,
-                  decoration: const InputDecoration(
-                    labelText: 'الجهة (مطلوب للسوبر أدمن)',
+                  decoration: InputDecoration(
+                    labelText: _t(
+                      'Organization (required for super admin)',
+                      'الجهة (مطلوب للسوبر أدمن)',
+                    ),
                     border: OutlineInputBorder(),
                   ),
                   items: [
                     for (final o in widget.organizations)
                       DropdownMenuItem(
                         value: o.id,
-                        child: Text(o.nameAr.isNotEmpty ? o.nameAr : o.nameEn),
+                        child: Text(
+                          o.nameFor(widget.language).isNotEmpty
+                              ? o.nameFor(widget.language)
+                              : (o.nameAr.isNotEmpty ? o.nameAr : o.nameEn),
+                        ),
                       ),
                   ],
                   onChanged: (v) => setState(() => organizationId = v),
@@ -440,16 +704,19 @@ class _ApproveUserDialogState extends State<_ApproveUserDialog> {
               const SizedBox(height: 12),
               TextField(
                 controller: noteCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'ملاحظة (اختياري)',
+                decoration: InputDecoration(
+                  labelText: _t('Note (optional)', 'ملاحظة (اختياري)'),
                   border: OutlineInputBorder(),
                 ),
               ),
               if (needsSites) ...[
                 const SizedBox(height: 12),
-                const Text(
-                  'المواقع وقوائم الفحص (مطلوب واحد على الأقل)',
-                  style: TextStyle(fontWeight: FontWeight.w600),
+                Text(
+                  _t(
+                    'Sites and checklists (at least one required)',
+                    'المواقع وقوائم الفحص (مطلوب واحد على الأقل)',
+                  ),
+                  style: Theme.of(context).textTheme.titleSmall,
                 ),
                 const SizedBox(height: 8),
                 SizedBox(
@@ -462,13 +729,16 @@ class _ApproveUserDialogState extends State<_ApproveUserDialog> {
                           value: selected.contains(s.id),
                           title: Text(
                             s.isCampus
-                                ? s.nameAr
-                                : '${s.buildingCode} — ${s.nameAr}',
+                                ? s.nameFor(widget.language)
+                                : '${s.buildingCode} — ${s.nameFor(widget.language)}',
                           ),
                           subtitle: Text(
                             s.isCampus
-                                ? 'موقع · منح الوصول يوسّع للقوائم داخله عند الكتابة'
-                                : 'قائمة فحص',
+                                ? _t(
+                                    'Campus · access extends to its checklists on write',
+                                    'موقع · منح الوصول يوسّع للقوائم داخله عند الكتابة',
+                                  )
+                                : _t('Checklist', 'قائمة فحص'),
                           ),
                           onChanged: (v) => setState(() {
                             if (v == true) {
@@ -489,20 +759,34 @@ class _ApproveUserDialogState extends State<_ApproveUserDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('إلغاء'),
+          child: Text(_t('Cancel', 'إلغاء')),
         ),
         FilledButton(
           onPressed: () {
             if (needsOrg &&
                 (organizationId == null || organizationId!.isEmpty)) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('اختر جهة للسوبر أدمن')),
+                SnackBar(
+                  content: Text(
+                    _t(
+                      'Choose an organization for the super admin',
+                      'اختر جهة للسوبر أدمن',
+                    ),
+                  ),
+                ),
               );
               return;
             }
             if (needsSites && selected.isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('اختر موقعاً واحداً على الأقل')),
+                SnackBar(
+                  content: Text(
+                    _t(
+                      'Choose at least one site',
+                      'اختر موقعاً واحداً على الأقل',
+                    ),
+                  ),
+                ),
               );
               return;
             }
@@ -518,7 +802,7 @@ class _ApproveUserDialogState extends State<_ApproveUserDialog> {
               ),
             );
           },
-          child: const Text('اعتماد'),
+          child: Text(_t('Approve', 'اعتماد')),
         ),
       ],
     );
@@ -530,12 +814,14 @@ class _SiteFlagsDialog extends ConsumerStatefulWidget {
     required this.user,
     required this.allSites,
     required this.initialAccess,
+    required this.language,
     required this.onSaved,
   });
 
   final Profile user;
   final List<ChecklistSite> allSites;
   final List<UserSiteAccess> initialAccess;
+  final String language;
   final Future<void> Function() onSaved;
 
   @override
@@ -543,6 +829,9 @@ class _SiteFlagsDialog extends ConsumerStatefulWidget {
 }
 
 class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
+  bool get ar => widget.language == 'ar';
+  String _t(String en, String arText) => ar ? arText : en;
+
   late Map<String, _FlagRow> rows;
   bool saving = false;
 
@@ -600,9 +889,9 @@ class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(checkAdminUserMessage(e, widget.language))),
+        );
       }
     } finally {
       if (mounted) setState(() => saving = false);
@@ -612,10 +901,15 @@ class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text('صلاحيات المواقع — ${widget.user.email}'),
+      title: Text(
+        _t(
+          'Site access — ${widget.user.email}',
+          'صلاحيات المواقع — ${widget.user.email}',
+        ),
+      ),
       content: SizedBox(
         width: 480,
-        height: 420,
+        height: (MediaQuery.sizeOf(context).height * .55).clamp(240.0, 420.0),
         child: ListView(
           children: [
             for (final s in widget.allSites)
@@ -639,11 +933,13 @@ class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
                           value: row.selected,
                           title: Text(
                             s.isCampus
-                                ? s.nameAr
-                                : '${s.buildingCode} — ${s.nameAr}',
+                                ? s.nameFor(widget.language)
+                                : '${s.buildingCode} — ${s.nameFor(widget.language)}',
                           ),
                           subtitle: Text(
-                            s.isCampus ? 'موقع (حرم)' : 'قائمة فحص',
+                            s.isCampus
+                                ? _t('Campus', 'موقع (حرم)')
+                                : _t('Checklist', 'قائمة فحص'),
                           ),
                           onChanged: (v) => setState(() {
                             row.selected = v == true;
@@ -654,21 +950,24 @@ class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
                             padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
                             child: Wrap(
                               spacing: 8,
+                              runSpacing: 6,
                               children: [
                                 FilterChip(
-                                  label: const Text('قراءة'),
+                                  label: Text(_t('Read', 'قراءة')),
                                   selected: row.canRead,
                                   onSelected: (v) =>
                                       setState(() => row.canRead = v),
                                 ),
                                 FilterChip(
-                                  label: const Text('كتابة/تعديل'),
+                                  label: Text(
+                                    _t('Write / edit', 'كتابة/تعديل'),
+                                  ),
                                   selected: row.canWrite,
                                   onSelected: (v) =>
                                       setState(() => row.canWrite = v),
                                 ),
                                 FilterChip(
-                                  label: const Text('إدارة'),
+                                  label: Text(_t('Manage', 'إدارة')),
                                   selected: row.canManage,
                                   onSelected: (v) =>
                                       setState(() => row.canManage = v),
@@ -693,8 +992,11 @@ class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
                                   icon: const Icon(Icons.play_circle_outline),
                                   label: Text(
                                     row.validFrom == null
-                                        ? 'يبدأ الآن'
-                                        : 'من ${_dateLabel(row.validFrom!)}',
+                                        ? _t('Starts now', 'يبدأ الآن')
+                                        : _t(
+                                            'From ${_dateLabel(row.validFrom!)}',
+                                            'من ${_dateLabel(row.validFrom!)}',
+                                          ),
                                   ),
                                 ),
                                 OutlinedButton.icon(
@@ -728,14 +1030,17 @@ class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
                                   icon: const Icon(Icons.event_busy_outlined),
                                   label: Text(
                                     row.validUntil == null
-                                        ? 'بلا انتهاء'
-                                        : 'حتى ${_dateLabel(row.validUntil!)}',
+                                        ? _t('No end date', 'بلا انتهاء')
+                                        : _t(
+                                            'Until ${_dateLabel(row.validUntil!)}',
+                                            'حتى ${_dateLabel(row.validUntil!)}',
+                                          ),
                                   ),
                                 ),
                                 if (row.validFrom != null ||
                                     row.validUntil != null)
                                   IconButton(
-                                    tooltip: 'إزالة المدة',
+                                    tooltip: _t('Clear dates', 'إزالة المدة'),
                                     onPressed: () => setState(() {
                                       row.validFrom = null;
                                       row.validUntil = null;
@@ -756,11 +1061,13 @@ class _SiteFlagsDialogState extends ConsumerState<_SiteFlagsDialog> {
       actions: [
         TextButton(
           onPressed: saving ? null : () => Navigator.pop(context),
-          child: const Text('إلغاء'),
+          child: Text(_t('Cancel', 'إلغاء')),
         ),
         FilledButton(
           onPressed: saving ? null : _save,
-          child: Text(saving ? 'جاري الحفظ…' : 'حفظ'),
+          child: Text(
+            saving ? _t('Saving…', 'جاري الحفظ…') : _t('Save', 'حفظ'),
+          ),
         ),
       ],
     );

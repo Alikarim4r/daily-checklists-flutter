@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../design/checkadmin_errors.dart';
+import '../design/checkadmin_widgets.dart';
+
 class AuditLogScreen extends ConsumerStatefulWidget {
   const AuditLogScreen({super.key, required this.language});
 
@@ -56,24 +59,29 @@ class _AuditLogScreenState extends ConsumerState<AuditLogScreen> {
           );
       if (mounted) setState(() => events = rows);
     } catch (exception) {
-      if (mounted) setState(() => error = '$exception');
+      if (mounted) {
+        setState(
+          () => error = checkAdminUserMessage(exception, widget.language),
+        );
+      }
     } finally {
       if (mounted) setState(() => loading = false);
     }
   }
 
   String _actionLabel(String value) {
-    if (!ar) return value.replaceAll('.', ' · ');
-    return switch (value) {
-      'inspection.created' => 'إنشاء فحص',
-      'inspection.updated' => 'تعديل فحص',
-      'inspection.submitted' => 'إرسال فحص',
-      'inspection.approved' => 'اعتماد فحص',
-      'inspection.date_changed' => 'تصحيح تاريخ',
-      'inspection.deleted' => 'حذف فحص',
-      'evidence.deleted' => 'حذف دليل',
-      _ => value,
+    final label = switch (value) {
+      'inspection.created' => ('Inspection created', 'إنشاء فحص'),
+      'inspection.updated' => ('Inspection updated', 'تعديل فحص'),
+      'inspection.submitted' => ('Inspection submitted', 'إرسال فحص'),
+      'inspection.approved' => ('Inspection approved', 'اعتماد فحص'),
+      'inspection.date_changed' => ('Inspection date corrected', 'تصحيح تاريخ'),
+      'inspection.deleted' => ('Inspection deleted', 'حذف فحص'),
+      'evidence.deleted' => ('Evidence deleted', 'حذف دليل'),
+      _ => null,
     };
+    if (label != null) return ar ? label.$2 : label.$1;
+    return value.replaceAll('.', ' · ').replaceAll('_', ' ');
   }
 
   @override
@@ -89,134 +97,150 @@ class _AuditLogScreenState extends ConsumerState<AuditLogScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Material(
-            color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.8),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Wrap(
-                spacing: 12,
-                runSpacing: 10,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  DropdownButton<int>(
-                    value: days,
-                    items: [
-                      for (final value in const [1, 7, 30, 90])
-                        DropdownMenuItem(
-                          value: value,
-                          child: Text(
-                            ar ? 'آخر $value يوم' : 'Last $value days',
+      body: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              child: CaPanel(
+                padding: const EdgeInsets.all(12),
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 10,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    DropdownButton<int>(
+                      value: days,
+                      items: [
+                        for (final value in const [1, 7, 30, 90])
+                          DropdownMenuItem(
+                            value: value,
+                            child: Text(
+                              ar ? 'آخر $value يوم' : 'Last $value days',
+                            ),
                           ),
-                        ),
-                    ],
-                    onChanged: (value) {
-                      if (value == null) return;
-                      setState(() => days = value);
-                      _load();
-                    },
-                  ),
-                  DropdownButton<String?>(
-                    value: action,
-                    hint: Text(ar ? 'كل العمليات' : 'All actions'),
-                    items: [
-                      DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text(ar ? 'كل العمليات' : 'All actions'),
-                      ),
-                      for (final value in actions)
+                      ],
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setState(() => days = value);
+                        _load();
+                      },
+                    ),
+                    DropdownButton<String?>(
+                      value: action,
+                      hint: Text(ar ? 'كل العمليات' : 'All actions'),
+                      items: [
                         DropdownMenuItem<String?>(
-                          value: value,
-                          child: Text(_actionLabel(value)),
+                          value: null,
+                          child: Text(ar ? 'كل العمليات' : 'All actions'),
                         ),
-                    ],
-                    onChanged: (value) {
-                      setState(() => action = value);
-                      _load();
-                    },
-                  ),
-                  Text(
-                    ar ? '${events.length} عملية' : '${events.length} events',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ],
+                        for (final value in actions)
+                          DropdownMenuItem<String?>(
+                            value: value,
+                            child: Text(_actionLabel(value)),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        setState(() => action = value);
+                        _load();
+                      },
+                    ),
+                    Text(
+                      ar ? '${events.length} عملية' : '${events.length} events',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-          if (error != null)
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(error!, style: const TextStyle(color: Colors.red)),
-            ),
-          Expanded(
-            child: loading
-                ? const Center(child: CircularProgressIndicator())
-                : events.isEmpty
-                ? Center(
-                    child: Text(
-                      ar ? 'لا توجد عمليات ضمن الفترة' : 'No events in range',
+            if (error != null)
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: CaInlineNotice(
+                  message: error!,
+                  tone: CaTone.danger,
+                  onDismiss: () => setState(() => error = null),
+                ),
+              ),
+            Expanded(
+              child: loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : events.isEmpty
+                  ? Center(
+                      child: Text(
+                        ar ? 'لا توجد عمليات ضمن الفترة' : 'No events in range',
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+                      itemCount: events.length,
+                      itemBuilder: (context, index) {
+                        final event = events[index];
+                        final local = event.createdAt.toLocal();
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: CaPanel(
+                            padding: EdgeInsets.zero,
+                            child: ExpansionTile(
+                              leading: CircleAvatar(
+                                child: Icon(
+                                  event.action == 'evidence.deleted'
+                                      ? Icons.delete_outline
+                                      : event.action.endsWith('approved')
+                                      ? Icons.verified_outlined
+                                      : Icons.history,
+                                ),
+                              ),
+                              title: Text(
+                                _actionLabel(event.action),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              subtitle: Text(
+                                '${event.actorName ?? (ar ? 'النظام' : 'System')} · '
+                                '${DateFormat('yyyy-MM-dd HH:mm:ss').format(local)}',
+                              ),
+                              childrenPadding: const EdgeInsets.fromLTRB(
+                                16,
+                                0,
+                                16,
+                                16,
+                              ),
+                              children: [
+                                _detail(
+                                  ar ? 'الكيان' : 'Entity',
+                                  '${event.entityType} · ${event.entityId ?? '—'}',
+                                ),
+                                if (event.reason?.isNotEmpty == true)
+                                  _detail(
+                                    ar ? 'السبب' : 'Reason',
+                                    event.reason!,
+                                  ),
+                                if (event.oldValue != null)
+                                  _detail(
+                                    ar ? 'القيمة السابقة' : 'Previous value',
+                                    const JsonEncoder.withIndent(
+                                      '  ',
+                                    ).convert(event.oldValue),
+                                  ),
+                                if (event.newValue != null)
+                                  _detail(
+                                    ar ? 'القيمة الجديدة' : 'New value',
+                                    const JsonEncoder.withIndent(
+                                      '  ',
+                                    ).convert(event.newValue),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
                     ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-                    itemCount: events.length,
-                    itemBuilder: (context, index) {
-                      final event = events[index];
-                      final local = event.createdAt.toLocal();
-                      return Card(
-                        child: ExpansionTile(
-                          leading: CircleAvatar(
-                            child: Icon(
-                              event.action == 'evidence.deleted'
-                                  ? Icons.delete_outline
-                                  : event.action.endsWith('approved')
-                                  ? Icons.verified_outlined
-                                  : Icons.history,
-                            ),
-                          ),
-                          title: Text(
-                            _actionLabel(event.action),
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          subtitle: Text(
-                            '${event.actorName ?? (ar ? 'النظام' : 'System')} · '
-                            '${DateFormat('yyyy-MM-dd HH:mm:ss').format(local)}',
-                          ),
-                          childrenPadding: const EdgeInsets.fromLTRB(
-                            16,
-                            0,
-                            16,
-                            16,
-                          ),
-                          children: [
-                            _detail(
-                              ar ? 'الكيان' : 'Entity',
-                              '${event.entityType} · ${event.entityId ?? '—'}',
-                            ),
-                            if (event.reason?.isNotEmpty == true)
-                              _detail(ar ? 'السبب' : 'Reason', event.reason!),
-                            if (event.oldValue != null)
-                              _detail(
-                                ar ? 'القيمة السابقة' : 'Previous value',
-                                const JsonEncoder.withIndent(
-                                  '  ',
-                                ).convert(event.oldValue),
-                              ),
-                            if (event.newValue != null)
-                              _detail(
-                                ar ? 'القيمة الجديدة' : 'New value',
-                                const JsonEncoder.withIndent(
-                                  '  ',
-                                ).convert(event.newValue),
-                              ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
     );
   }

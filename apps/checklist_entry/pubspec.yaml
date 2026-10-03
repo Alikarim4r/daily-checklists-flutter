@@ -1,7 +1,7 @@
 name: checklist_entry
-description: MOEHE Facility Daily Inspection — technician entry app.
+description: CheckIn field inspection app for technicians and inspectors.
 publish_to: "none"
-version: 1.3.4+11
+version: 1.3.5+12
 
 environment:
   sdk: ^3.12.2
@@ -12,6 +12,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   checklist_shared:
     path: ../../packages/checklist_shared
+  in_app_purchase: ^3.3.1
   flutter_riverpod: ^2.6.1
   intl: ^0.20.2
   image_picker: ^1.1.2
@@ -22,6 +23,8 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  integration_test:
+    sdk: flutter
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.3
 
@@ -30,7 +33,7 @@ flutter_launcher_icons:
   ios: true
   remove_alpha_ios: true
   image_path: assets/branding/app_icon_simple.png
-  adaptive_icon_background: "#0E6B6A"
+  adaptive_icon_background: "#006B62"
   adaptive_icon_foreground: assets/branding/app_icon_simple.png
   macos:
     generate: true
@@ -38,8 +41,8 @@ flutter_launcher_icons:
   web:
     generate: true
     image_path: assets/branding/app_icon_simple.png
-    background_color: "#0E6B6A"
-    theme_color: "#14919B"
+    background_color: "#0C1514"
+    theme_color: "#006B62"
 
 flutter:
   uses-material-design: true

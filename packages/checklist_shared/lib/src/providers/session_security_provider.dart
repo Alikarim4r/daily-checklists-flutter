@@ -101,6 +101,15 @@ class SessionSecurityNotifier extends StateNotifier<SessionSecurityState> {
     state = state.copyWith(biometricEnabled: false, unlocked: true);
   }
 
+  Future<void> clearForAccountDeletion() async {
+    await _store.clear();
+    state = state.copyWith(
+      biometricEnabled: false,
+      unlocked: true,
+      ready: true,
+    );
+  }
+
   Future<bool> unlock({required String reason}) async {
     final ok = await _bio.authenticate(localizedReason: reason);
     if (ok) state = state.copyWith(unlocked: true);

@@ -30,6 +30,7 @@ class PortalParser(HTMLParser):
             self.artifact_links.append(attrs)
         if tag == "a" and attrs.get("href") in (
             "./privacy.html",
+            "./account-deletion.html",
             "./support.html",
         ):
             self.footer_targets.add(attrs["href"] or "")
@@ -39,13 +40,21 @@ html_paths = sorted(PORTAL.glob("*.html"))
 if not html_paths:
     errors.append("Portal has no HTML pages")
 
+cname = PORTAL / "CNAME"
+if not cname.is_file() or cname.read_text(encoding="utf-8").strip() != "inspection.alielhassan.com":
+    errors.append("Portal CNAME must pin inspection.alielhassan.com")
+
 for path in html_paths:
     parser = PortalParser()
     content = path.read_text(encoding="utf-8")
     parser.feed(content)
     parser.close()
 
-    required_footer = {"./privacy.html", "./support.html"}
+    required_footer = {
+        "./privacy.html",
+        "./account-deletion.html",
+        "./support.html",
+    }
     if not required_footer.issubset(parser.footer_targets):
         errors.append(f"{path.name} is missing privacy/support footer links")
 
@@ -72,6 +81,20 @@ for path in html_paths:
             classes = (attrs.get("class") or "").split()
             if attrs.get("aria-disabled") != "true" or "is-disabled" not in classes:
                 errors.append("Signed artifact links must fail closed until detected")
+
+for path in html_paths:
+    content = path.read_text(encoding="utf-8")
+    if "tel:" in content or "+974 3005 8899" in content:
+        errors.append(f"{path.name} exposes a non-approved support phone channel")
+
+deletion_page = PORTAL / "account-deletion.html"
+if not deletion_page.is_file():
+    errors.append("Portal is missing the public account-deletion page")
+else:
+    deletion_content = deletion_page.read_text(encoding="utf-8")
+    for required in ("Delete account", "حذف الحساب", "Support@alielhassan.com"):
+        if required not in deletion_content:
+            errors.append(f"account-deletion.html is missing required content: {required}")
 
 portal_script = (PORTAL / "portal.js").read_text(encoding="utf-8")
 if "updateDownloadAvailability" not in portal_script:

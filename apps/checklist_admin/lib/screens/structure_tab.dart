@@ -2,6 +2,10 @@ import 'package:checklist_shared/checklist_shared.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../design/checkadmin_errors.dart';
+import '../design/checkadmin_tokens.dart';
+import '../design/checkadmin_widgets.dart';
+
 import '../widgets/structure_action_tile.dart';
 import 'form_theme_picker_dialog.dart';
 import 'policies_screen.dart';
@@ -95,7 +99,7 @@ class _StructureTabState extends ConsumerState<StructureTab> {
                 : null);
       });
     } catch (e) {
-      setState(() => message = '$e');
+      setState(() => message = checkAdminUserMessage(e, widget.language));
     } finally {
       if (mounted) setState(() => loading = false);
     }
@@ -154,6 +158,7 @@ class _StructureTabState extends ConsumerState<StructureTab> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: Text(
           existing == null
               ? _t('New organization', 'جهة جديدة')
@@ -189,33 +194,37 @@ class _StructureTabState extends ConsumerState<StructureTab> {
       ),
     );
     if (ok != true) return;
-    final repo = ref.read(organizationRepositoryProvider);
-    if (existing == null) {
-      final created = await repo.create(
-        Organization(
-          id: '',
-          nameEn: nameEn.text.trim(),
-          nameAr: nameAr.text.trim(),
-        ),
-      );
-      await _load();
-      if (mounted) {
-        setState(() => selection = StructureOrgSelection(created.id));
+    try {
+      final repo = ref.read(organizationRepositoryProvider);
+      if (existing == null) {
+        final created = await repo.create(
+          Organization(
+            id: '',
+            nameEn: nameEn.text.trim(),
+            nameAr: nameAr.text.trim(),
+          ),
+        );
+        await _load();
+        if (mounted) {
+          setState(() => selection = StructureOrgSelection(created.id));
+        }
+      } else {
+        await repo.update(
+          Organization(
+            id: existing.id,
+            nameEn: nameEn.text.trim(),
+            nameAr: nameAr.text.trim(),
+            isActive: existing.isActive,
+            logoEnPath: existing.logoEnPath,
+            logoArPath: existing.logoArPath,
+            formTheme: existing.formTheme,
+            formThemeAccent: existing.formThemeAccent,
+          ),
+        );
+        await _load();
       }
-    } else {
-      await repo.update(
-        Organization(
-          id: existing.id,
-          nameEn: nameEn.text.trim(),
-          nameAr: nameAr.text.trim(),
-          isActive: existing.isActive,
-          logoEnPath: existing.logoEnPath,
-          logoArPath: existing.logoArPath,
-          formTheme: existing.formTheme,
-          formThemeAccent: existing.formThemeAccent,
-        ),
-      );
-      await _load();
+    } catch (e) {
+      _showWriteError(e);
     }
   }
 
@@ -234,6 +243,7 @@ class _StructureTabState extends ConsumerState<StructureTab> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: Text(
           existing == null
               ? _t('New zone', 'منطقة جديدة')
@@ -276,37 +286,41 @@ class _StructureTabState extends ConsumerState<StructureTab> {
       ),
     );
     if (ok != true) return;
-    final repo = ref.read(organizationRepositoryProvider);
-    if (existing == null) {
-      final created = await repo.createZone(
-        Zone(
-          id: '',
-          organizationId: orgId,
-          code: code.text.trim().toLowerCase(),
-          nameEn: nameEn.text.trim(),
-          nameAr: nameAr.text.trim(),
-        ),
-      );
-      await _load();
-      if (mounted) {
-        setState(() => selection = StructureZoneSelection(created.id));
+    try {
+      final repo = ref.read(organizationRepositoryProvider);
+      if (existing == null) {
+        final created = await repo.createZone(
+          Zone(
+            id: '',
+            organizationId: orgId,
+            code: code.text.trim().toLowerCase(),
+            nameEn: nameEn.text.trim(),
+            nameAr: nameAr.text.trim(),
+          ),
+        );
+        await _load();
+        if (mounted) {
+          setState(() => selection = StructureZoneSelection(created.id));
+        }
+      } else {
+        await repo.updateZone(
+          Zone(
+            id: existing.id,
+            organizationId: existing.organizationId,
+            code: code.text.trim().toLowerCase(),
+            nameEn: nameEn.text.trim(),
+            nameAr: nameAr.text.trim(),
+            isActive: existing.isActive,
+            sortOrder: existing.sortOrder,
+            reportLogoPath: existing.reportLogoPath,
+            formTheme: existing.formTheme,
+            formThemeAccent: existing.formThemeAccent,
+          ),
+        );
+        await _load();
       }
-    } else {
-      await repo.updateZone(
-        Zone(
-          id: existing.id,
-          organizationId: existing.organizationId,
-          code: code.text.trim().toLowerCase(),
-          nameEn: nameEn.text.trim(),
-          nameAr: nameAr.text.trim(),
-          isActive: existing.isActive,
-          sortOrder: existing.sortOrder,
-          reportLogoPath: existing.reportLogoPath,
-          formTheme: existing.formTheme,
-          formThemeAccent: existing.formThemeAccent,
-        ),
-      );
-      await _load();
+    } catch (e) {
+      _showWriteError(e);
     }
   }
 
@@ -500,43 +514,47 @@ class _StructureTabState extends ConsumerState<StructureTab> {
       ),
     );
     if (ok != true) return;
-    final repo = ref.read(siteRepositoryProvider);
-    final buildingCode = isCampus ? null : code.text.trim();
-    if (existing == null) {
-      final created = await repo.createSite(
-        organizationId: orgId,
-        zoneId: zoneId,
-        parentSiteId: isCampus ? null : parentSiteId,
-        nameEn: nameEn.text.trim(),
-        nameAr: nameAr.text.trim(),
-        buildingCode: buildingCode,
-        pin: pin.text.trim(),
-        checklistType: checklistType,
-        location: location.text.trim().isEmpty ? '—' : location.text.trim(),
-        siteType: isCampus ? 'headquarters' : 'other',
-      );
-      await _load();
-      if (mounted) {
-        setState(() {
-          selection = isCampus
-              ? StructureCampusSelection(created.id)
-              : StructureChecklistSelection(created.id);
-        });
+    try {
+      final repo = ref.read(siteRepositoryProvider);
+      final buildingCode = isCampus ? null : code.text.trim();
+      if (existing == null) {
+        final created = await repo.createSite(
+          organizationId: orgId,
+          zoneId: zoneId,
+          parentSiteId: isCampus ? null : parentSiteId,
+          nameEn: nameEn.text.trim(),
+          nameAr: nameAr.text.trim(),
+          buildingCode: buildingCode,
+          pin: pin.text.trim(),
+          checklistType: checklistType,
+          location: location.text.trim().isEmpty ? '—' : location.text.trim(),
+          siteType: isCampus ? 'headquarters' : 'other',
+        );
+        await _load();
+        if (mounted) {
+          setState(() {
+            selection = isCampus
+                ? StructureCampusSelection(created.id)
+                : StructureChecklistSelection(created.id);
+          });
+        }
+      } else {
+        await repo.updateSite(
+          id: existing.id,
+          zoneId: zoneId,
+          parentSiteId: isCampus ? null : parentSiteId,
+          nameEn: nameEn.text.trim(),
+          nameAr: nameAr.text.trim(),
+          buildingCode: buildingCode,
+          pin: pin.text.trim(),
+          checklistType: checklistType,
+          location: location.text.trim(),
+          isActive: existing.isActive,
+        );
+        await _load();
       }
-    } else {
-      await repo.updateSite(
-        id: existing.id,
-        zoneId: zoneId,
-        parentSiteId: isCampus ? null : parentSiteId,
-        nameEn: nameEn.text.trim(),
-        nameAr: nameAr.text.trim(),
-        buildingCode: buildingCode,
-        pin: pin.text.trim(),
-        checklistType: checklistType,
-        location: location.text.trim(),
-        isActive: existing.isActive,
-      );
-      await _load();
+    } catch (e) {
+      _showWriteError(e);
     }
   }
 
@@ -560,7 +578,10 @@ class _StructureTabState extends ConsumerState<StructureTab> {
             child: Text(_t('Cancel', 'إلغاء')),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             onPressed: () => Navigator.pop(context, true),
             child: Text(_t('Delete', 'حذف')),
           ),
@@ -568,8 +589,12 @@ class _StructureTabState extends ConsumerState<StructureTab> {
       ),
     );
     if (ok != true) return;
-    await ref.read(siteRepositoryProvider).deleteSite(site.id);
-    await _load();
+    try {
+      await ref.read(siteRepositoryProvider).deleteSite(site.id);
+      await _load();
+    } catch (e) {
+      _showWriteError(e);
+    }
   }
 
   Future<void> _archiveOrg(Organization org) async {
@@ -590,7 +615,10 @@ class _StructureTabState extends ConsumerState<StructureTab> {
             child: Text(_t('Cancel', 'إلغاء')),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             onPressed: () => Navigator.pop(context, true),
             child: Text(_t('Archive', 'أرشفة')),
           ),
@@ -598,31 +626,26 @@ class _StructureTabState extends ConsumerState<StructureTab> {
       ),
     );
     if (ok != true) return;
-    await ref
-        .read(organizationRepositoryProvider)
-        .update(org.copyWith(isActive: false));
-    await _load();
+    try {
+      await ref
+          .read(organizationRepositoryProvider)
+          .update(org.copyWith(isActive: false));
+      await _load();
+    } catch (e) {
+      _showWriteError(e);
+    }
+  }
+
+  void _showWriteError(Object error) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(checkAdminUserMessage(error, widget.language))),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    if (loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (message != null) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(message!),
-            const SizedBox(height: 12),
-            FilledButton(onPressed: _load, child: Text(_t('Retry', 'إعادة'))),
-          ],
-        ),
-      );
-    }
-
-    final wide = MediaQuery.sizeOf(context).width >= 900;
+    final wide = MediaQuery.sizeOf(context).width >= CaBreakpoint.twoPane;
     final tree = _TreePane(
       orgs: orgs,
       zones: zones,
@@ -635,51 +658,90 @@ class _StructureTabState extends ConsumerState<StructureTab> {
       onAddOrg: canManageOrgs ? () => _editOrg() : null,
     );
 
-    if (!wide) return tree;
-
-    return Row(
-      children: [
-        SizedBox(
-          width: 360,
-          child: Material(
-            color: Theme.of(context).colorScheme.surface.withValues(
-              alpha: ChecklistChrome.listSurfaceOpacity,
+    Widget workspace;
+    if (loading && orgs.isEmpty) {
+      workspace = const Padding(
+        padding: EdgeInsets.all(CaSpace.gutter),
+        child: CaSkeletonList(rows: 6),
+      );
+    } else if (!wide) {
+      workspace = tree;
+    } else {
+      workspace = Row(
+        children: [
+          SizedBox(
+            width: 360,
+            child: Material(
+              color: CheckAdminColors.of(context).surface,
+              child: tree,
             ),
-            elevation: 1,
-            child: tree,
           ),
-        ),
-        const VerticalDivider(width: 1),
-        Expanded(
-          child: selection == null
-              ? Center(
-                  child: Text(
-                    _t(
+          VerticalDivider(width: 1, color: CheckAdminColors.of(context).rule),
+          Expanded(
+            child: selection == null
+                ? CaEmptyState(
+                    icon: Icons.account_tree_outlined,
+                    title: _t(
                       'Select an organization, zone, or site',
                       'اختر جهة أو منطقة أو موقعاً',
                     ),
+                    message: _t(
+                      'The detail workspace will appear here without losing your position in the hierarchy.',
+                      'ستظهر مساحة التفاصيل هنا دون فقدان موضعك في الهيكل.',
+                    ),
+                  )
+                : _DetailPane(
+                    selection: selection!,
+                    orgs: orgs,
+                    zones: zones,
+                    sites: sites,
+                    templates: templates,
+                    language: widget.language,
+                    profile: widget.profile,
+                    canManageOrgs: canManageOrgs,
+                    canManageZones: canManageZones,
+                    canManageSites: canManageSites,
+                    canEditOrgLogos: canEditOrgLogos,
+                    onReload: _load,
+                    onEditOrg: _editOrg,
+                    onEditZone: _editZone,
+                    onEditSite: _editSite,
+                    onDeleteSite: _deleteSite,
+                    onArchiveOrg: _archiveOrg,
                   ),
-                )
-              : _DetailPane(
-                  selection: selection!,
-                  orgs: orgs,
-                  zones: zones,
-                  sites: sites,
-                  templates: templates,
-                  language: widget.language,
-                  profile: widget.profile,
-                  canManageOrgs: canManageOrgs,
-                  canManageZones: canManageZones,
-                  canManageSites: canManageSites,
-                  canEditOrgLogos: canEditOrgLogos,
-                  onReload: _load,
-                  onEditOrg: _editOrg,
-                  onEditZone: _editZone,
-                  onEditSite: _editSite,
-                  onDeleteSite: _deleteSite,
-                  onArchiveOrg: _archiveOrg,
-                ),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        CaMetaStrip(
+          items: [
+            _t('${orgs.length} organizations', '${orgs.length} جهات'),
+            _t('${zones.length} zones', '${zones.length} مناطق'),
+            _t(
+              '${sites.length} sites / units',
+              '${sites.length} مواقع / وحدات',
+            ),
+          ],
         ),
+        if (message != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              CaSpace.gutter,
+              CaSpace.md,
+              CaSpace.gutter,
+              0,
+            ),
+            child: CaInlineNotice(
+              message: message!,
+              tone: CaTone.danger,
+              onDismiss: () => setState(() => message = null),
+            ),
+          ),
+        Expanded(child: workspace),
       ],
     );
   }
@@ -713,42 +775,58 @@ class _TreePane extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = CheckAdminColors.of(context);
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-          child: Row(
+        CaSectionLabel(
+          title: _t('Organizations', 'الجهات'),
+          count: orgs.length,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Expanded(
-                child: Text(
-                  _t('Structure', 'الهيكل'),
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
               IconButton(
                 tooltip: _t('Refresh', 'تحديث'),
                 onPressed: onRefresh,
-                icon: const Icon(Icons.refresh),
+                icon: const Icon(Icons.refresh_rounded),
               ),
               if (onAddOrg != null)
-                FilledButton.tonalIcon(
+                CaCreateButton(
                   onPressed: onAddOrg,
-                  icon: const Icon(Icons.add, size: 18),
-                  label: Text(_t('Add organization', 'إضافة جهة')),
+                  icon: Icons.add,
+                  label: _t('Organization', 'جهة'),
+                  compactLabel: _t('Org', 'جهة'),
                 ),
             ],
           ),
         ),
         Expanded(
           child: orgs.isEmpty
-              ? Center(child: Text(_t('No organizations', 'لا جهات')))
-              : ListView(
-                  padding: const EdgeInsets.only(bottom: 88),
-                  children: [
-                    for (final org in orgs)
-                      _OrgNode(
+              ? CaEmptyState(
+                  icon: Icons.account_tree_outlined,
+                  title: _t('No organizations', 'لا توجد جهات'),
+                )
+              : DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: c.surface,
+                    border: Border(
+                      top: BorderSide(color: c.rule),
+                      bottom: BorderSide(color: c.rule),
+                    ),
+                  ),
+                  child: ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: EdgeInsets.only(
+                      bottom: MediaQuery.viewPaddingOf(context).bottom + 16,
+                    ),
+                    itemCount: orgs.length,
+                    separatorBuilder: (_, _) => Divider(
+                      height: 1,
+                      color: c.rule,
+                      indent: CaSpace.gutter,
+                    ),
+                    itemBuilder: (context, i) {
+                      final org = orgs[i];
+                      return _OrgNode(
                         org: org,
                         zones: zones
                             .where((z) => z.organizationId == org.id)
@@ -759,8 +837,10 @@ class _TreePane extends StatelessWidget {
                         selection: selection,
                         language: language,
                         onSelect: onSelect,
-                      ),
-                  ],
+                        initiallyExpanded: i == 0,
+                      );
+                    },
+                  ),
                 ),
         ),
       ],
@@ -776,6 +856,7 @@ class _OrgNode extends StatelessWidget {
     required this.selection,
     required this.language,
     required this.onSelect,
+    required this.initiallyExpanded,
   });
 
   final Organization org;
@@ -784,6 +865,7 @@ class _OrgNode extends StatelessWidget {
   final StructureSelection? selection;
   final String language;
   final ValueChanged<StructureSelection> onSelect;
+  final bool initiallyExpanded;
 
   @override
   Widget build(BuildContext context) {
@@ -791,44 +873,79 @@ class _OrgNode extends StatelessWidget {
         selection is StructureOrgSelection &&
         (selection! as StructureOrgSelection).organizationId == org.id;
     final theme = Theme.of(context);
+    final c = CheckAdminColors.of(context);
     final sortedZones = [...zones]
       ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+    final hasSelectedChild = switch (selection) {
+      StructureZoneSelection(:final zoneId) => zones.any((z) => z.id == zoneId),
+      StructureCampusSelection(:final siteId) ||
+      StructureChecklistSelection(
+        :final siteId,
+      ) => sites.any((s) => s.id == siteId),
+      _ => false,
+    };
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-      child: Card(
-        elevation: selected ? 2 : 0,
-        color: selected
-            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.35)
-            : null,
-        child: Theme(
-          data: theme.copyWith(dividerColor: Colors.transparent),
-          child: ExpansionTile(
-            key: PageStorageKey<String>('organization-${org.id}'),
-            initiallyExpanded: false,
-            tilePadding: const EdgeInsets.symmetric(horizontal: 8),
-            leading: const Icon(Icons.account_balance_rounded),
-            title: InkWell(
-              onTap: () => onSelect(StructureOrgSelection(org.id)),
-              child: Text(
-                org.nameFor(language),
-                style: theme.textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-            children: [
-              for (final zone in sortedZones)
-                _ZoneNode(
-                  zone: zone,
-                  sites: sites,
-                  selection: selection,
-                  language: language,
-                  onSelect: onSelect,
-                ),
-            ],
+    return Theme(
+      data: theme.copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        key: PageStorageKey<String>('organization-${org.id}'),
+        initiallyExpanded: initiallyExpanded || selected || hasSelectedChild,
+        minTileHeight: 56,
+        tilePadding: const EdgeInsetsDirectional.fromSTEB(12, 0, 8, 0),
+        childrenPadding: EdgeInsets.zero,
+        leading: Container(
+          width: 32,
+          height: 32,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: c.surfaceRaised,
+            borderRadius: BorderRadius.circular(CaRadius.control),
+          ),
+          child: Icon(
+            Icons.account_balance_outlined,
+            size: 18,
+            color: selected ? c.primaryStrong : c.inkMuted,
           ),
         ),
+        title: InkWell(
+          onTap: () => onSelect(StructureOrgSelection(org.id)),
+          child: Text(
+            org.nameFor(language),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: selected ? c.primaryStrong : c.ink,
+            ),
+          ),
+        ),
+        subtitle: Text(
+          language == 'ar'
+              ? '${zones.length} مناطق · ${sites.length} وحدات'
+              : '${zones.length} zones · ${sites.length} units',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodySmall,
+        ),
+        children: [
+          Container(
+            margin: const EdgeInsetsDirectional.only(start: 28),
+            decoration: BoxDecoration(
+              border: BorderDirectional(start: BorderSide(color: c.rule)),
+            ),
+            child: Column(
+              children: [
+                for (final zone in sortedZones)
+                  _ZoneNode(
+                    zone: zone,
+                    sites: sites,
+                    selection: selection,
+                    language: language,
+                    onSelect: onSelect,
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -855,6 +972,7 @@ class _ZoneNode extends StatelessWidget {
         selection is StructureZoneSelection &&
         (selection! as StructureZoneSelection).zoneId == zone.id;
     final theme = Theme.of(context);
+    final c = CheckAdminColors.of(context);
     final inZone = sites.where((s) {
       if (s.zoneId == zone.id) return true;
       if (s.parentSiteId == null) return false;
@@ -869,19 +987,32 @@ class _ZoneNode extends StatelessWidget {
       data: theme.copyWith(dividerColor: Colors.transparent),
       child: ExpansionTile(
         initiallyExpanded: selected,
-        tilePadding: const EdgeInsetsDirectional.only(start: 16, end: 8),
+        minTileHeight: 48,
+        tilePadding: const EdgeInsetsDirectional.fromSTEB(12, 0, 8, 0),
+        childrenPadding: EdgeInsets.zero,
         leading: Icon(
           Icons.map_outlined,
-          color: selected ? theme.colorScheme.primary : null,
+          size: 18,
+          color: selected ? c.primaryStrong : c.inkMuted,
         ),
         title: InkWell(
           onTap: () => onSelect(StructureZoneSelection(zone.id)),
           child: Text(
             zone.nameFor(language),
-            style: TextStyle(
-              fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: selected ? c.primaryStrong : c.ink,
             ),
           ),
+        ),
+        subtitle: Text(
+          language == 'ar'
+              ? '${inZone.length} مواقع / وحدات'
+              : '${inZone.length} sites / units',
+          maxLines: 1,
+          style: theme.textTheme.bodySmall,
         ),
         children: [
           for (final campus in campuses)
@@ -900,7 +1031,7 @@ class _ZoneNode extends StatelessWidget {
               selection: selection,
               language: language,
               onSelect: onSelect,
-              indent: 32,
+              indent: 12,
             ),
         ],
       ),
@@ -929,6 +1060,7 @@ class _CampusNode extends StatelessWidget {
         selection is StructureCampusSelection &&
         (selection! as StructureCampusSelection).siteId == campus.id;
     final theme = Theme.of(context);
+    final c = CheckAdminColors.of(context);
 
     return Theme(
       data: theme.copyWith(dividerColor: Colors.transparent),
@@ -937,25 +1069,39 @@ class _CampusNode extends StatelessWidget {
             selected ||
             (selection is StructureChecklistSelection &&
                 checklists.any(
-                  (c) =>
-                      c.id ==
+                  (row) =>
+                      row.id ==
                       (selection! as StructureChecklistSelection).siteId,
                 )),
-        tilePadding: const EdgeInsetsDirectional.only(start: 28, end: 8),
+        minTileHeight: 48,
+        tilePadding: const EdgeInsetsDirectional.fromSTEB(24, 0, 8, 0),
+        childrenPadding: EdgeInsets.zero,
         leading: _ThemeMarker(
           paperTheme: campus.paperTheme,
           icon: Icons.place_outlined,
           selected: selected,
+          size: 28,
         ),
         title: InkWell(
           onTap: () => onSelect(StructureCampusSelection(campus.id)),
           child: Text(
             campus.nameFor(language),
-            style: TextStyle(
-              fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: selected ? c.primaryStrong : c.ink,
             ),
           ),
         ),
+        subtitle: checklists.isEmpty
+            ? null
+            : Text(
+                language == 'ar'
+                    ? '${checklists.length} قوائم'
+                    : '${checklists.length} checklists',
+                style: theme.textTheme.bodySmall,
+              ),
         children: [
           for (final unit in checklists)
             _ChecklistLeaf(
@@ -963,7 +1109,7 @@ class _CampusNode extends StatelessWidget {
               selection: selection,
               language: language,
               onSelect: onSelect,
-              indent: 44,
+              indent: 24,
             ),
         ],
       ),
@@ -991,20 +1137,35 @@ class _ChecklistLeaf extends StatelessWidget {
     final selected =
         selection is StructureChecklistSelection &&
         (selection! as StructureChecklistSelection).siteId == site.id;
+    final c = CheckAdminColors.of(context);
     return ListTile(
+      minTileHeight: 44,
+      dense: true,
       selected: selected,
+      selectedTileColor: c.primarySoft.withValues(alpha: .55),
       contentPadding: EdgeInsetsDirectional.only(start: indent, end: 8),
-      leading: _ThemeMarker(
-        paperTheme: site.paperTheme,
-        icon: Icons.checklist_rtl,
-        selected: selected,
-        size: 28,
+      leading: CaCodeBadge(
+        code: site.buildingCode,
+        width: 64,
+        tone: selected ? CaTone.accent : CaTone.neutral,
       ),
       title: Text(
-        '${site.buildingCode} — ${site.nameFor(language)}',
-        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+        site.nameFor(language),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: selected ? c.primaryStrong : c.ink,
+          fontWeight: FontWeight.w500,
+          fontSize: 13,
+        ),
       ),
-      subtitle: Text(site.checklistType),
+      subtitle: site.checklistType.isEmpty
+          ? null
+          : Text(
+              site.checklistType,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
       onTap: () => onSelect(StructureChecklistSelection(site.id)),
     );
   }
@@ -1030,7 +1191,7 @@ class _ThemeMarker extends StatelessWidget {
       height: size,
       decoration: BoxDecoration(
         color: paperTheme.accent,
-        shape: BoxShape.circle,
+        borderRadius: BorderRadius.circular(CaRadius.control),
         border: Border.all(
           color: selected
               ? Theme.of(context).colorScheme.primary
@@ -1147,16 +1308,22 @@ class _DetailPane extends ConsumerWidget {
     );
   }
 
-  Widget _statusChip({required bool active}) {
+  Widget _statusChip(BuildContext context, {required bool active}) {
+    final c = CheckAdminColors.of(context);
+    final tint = active ? c.good : c.warning;
     return Chip(
       avatar: Icon(
         active ? Icons.check_circle : Icons.pause_circle_filled,
         size: 16,
-        color: active ? Colors.green.shade700 : Colors.orange.shade800,
+        color: tint,
       ),
       label: Text(active ? _t('Active', 'مفعل') : _t('Inactive', 'معطل')),
+      labelStyle: Theme.of(
+        context,
+      ).textTheme.labelMedium?.copyWith(color: c.ink),
       visualDensity: VisualDensity.compact,
-      backgroundColor: active ? Colors.green.shade50 : Colors.orange.shade50,
+      backgroundColor: active ? c.goodSoft : c.warningSoft,
+      side: BorderSide(color: tint.withValues(alpha: .45)),
     );
   }
 
@@ -1279,7 +1446,7 @@ class _DetailPane extends ConsumerWidget {
           title: org.nameFor(language),
           subtitle: language == 'ar' ? org.nameEn : org.nameAr,
           chips: [
-            _statusChip(active: org.isActive),
+            _statusChip(context, active: org.isActive),
             _countChip(
               _t('$orgSites sites', '$orgSites مواقع'),
               Icons.location_city_outlined,
@@ -1361,7 +1528,7 @@ class _DetailPane extends ConsumerWidget {
               MaterialPageRoute<void>(
                 builder: (_) => Scaffold(
                   appBar: AppBar(title: Text(_t('Users', 'المستخدمون'))),
-                  body: UsersTab(profile: profile),
+                  body: UsersTab(profile: profile, language: language),
                 ),
               ),
             );
@@ -1376,6 +1543,7 @@ class _DetailPane extends ConsumerWidget {
               MaterialPageRoute<void>(
                 builder: (_) => PoliciesScreen(
                   profile: profile,
+                  language: language,
                   initialOrganizationId: org.id,
                 ),
               ),
@@ -1412,7 +1580,7 @@ class _DetailPane extends ConsumerWidget {
           title: zone.nameFor(language),
           subtitle: zone.code,
           chips: [
-            _statusChip(active: zone.isActive),
+            _statusChip(context, active: zone.isActive),
             _countChip(
               _t('$campuses sites', '$campuses مواقع'),
               Icons.location_city_outlined,
@@ -1487,7 +1655,7 @@ class _DetailPane extends ConsumerWidget {
               MaterialPageRoute<void>(
                 builder: (_) => Scaffold(
                   appBar: AppBar(title: Text(_t('Users', 'المستخدمون'))),
-                  body: UsersTab(profile: profile),
+                  body: UsersTab(profile: profile, language: language),
                 ),
               ),
             );
@@ -1527,7 +1695,7 @@ class _DetailPane extends ConsumerWidget {
                   'قالب ${site.checklistType} · رقم ${site.pin}',
                 ),
           chips: [
-            _statusChip(active: site.isActive),
+            _statusChip(context, active: site.isActive),
             if (isCampus)
               _countChip(
                 _t('$childCount checklists', '$childCount قوائم'),
@@ -1608,7 +1776,7 @@ class _DetailPane extends ConsumerWidget {
               MaterialPageRoute<void>(
                 builder: (_) => Scaffold(
                   appBar: AppBar(title: Text(_t('Users', 'المستخدمون'))),
-                  body: UsersTab(profile: profile),
+                  body: UsersTab(profile: profile, language: language),
                 ),
               ),
             );

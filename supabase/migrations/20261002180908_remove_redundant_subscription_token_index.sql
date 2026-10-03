@@ -1,0 +1,1 @@
+drop index if exists public.organization_subscriptions_purchase_token_hash_idx;;

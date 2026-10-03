@@ -10,6 +10,7 @@ import '../theme/checklist_brand.dart';
 
 typedef ProfilePredicate = bool Function(Profile profile);
 typedef HomeBuilder = Widget Function(BuildContext context, Profile profile);
+typedef UserErrorMessage = String Function(Object error);
 
 /// Login → approval → role gate → optional site access → home.
 /// Layout aligned with smart-meters AppLoginPanel.
@@ -29,6 +30,7 @@ class ChecklistAuthGate extends ConsumerStatefulWidget {
     this.accessDeniedMessage = 'لا تملك صلاحية استخدام هذا التطبيق.',
     this.noSiteAccessMessage =
         'لم تُعيَّن لك مواقع بعد. تواصل مع المسؤول لاعتماد الحساب وربطه بالمواقع.',
+    this.userErrorMessage,
   });
 
   final String appTitle;
@@ -43,6 +45,7 @@ class ChecklistAuthGate extends ConsumerStatefulWidget {
   final SiteAccessRequirement siteAccessRequirement;
   final String accessDeniedMessage;
   final String noSiteAccessMessage;
+  final UserErrorMessage? userErrorMessage;
 
   @override
   ConsumerState<ChecklistAuthGate> createState() => _ChecklistAuthGateState();
@@ -81,6 +84,9 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
       _demoEnabled && _demoEmail.isNotEmpty && _demoPassword.isNotEmpty;
 
   bool get ar => widget.language == 'ar';
+
+  String _messageFor(Object error) =>
+      widget.userErrorMessage?.call(error) ?? error.toString();
 
   @override
   void initState() {
@@ -150,7 +156,7 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
       ref.read(sessionSecurityProvider.notifier).onPasswordSignIn();
       ref.invalidate(currentProfileProvider);
     } catch (e) {
-      setState(() => error = e.toString());
+      setState(() => error = _messageFor(e));
     } finally {
       if (mounted) setState(() => loading = false);
     }
@@ -180,7 +186,7 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
         password.clear();
       });
     } catch (e) {
-      setState(() => error = e.toString());
+      setState(() => error = _messageFor(e));
     } finally {
       if (mounted) setState(() => loading = false);
     }
@@ -207,14 +213,14 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
     return auth.when(
       loading: () =>
           const Scaffold(body: Center(child: CircularProgressIndicator())),
-      error: (e, _) => Scaffold(body: Center(child: Text('$e'))),
+      error: (e, _) => Scaffold(body: Center(child: Text(_messageFor(e)))),
       data: (state) {
         if (state.session == null) return _loginScaffold();
         final profileAsync = ref.watch(currentProfileProvider);
         return profileAsync.when(
           loading: () =>
               const Scaffold(body: Center(child: CircularProgressIndicator())),
-          error: (e, _) => Scaffold(body: Center(child: Text('$e'))),
+          error: (e, _) => Scaffold(body: Center(child: Text(_messageFor(e)))),
           data: (profile) {
             if (profile == null) {
               return Scaffold(
@@ -255,6 +261,9 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
               return FutureBuilder<int>(
                 future: _countSiteAccess(profile),
                 builder: (context, snap) {
+                  if (snap.hasError) {
+                    return _statusScaffold(_messageFor(snap.error!), profile);
+                  }
                   if (!snap.hasData) {
                     return const Scaffold(
                       body: Center(child: CircularProgressIndicator()),

@@ -1,4 +1,10 @@
+export 'src/account/account_deletion_flow.dart';
+export 'src/billing/play_billing_service.dart';
+export 'src/billing/play_subscription_catalog.dart';
 export 'src/bootstrap/bootstrap.dart';
+export 'src/billing/subscription_entitlement.dart';
+export 'src/billing/subscription_management_screen.dart';
+export 'src/billing/subscription_repository.dart';
 export 'src/config/supabase_config.dart';
 export 'src/data/buildings.dart';
 export 'src/data/checklist_lists.dart';
@@ -68,3 +74,4 @@ export 'src/widgets/checklist_notices.dart';
 export 'src/widgets/checklist_settings_drawer.dart';
 export 'src/widgets/checklist_signature_pad.dart';
 export 'src/widgets/language_toggle.dart';
+export 'src/photos/storage_image_optimizer.dart';

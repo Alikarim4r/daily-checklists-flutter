@@ -8,7 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 /// Installs privacy-conscious, best-effort client error reporting.
 ///
 /// The reporter never sends form answers, evidence, access tokens, email
-/// addresses, or arbitrary application state. Reporting failures are swallowed
+/// addresses, durable user identifiers, or arbitrary application state. Reporting failures are swallowed
 /// so an unavailable monitoring endpoint cannot affect the user workflow.
 class StructuredErrorReporter {
   StructuredErrorReporter._();
@@ -78,7 +78,6 @@ class StructuredErrorReporter {
 
       final info = _packageInfo ?? await _tryLoadPackageInfo();
       await client.from('client_error_logs').insert({
-        'user_id': user.id,
         'app_key': _sanitize(appKey, 80),
         'app_version': _sanitize(info?.version ?? '', 40),
         'build_number': _sanitize(info?.buildNumber ?? '', 40),
