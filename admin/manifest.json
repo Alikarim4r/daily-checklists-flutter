@@ -1,11 +1,11 @@
 {
-    "name": "Inspection Admin",
-    "short_name": "Inspection Admin",
+    "name": "CheckAdmin",
+    "short_name": "CheckAdmin",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#6B2D3C",
-    "theme_color": "#8B3A4A",
-    "description": "Secure administration for Demo Org inspection organizations, access, catalogs, and policies.",
+    "background_color": "#090D14",
+    "theme_color": "#3154C7",
+    "description": "Secure administration for MOEHE inspection organizations, access, catalogs, and policies.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
