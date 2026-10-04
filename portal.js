@@ -54,7 +54,7 @@
       dlHeroTitle: "تحميل التطبيقات",
       dlHeroLead:
         "حمّل أندرويد وماك، أو افتح تطبيقات الويب على iPhone/iPad عبر Safari.",
-      currentRelease: "إصدار الويب الحالي 1.3.5 (12) — 3 أكتوبر 2026",
+      currentRelease: "الإصدار الحالي: CheckIn وCheckAdmin ‏1.3.7 (14) · CheckView ‏1.3.5 (12) — 4 أكتوبر 2026",
       available: "متاح",
       artifactPending: "بانتظار حزمة موقعة",
       webReady: "ويب متاح",
@@ -131,7 +131,7 @@
       dlHeroTitle: "Download apps",
       dlHeroLead:
         "Download Android and Mac builds, or open web apps on iPhone/iPad via Safari.",
-      currentRelease: "Current web release 1.3.5 (12) — October 3, 2026",
+      currentRelease: "Current release: CheckIn & CheckAdmin 1.3.7 (14) · CheckView 1.3.5 (12) — October 4, 2026",
       available: "Available",
       artifactPending: "Signed build pending",
       webReady: "Web ready",
