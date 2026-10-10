@@ -92,11 +92,7 @@ class _StructureTabState extends ConsumerState<StructureTab> {
         zones = z;
         sites = s;
         templates = t;
-        selection =
-            _sanitizeSelection(selection) ??
-            (activeOrgs.isNotEmpty
-                ? StructureOrgSelection(activeOrgs.first.id)
-                : null);
+        selection = _sanitizeSelection(selection);
       });
     } catch (e) {
       setState(() => message = checkAdminUserMessage(e, widget.language));
@@ -353,15 +349,96 @@ class _StructureTabState extends ConsumerState<StructureTab> {
           return orgs.isNotEmpty ? orgs.first.id : null;
         }();
     if (orgId == null) return;
+    final preferences = ref.read(sharedPreferencesProvider);
+    final pinHistoryKey = 'checkadmin.recent_pin_numbers.$orgId';
+    final recentPins = preferences.getStringList(pinHistoryKey) ?? <String>[];
 
-    final templates = await ref.read(catalogRepositoryProvider).listTemplates();
+    final catalog = ref.read(catalogRepositoryProvider);
+    final allTemplates = await catalog.listTemplates(activeOnly: false);
+    final libraryTemplates = await ref
+        .read(checklistLibraryRepositoryProvider)
+        .listTemplates(organizationId: orgId);
     if (!mounted) return;
+
+    final libraryTemplateIds = {
+      for (final row in libraryTemplates)
+        if (row.installedTemplateId != null) row.installedTemplateId!,
+    };
+    final customerTemplates = allTemplates
+        .where(
+          (template) =>
+              template.organizationId == orgId &&
+              template.libraryTemplateId == null &&
+              !libraryTemplateIds.contains(template.id),
+        )
+        .toList();
+
     final nameEn = TextEditingController(text: existing?.nameEn ?? '');
     final nameAr = TextEditingController(text: existing?.nameAr ?? '');
     final code = TextEditingController(text: existing?.buildingCode ?? '');
-    final pin = TextEditingController(text: existing?.pin ?? '');
-    final location = TextEditingController(text: existing?.location ?? '');
+    final pin = TextEditingController(
+      text: existing?.pin ?? (recentPins.isEmpty ? '' : recentPins.first),
+    );
+    final defaultParentSite = sites
+        .where((site) => site.id == defaultParent)
+        .firstOrNull;
+    String locationForCampus(String? campusId) {
+      final campus = sites.where((site) => site.id == campusId).firstOrNull;
+      if (campus == null) return '';
+      final address = campus.location.trim();
+      return address.isNotEmpty && address != '—'
+          ? address
+          : campus.nameFor(widget.language);
+    }
+
+    final location = TextEditingController(
+      text:
+          existing?.location ??
+          (defaultParentSite == null
+              ? ''
+              : locationForCampus(defaultParentSite.id)),
+    );
     var checklistType = existing?.checklistType ?? 'DEFAULT';
+    var checklistCategory = existing?.checklistCategory ?? 'general';
+    var checklistSubcategory = existing?.checklistSubcategory ?? '';
+    var floorScope = existing?.floorScope ?? 'all';
+    var floorChoice = floorScope == 'floor_number:-1'
+        ? 'lgf'
+        : floorScope == 'ground'
+        ? 'gf'
+        : floorScope == 'first'
+        ? 'ff'
+        : floorScope.startsWith('floor_number:')
+        ? 'floor_number'
+        : floorScope;
+    final floorNumber = TextEditingController(
+      text: floorScope.startsWith('floor_number:')
+          ? floorScope.substring('floor_number:'.length)
+          : '',
+    );
+
+    final currentTemplate = allTemplates
+        .where((template) => template.code == checklistType)
+        .firstOrNull;
+    String templateChoice;
+    if (currentTemplate?.libraryTemplateId != null) {
+      templateChoice = 'library:${currentTemplate!.libraryTemplateId}';
+    } else if (currentTemplate != null &&
+        currentTemplate.organizationId == orgId) {
+      templateChoice = 'customer:${currentTemplate.id}';
+    } else {
+      final preferredLibrary = libraryTemplates
+          .where((row) => row.canAccess || row.isInstalled)
+          .firstOrNull;
+      if (existing == null && preferredLibrary != null) {
+        templateChoice = 'library:${preferredLibrary.id}';
+      } else if (existing == null && customerTemplates.isNotEmpty) {
+        templateChoice = 'customer:${customerTemplates.first.id}';
+      } else {
+        templateChoice = 'legacy:$checklistType';
+      }
+    }
+
     String? zoneId = existing?.zoneId ?? defaultZoneId;
     final isCampus =
         existing?.isCampus == true || (existing == null && asCampus);
@@ -378,54 +455,76 @@ class _StructureTabState extends ConsumerState<StructureTab> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
-        builder: (context, setLocal) => AlertDialog(
-          title: Text(
-            existing == null
-                ? (isCampus
-                      ? _t('New campus / site', 'موقع جديد (حرم)')
-                      : _t('New checklist unit', 'قائمة فحص جديدة'))
-                : (isCampus
-                      ? _t('Edit campus', 'تعديل موقع')
-                      : _t('Edit checklist unit', 'تعديل قائمة فحص')),
-          ),
-          content: SizedBox(
-            width: 440,
-            child: SingleChildScrollView(
+        builder: (context, setLocal) {
+          InputDecoration decoration(String label) => InputDecoration(
+            labelText: label,
+            border: const OutlineInputBorder(),
+            isDense: true,
+          );
+
+          return AlertDialog(
+            scrollable: true,
+            title: Text(
+              existing == null
+                  ? (isCampus
+                        ? _t('New campus / site', 'موقع جديد (حرم)')
+                        : _t('New checklist unit', 'قائمة فحص جديدة'))
+                  : (isCampus
+                        ? _t('Edit campus', 'تعديل موقع')
+                        : _t('Edit checklist unit', 'تعديل قائمة فحص')),
+            ),
+            content: SizedBox(
+              width: 500,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   TextField(
                     controller: nameEn,
-                    decoration: InputDecoration(
-                      labelText: _t('Name EN', 'الاسم إنجليزي'),
-                    ),
+                    decoration: decoration(_t('Name EN', 'الاسم إنجليزي')),
                   ),
+                  const SizedBox(height: 12),
                   TextField(
                     controller: nameAr,
-                    decoration: InputDecoration(
-                      labelText: _t('Name AR', 'الاسم عربي'),
-                    ),
+                    decoration: decoration(_t('Name AR', 'الاسم عربي')),
                   ),
                   if (!isCampus) ...[
+                    const SizedBox(height: 12),
                     TextField(
                       controller: code,
-                      decoration: InputDecoration(
-                        labelText: _t(
-                          'Building / list code',
-                          'رمز المبنى / القائمة',
-                        ),
+                      decoration: decoration(
+                        _t('Building / list code', 'رمز المبنى / القائمة'),
                       ),
                     ),
+                    const SizedBox(height: 12),
                     TextField(
                       controller: pin,
-                      decoration: const InputDecoration(labelText: 'PIN'),
+                      decoration: decoration('PIN No.').copyWith(
+                        suffixIcon: recentPins.isEmpty
+                            ? null
+                            : PopupMenuButton<String>(
+                                tooltip: _t(
+                                  'Previous PIN numbers',
+                                  'أرقام PIN السابقة',
+                                ),
+                                icon: const Icon(Icons.history),
+                                onSelected: (value) =>
+                                    setLocal(() => pin.text = value),
+                                itemBuilder: (_) => [
+                                  for (final number in recentPins)
+                                    PopupMenuItem(
+                                      value: number,
+                                      child: Text(number),
+                                    ),
+                                ],
+                              ),
+                      ),
                     ),
+                    const SizedBox(height: 12),
                     DropdownButtonFormField<String?>(
-                      // ignore: deprecated_member_use
-                      value: parentSiteId,
+                      initialValue: parentSiteId,
                       isExpanded: true,
-                      decoration: InputDecoration(
-                        labelText: _t('Parent campus', 'الموقع الأب (الحرم)'),
+                      decoration: decoration(
+                        _t('Parent campus', 'الموقع الأب (الحرم)'),
                       ),
                       items: [
                         DropdownMenuItem(
@@ -434,87 +533,313 @@ class _StructureTabState extends ConsumerState<StructureTab> {
                             _t('— Standalone —', '— بدون (مستقلة) —'),
                           ),
                         ),
-                        for (final c in campusChoices)
+                        for (final campus in campusChoices)
                           DropdownMenuItem(
-                            value: c.id,
-                            child: Text(c.nameFor(widget.language)),
-                          ),
-                      ],
-                      onChanged: (v) => setLocal(() => parentSiteId = v),
-                    ),
-                    DropdownButtonFormField<String>(
-                      // ignore: deprecated_member_use
-                      value: templates.any((t) => t.code == checklistType)
-                          ? checklistType
-                          : (templates.isNotEmpty
-                                ? templates.first.code
-                                : checklistType),
-                      isExpanded: true,
-                      decoration: InputDecoration(
-                        labelText: _t(
-                          'Default checklist template',
-                          'قالب قائمة الفحص الافتراضي',
-                        ),
-                      ),
-                      items: [
-                        for (final t in templates)
-                          DropdownMenuItem(
-                            value: t.code,
+                            value: campus.id,
                             child: Text(
-                              '${t.code} — ${ar ? t.nameAr : t.nameEn}',
+                              campus.nameFor(widget.language),
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                       ],
-                      onChanged: (v) {
-                        if (v != null) setLocal(() => checklistType = v);
+                      onChanged: (value) {
+                        final previousAutoLocation = locationForCampus(
+                          parentSiteId,
+                        );
+                        setLocal(() {
+                          parentSiteId = value;
+                          if (existing == null &&
+                              (location.text.trim().isEmpty ||
+                                  location.text == previousAutoLocation)) {
+                            location.text = locationForCampus(value);
+                          }
+                        });
                       },
                     ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: templateChoice,
+                      isExpanded: true,
+                      decoration: decoration(
+                        _t('Checklist template', 'قالب قائمة الفحص'),
+                      ),
+                      items: [
+                        DropdownMenuItem<String>(
+                          value: '__library_header__',
+                          enabled: false,
+                          child: Text(
+                            _t('LIBRARY', 'المكتبة'),
+                            style: const TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                        ),
+                        for (final row in libraryTemplates)
+                          DropdownMenuItem<String>(
+                            value: 'library:${row.id}',
+                            enabled: row.canAccess || row.isInstalled,
+                            child: Text(
+                              '${row.nameFor(widget.language)} · '
+                              '${row.categoryNameFor(widget.language)}'
+                              '${(!row.canAccess && !row.isInstalled) ? ' · Premium' : ''}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        DropdownMenuItem<String>(
+                          value: '__my_header__',
+                          enabled: false,
+                          child: Text(
+                            _t('MY TEMPLATES', 'قوالب العميل'),
+                            style: const TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                        ),
+                        for (final template in customerTemplates)
+                          DropdownMenuItem<String>(
+                            value: 'customer:${template.id}',
+                            child: Text(
+                              template.nameFor(widget.language),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        if (templateChoice.startsWith('legacy:'))
+                          DropdownMenuItem<String>(
+                            value: templateChoice,
+                            child: Text(
+                              _t(
+                                'Current template · $checklistType',
+                                'القالب الحالي · $checklistType',
+                              ),
+                            ),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null && !value.startsWith('__')) {
+                          setLocal(() => templateChoice = value);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: checklistCategory,
+                      isExpanded: true,
+                      decoration: decoration(
+                        _t('Checklist category', 'تصنيف قائمة الفحص'),
+                      ),
+                      items: [
+                        for (final category in ChecklistCategories.ids)
+                          DropdownMenuItem(
+                            value: category,
+                            child: Text(
+                              ChecklistCategories.title(
+                                category,
+                                widget.language,
+                              ),
+                            ),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setLocal(() {
+                            checklistCategory = value;
+                            if (value != 'facilities') {
+                              checklistSubcategory = '';
+                            }
+                          });
+                        }
+                      },
+                    ),
+                    if (checklistCategory == 'facilities' && !isCampus) ...[
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        key: ValueKey('subcategory-$checklistCategory'),
+                        initialValue: checklistSubcategory,
+                        decoration: decoration(
+                          _t('Subfolder', 'الفرع الداخلي'),
+                        ),
+                        items: [
+                          DropdownMenuItem(
+                            value: '',
+                            child: Text(
+                              _t('Directly in category', 'داخل الصنف مباشرة'),
+                            ),
+                          ),
+                          DropdownMenuItem(
+                            value: 'washrooms',
+                            child: Text(
+                              ChecklistSubcategories.title(
+                                'washrooms',
+                                widget.language,
+                              ),
+                            ),
+                          ),
+                        ],
+                        onChanged: (v) =>
+                            setLocal(() => checklistSubcategory = v ?? ''),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: floorChoice,
+                      isExpanded: true,
+                      decoration: decoration(
+                        _t('Floor scope', 'الدور / نطاق الدور'),
+                      ),
+                      items: [
+                        DropdownMenuItem(
+                          value: 'all',
+                          child: Text(_t('All floors', 'كل الأدوار')),
+                        ),
+                        DropdownMenuItem(
+                          value: 'basement',
+                          child: Text(_t('Basement', 'البيسمنت')),
+                        ),
+                        DropdownMenuItem(
+                          value: 'parking',
+                          child: Text(_t('Parking', 'الباركينغ')),
+                        ),
+                        DropdownMenuItem(
+                          value: 'lgf',
+                          child: Text(
+                            _t(
+                              'LGF · Lower Ground Floor',
+                              'LGF · الأرضي السفلي',
+                            ),
+                          ),
+                        ),
+                        DropdownMenuItem(
+                          value: 'gf',
+                          child: Text(_t('GF · Ground Floor', 'GF · الأرضي')),
+                        ),
+                        DropdownMenuItem(
+                          value: 'ff',
+                          child: Text(
+                            _t('FF · First Floor', 'FF · الدور الأول'),
+                          ),
+                        ),
+                        DropdownMenuItem(
+                          value: 'roof',
+                          child: Text(_t('Roof', 'السطح')),
+                        ),
+                        DropdownMenuItem(
+                          value: 'floor_number',
+                          child: Text(
+                            _t('Specific floor number', 'رقم دور محدد'),
+                          ),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setLocal(() => floorChoice = value);
+                        }
+                      },
+                    ),
+                    if (floorChoice == 'floor_number') ...[
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: floorNumber,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          signed: true,
+                        ),
+                        decoration: decoration(_t('Floor number', 'رقم الدور')),
+                      ),
+                    ],
                   ],
+                  const SizedBox(height: 12),
                   TextField(
                     controller: location,
-                    decoration: InputDecoration(
-                      labelText: _t('Location', 'الموقع / العنوان'),
-                    ),
+                    decoration: decoration(_t('Location', 'الموقع / العنوان')),
                   ),
+                  const SizedBox(height: 12),
                   DropdownButtonFormField<String?>(
-                    // ignore: deprecated_member_use
-                    value: zoneId,
+                    initialValue: zoneId,
                     isExpanded: true,
-                    decoration: InputDecoration(
-                      labelText: _t('Zone', 'المنطقة'),
-                    ),
+                    decoration: decoration(_t('Zone', 'المنطقة')),
                     items: [
                       DropdownMenuItem(
                         value: null,
                         child: Text(_t('— None —', '— بدون —')),
                       ),
-                      for (final z in orgZones)
+                      for (final zone in orgZones)
                         DropdownMenuItem(
-                          value: z.id,
-                          child: Text(z.nameFor(widget.language)),
+                          value: zone.id,
+                          child: Text(
+                            zone.nameFor(widget.language),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                     ],
-                    onChanged: (v) => setLocal(() => zoneId = v),
+                    onChanged: (value) => setLocal(() => zoneId = value),
                   ),
                 ],
               ),
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(_t('Cancel', 'إلغاء')),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(_t('Save', 'حفظ')),
-            ),
-          ],
-        ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text(_t('Cancel', 'إلغاء')),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: Text(_t('Save', 'حفظ')),
+              ),
+            ],
+          );
+        },
       ),
     );
     if (ok != true) return;
+
     try {
+      if (!isCampus) {
+        if (templateChoice.startsWith('library:')) {
+          final libraryId = templateChoice.substring('library:'.length);
+          final row = libraryTemplates
+              .where((item) => item.id == libraryId)
+              .firstOrNull;
+          if (row == null || (!row.canAccess && !row.isInstalled)) {
+            throw StateError('Checklist template is not available');
+          }
+          final installedId =
+              row.installedTemplateId ??
+              await ref
+                  .read(checklistLibraryRepositoryProvider)
+                  .installTemplate(
+                    libraryTemplateId: row.id,
+                    organizationId: orgId,
+                  );
+          final installed = await catalog.getTemplateById(installedId);
+          if (installed == null) {
+            throw StateError('Checklist installation failed');
+          }
+          checklistType = installed.code;
+        } else if (templateChoice.startsWith('customer:')) {
+          final templateId = templateChoice.substring('customer:'.length);
+          final template = allTemplates
+              .where((item) => item.id == templateId)
+              .firstOrNull;
+          if (template == null) {
+            throw StateError('Checklist template not found');
+          }
+          checklistType = template.code;
+        }
+
+        if (floorChoice == 'floor_number') {
+          final number = int.tryParse(floorNumber.text.trim());
+          if (number == null) {
+            throw StateError('Enter a valid floor number');
+          }
+          floorScope = 'floor_number:$number';
+        } else {
+          // Keep storage compatible with the existing floor_scope constraint.
+          floorScope = switch (floorChoice) {
+            'lgf' => 'floor_number:-1',
+            'gf' => 'ground',
+            'ff' => 'first',
+            _ => floorChoice,
+          };
+        }
+      }
+
       final repo = ref.read(siteRepositoryProvider);
       final buildingCode = isCampus ? null : code.text.trim();
       if (existing == null) {
@@ -527,6 +852,11 @@ class _StructureTabState extends ConsumerState<StructureTab> {
           buildingCode: buildingCode,
           pin: pin.text.trim(),
           checklistType: checklistType,
+          checklistCategory: checklistCategory,
+          checklistSubcategory: checklistCategory == 'facilities'
+              ? checklistSubcategory
+              : '',
+          floorScope: floorScope,
           location: location.text.trim().isEmpty ? '—' : location.text.trim(),
           siteType: isCampus ? 'headquarters' : 'other',
         );
@@ -548,13 +878,35 @@ class _StructureTabState extends ConsumerState<StructureTab> {
           buildingCode: buildingCode,
           pin: pin.text.trim(),
           checklistType: checklistType,
+          checklistCategory: checklistCategory,
+          checklistSubcategory: checklistCategory == 'facilities'
+              ? checklistSubcategory
+              : '',
+          floorScope: floorScope,
           location: location.text.trim(),
           isActive: existing.isActive,
         );
         await _load();
       }
-    } catch (e) {
-      _showWriteError(e);
+      if (!isCampus && pin.text.trim().isNotEmpty) {
+        final pinValue = pin.text.trim();
+        await preferences.setStringList(
+          pinHistoryKey,
+          [
+            pinValue,
+            ...recentPins.where((value) => value != pinValue),
+          ].take(15).toList(),
+        );
+      }
+    } catch (error) {
+      _showWriteError(error);
+    } finally {
+      nameEn.dispose();
+      nameAr.dispose();
+      code.dispose();
+      pin.dispose();
+      location.dispose();
+      floorNumber.dispose();
     }
   }
 
@@ -717,13 +1069,20 @@ class _StructureTabState extends ConsumerState<StructureTab> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        CaMetaStrip(
-          items: [
-            _t('${orgs.length} organizations', '${orgs.length} جهات'),
-            _t('${zones.length} zones', '${zones.length} مناطق'),
-            _t(
-              '${sites.length} sites / units',
-              '${sites.length} مواقع / وحدات',
+        CaContextBlock(
+          loading: loading,
+          fields: [
+            CaContextField(
+              label: _t('Scope', 'النطاق'),
+              value: _t('All organizations', 'كل الجهات'),
+            ),
+            CaContextField(
+              label: _t('Portfolio', 'المحفظة'),
+              value: _t(
+                '${orgs.length} orgs · ${zones.length} zones · ${sites.length} units',
+                '${orgs.length} جهات · ${zones.length} مناطق · ${sites.length} وحدات',
+              ),
+              flex: 2,
             ),
           ],
         ),
@@ -805,28 +1164,26 @@ class _TreePane extends StatelessWidget {
                   icon: Icons.account_tree_outlined,
                   title: _t('No organizations', 'لا توجد جهات'),
                 )
-              : DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: c.surface,
-                    border: Border(
-                      top: BorderSide(color: c.rule),
-                      bottom: BorderSide(color: c.rule),
-                    ),
+              : ListView.separated(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: EdgeInsetsDirectional.fromSTEB(
+                    CaSpace.gutter,
+                    0,
+                    CaSpace.gutter,
+                    MediaQuery.viewPaddingOf(context).bottom + CaSpace.lg,
                   ),
-                  child: ListView.separated(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: EdgeInsets.only(
-                      bottom: MediaQuery.viewPaddingOf(context).bottom + 16,
-                    ),
-                    itemCount: orgs.length,
-                    separatorBuilder: (_, _) => Divider(
-                      height: 1,
-                      color: c.rule,
-                      indent: CaSpace.gutter,
-                    ),
-                    itemBuilder: (context, i) {
-                      final org = orgs[i];
-                      return _OrgNode(
+                  itemCount: orgs.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 10),
+                  itemBuilder: (context, i) {
+                    final org = orgs[i];
+                    return Material(
+                      color: c.surface,
+                      clipBehavior: Clip.antiAlias,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(CaRadius.panel),
+                        side: BorderSide(color: c.rule),
+                      ),
+                      child: _OrgNode(
                         org: org,
                         zones: zones
                             .where((z) => z.organizationId == org.id)
@@ -837,10 +1194,10 @@ class _TreePane extends StatelessWidget {
                         selection: selection,
                         language: language,
                         onSelect: onSelect,
-                        initiallyExpanded: i == 0,
-                      );
-                    },
-                  ),
+                        initiallyExpanded: false,
+                      ),
+                    );
+                  },
                 ),
         ),
       ],
@@ -848,7 +1205,7 @@ class _TreePane extends StatelessWidget {
   }
 }
 
-class _OrgNode extends StatelessWidget {
+class _OrgNode extends StatefulWidget {
   const _OrgNode({
     required this.org,
     required this.zones,
@@ -868,34 +1225,39 @@ class _OrgNode extends StatelessWidget {
   final bool initiallyExpanded;
 
   @override
+  State<_OrgNode> createState() => _OrgNodeState();
+}
+
+class _OrgNodeState extends State<_OrgNode> {
+  int _branchEpoch = 0;
+
+  @override
   Widget build(BuildContext context) {
     final selected =
-        selection is StructureOrgSelection &&
-        (selection! as StructureOrgSelection).organizationId == org.id;
+        widget.selection is StructureOrgSelection &&
+        (widget.selection! as StructureOrgSelection).organizationId ==
+            widget.org.id;
     final theme = Theme.of(context);
     final c = CheckAdminColors.of(context);
-    final sortedZones = [...zones]
+    final sortedZones = [...widget.zones]
       ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
-    final hasSelectedChild = switch (selection) {
-      StructureZoneSelection(:final zoneId) => zones.any((z) => z.id == zoneId),
-      StructureCampusSelection(:final siteId) ||
-      StructureChecklistSelection(
-        :final siteId,
-      ) => sites.any((s) => s.id == siteId),
-      _ => false,
-    };
 
     return Theme(
       data: theme.copyWith(dividerColor: Colors.transparent),
       child: ExpansionTile(
-        key: PageStorageKey<String>('organization-${org.id}'),
-        initiallyExpanded: initiallyExpanded || selected || hasSelectedChild,
-        minTileHeight: 56,
+        initiallyExpanded: false,
+        maintainState: false,
+        minTileHeight: 68,
         tilePadding: const EdgeInsetsDirectional.fromSTEB(12, 0, 8, 0),
-        childrenPadding: EdgeInsets.zero,
+        childrenPadding: const EdgeInsets.only(bottom: 8),
+        onExpansionChanged: (expanded) {
+          if (expanded) {
+            setState(() => _branchEpoch++);
+          }
+        },
         leading: Container(
-          width: 32,
-          height: 32,
+          width: 40,
+          height: 40,
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: c.surfaceRaised,
@@ -903,14 +1265,14 @@ class _OrgNode extends StatelessWidget {
           ),
           child: Icon(
             Icons.account_balance_outlined,
-            size: 18,
+            size: 20,
             color: selected ? c.primaryStrong : c.inkMuted,
           ),
         ),
         title: InkWell(
-          onTap: () => onSelect(StructureOrgSelection(org.id)),
+          onTap: () => widget.onSelect(StructureOrgSelection(widget.org.id)),
           child: Text(
-            org.nameFor(language),
+            widget.org.nameFor(widget.language),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: theme.textTheme.titleMedium?.copyWith(
@@ -919,40 +1281,32 @@ class _OrgNode extends StatelessWidget {
           ),
         ),
         subtitle: Text(
-          language == 'ar'
-              ? '${zones.length} مناطق · ${sites.length} وحدات'
-              : '${zones.length} zones · ${sites.length} units',
+          widget.language == 'ar'
+              ? '${widget.zones.length} مناطق · ${widget.sites.length} وحدات'
+              : '${widget.zones.length} zones · ${widget.sites.length} units',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: theme.textTheme.bodySmall,
         ),
         children: [
-          Container(
-            margin: const EdgeInsetsDirectional.only(start: 28),
-            decoration: BoxDecoration(
-              border: BorderDirectional(start: BorderSide(color: c.rule)),
+          for (final zone in sortedZones)
+            _ZoneNode(
+              key: ValueKey('zone-${zone.id}-$_branchEpoch'),
+              zone: zone,
+              sites: widget.sites,
+              selection: widget.selection,
+              language: widget.language,
+              onSelect: widget.onSelect,
             ),
-            child: Column(
-              children: [
-                for (final zone in sortedZones)
-                  _ZoneNode(
-                    zone: zone,
-                    sites: sites,
-                    selection: selection,
-                    language: language,
-                    onSelect: onSelect,
-                  ),
-              ],
-            ),
-          ),
         ],
       ),
     );
   }
 }
 
-class _ZoneNode extends StatelessWidget {
+class _ZoneNode extends StatefulWidget {
   const _ZoneNode({
+    super.key,
     required this.zone,
     required this.sites,
     required this.selection,
@@ -967,73 +1321,107 @@ class _ZoneNode extends StatelessWidget {
   final ValueChanged<StructureSelection> onSelect;
 
   @override
+  State<_ZoneNode> createState() => _ZoneNodeState();
+}
+
+class _ZoneNodeState extends State<_ZoneNode> {
+  int _branchEpoch = 0;
+
+  @override
   Widget build(BuildContext context) {
     final selected =
-        selection is StructureZoneSelection &&
-        (selection! as StructureZoneSelection).zoneId == zone.id;
+        widget.selection is StructureZoneSelection &&
+        (widget.selection! as StructureZoneSelection).zoneId == widget.zone.id;
     final theme = Theme.of(context);
     final c = CheckAdminColors.of(context);
-    final inZone = sites.where((s) {
-      if (s.zoneId == zone.id) return true;
-      if (s.parentSiteId == null) return false;
-      final parent = sites.where((p) => p.id == s.parentSiteId).firstOrNull;
-      return parent?.zoneId == zone.id && s.zoneId == null;
+    final inZone = widget.sites.where((site) {
+      if (site.zoneId == widget.zone.id) return true;
+      if (site.parentSiteId == null) return false;
+      final parent = widget.sites
+          .where((candidate) => candidate.id == site.parentSiteId)
+          .firstOrNull;
+      return parent?.zoneId == widget.zone.id && site.zoneId == null;
     }).toList();
-    final campuses = inZone.where((s) => s.isCampus).toList()
+    final campuses = inZone.where((site) => site.isCampus).toList()
       ..sort((a, b) => a.nameEn.compareTo(b.nameEn));
-    final units = inZone.where((s) => s.isChecklistUnit).toList();
+    final units = inZone.where((site) => site.isChecklistUnit).toList();
 
-    return Theme(
-      data: theme.copyWith(dividerColor: Colors.transparent),
-      child: ExpansionTile(
-        initiallyExpanded: selected,
-        minTileHeight: 48,
-        tilePadding: const EdgeInsetsDirectional.fromSTEB(12, 0, 8, 0),
-        childrenPadding: EdgeInsets.zero,
-        leading: Icon(
-          Icons.map_outlined,
-          size: 18,
-          color: selected ? c.primaryStrong : c.inkMuted,
-        ),
-        title: InkWell(
-          onTap: () => onSelect(StructureZoneSelection(zone.id)),
-          child: Text(
-            zone.nameFor(language),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-              color: selected ? c.primaryStrong : c.ink,
+    return Container(
+      margin: const EdgeInsetsDirectional.fromSTEB(12, 6, 12, 0),
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: BorderRadius.circular(CaRadius.control),
+        border: Border.all(color: c.rule),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: theme.copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: false,
+          maintainState: false,
+          minTileHeight: 54,
+          tilePadding: const EdgeInsetsDirectional.fromSTEB(12, 0, 8, 0),
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          onExpansionChanged: (expanded) {
+            if (expanded) {
+              setState(() => _branchEpoch++);
+            }
+          },
+          leading: Icon(
+            Icons.map_outlined,
+            size: 19,
+            color: selected ? c.primaryStrong : c.inkMuted,
+          ),
+          title: InkWell(
+            onTap: () =>
+                widget.onSelect(StructureZoneSelection(widget.zone.id)),
+            child: Text(
+              widget.zone.nameFor(widget.language),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: selected ? c.primaryStrong : c.ink,
+              ),
             ),
           ),
+          subtitle: Text(
+            widget.language == 'ar'
+                ? '${inZone.length} مواقع / وحدات'
+                : '${inZone.length} sites / units',
+            maxLines: 1,
+            style: theme.textTheme.bodySmall,
+          ),
+          children: [
+            for (final campus in campuses)
+              _CampusNode(
+                key: ValueKey('campus-${campus.id}-$_branchEpoch'),
+                campus: campus,
+                checklists:
+                    units
+                        .where((unit) => unit.parentSiteId == campus.id)
+                        .toList()
+                      ..sort(
+                        (a, b) => a.buildingCode.compareTo(b.buildingCode),
+                      ),
+                selection: widget.selection,
+                language: widget.language,
+                onSelect: widget.onSelect,
+              ),
+            for (final category in ChecklistCategories.groupAvailable(
+              units.where((unit) => unit.parentSiteId == null),
+              includeInactive: true,
+            ).entries)
+              _ChecklistCategoryNode(
+                key: ValueKey('uncategorized-${category.key}-$_branchEpoch'),
+                category: category.key,
+                sites: category.value,
+                selection: widget.selection,
+                language: widget.language,
+                onSelect: widget.onSelect,
+              ),
+          ],
         ),
-        subtitle: Text(
-          language == 'ar'
-              ? '${inZone.length} مواقع / وحدات'
-              : '${inZone.length} sites / units',
-          maxLines: 1,
-          style: theme.textTheme.bodySmall,
-        ),
-        children: [
-          for (final campus in campuses)
-            _CampusNode(
-              campus: campus,
-              checklists:
-                  units.where((u) => u.parentSiteId == campus.id).toList()
-                    ..sort((a, b) => a.buildingCode.compareTo(b.buildingCode)),
-              selection: selection,
-              language: language,
-              onSelect: onSelect,
-            ),
-          for (final unit in units.where((u) => u.parentSiteId == null))
-            _ChecklistLeaf(
-              site: unit,
-              selection: selection,
-              language: language,
-              onSelect: onSelect,
-              indent: 12,
-            ),
-        ],
       ),
     );
   }
@@ -1041,6 +1429,7 @@ class _ZoneNode extends StatelessWidget {
 
 class _CampusNode extends StatelessWidget {
   const _CampusNode({
+    super.key,
     required this.campus,
     required this.checklists,
     required this.selection,
@@ -1062,63 +1451,155 @@ class _CampusNode extends StatelessWidget {
     final theme = Theme.of(context);
     final c = CheckAdminColors.of(context);
 
-    return Theme(
-      data: theme.copyWith(dividerColor: Colors.transparent),
-      child: ExpansionTile(
-        initiallyExpanded:
-            selected ||
-            (selection is StructureChecklistSelection &&
-                checklists.any(
-                  (row) =>
-                      row.id ==
-                      (selection! as StructureChecklistSelection).siteId,
-                )),
-        minTileHeight: 48,
-        tilePadding: const EdgeInsetsDirectional.fromSTEB(24, 0, 8, 0),
-        childrenPadding: EdgeInsets.zero,
-        leading: _ThemeMarker(
-          paperTheme: campus.paperTheme,
-          icon: Icons.place_outlined,
-          selected: selected,
-          size: 28,
-        ),
-        title: InkWell(
-          onTap: () => onSelect(StructureCampusSelection(campus.id)),
-          child: Text(
-            campus.nameFor(language),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-              color: selected ? c.primaryStrong : c.ink,
+    return Container(
+      margin: const EdgeInsetsDirectional.fromSTEB(10, 6, 10, 0),
+      decoration: BoxDecoration(
+        color: c.surfaceRaised.withValues(alpha: .48),
+        borderRadius: BorderRadius.circular(CaRadius.control),
+        border: Border.all(color: c.rule),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: theme.copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: false,
+          maintainState: false,
+          minTileHeight: 54,
+          tilePadding: const EdgeInsetsDirectional.fromSTEB(12, 0, 8, 0),
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          leading: _ThemeMarker(
+            paperTheme: campus.paperTheme,
+            icon: Icons.place_outlined,
+            selected: selected,
+            size: 28,
+          ),
+          title: InkWell(
+            onTap: () => onSelect(StructureCampusSelection(campus.id)),
+            child: Text(
+              campus.nameFor(language),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: selected ? c.primaryStrong : c.ink,
+              ),
             ),
           ),
-        ),
-        subtitle: checklists.isEmpty
-            ? null
-            : Text(
-                language == 'ar'
-                    ? '${checklists.length} قوائم'
-                    : '${checklists.length} checklists',
-                style: theme.textTheme.bodySmall,
+          subtitle: checklists.isEmpty
+              ? null
+              : Text(
+                  language == 'ar'
+                      ? '${checklists.length} قوائم'
+                      : '${checklists.length} checklists',
+                  style: theme.textTheme.bodySmall,
+                ),
+          children: [
+            for (final category in ChecklistCategories.groupAvailable(
+              checklists,
+              includeInactive: true,
+            ).entries)
+              _ChecklistCategoryNode(
+                category: category.key,
+                sites: category.value,
+                selection: selection,
+                language: language,
+                onSelect: onSelect,
               ),
-        children: [
-          for (final unit in checklists)
-            _ChecklistLeaf(
-              site: unit,
-              selection: selection,
-              language: language,
-              onSelect: onSelect,
-              indent: 24,
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
 }
 
+/// Editable structure is grouped by the same nonempty categories as CheckView.
+class _ChecklistCategoryNode extends StatelessWidget {
+  const _ChecklistCategoryNode({
+    super.key,
+    required this.category,
+    required this.sites,
+    required this.selection,
+    required this.language,
+    required this.onSelect,
+  });
+
+  final String category;
+  final List<ChecklistSite> sites;
+  final StructureSelection? selection;
+  final String language;
+  final ValueChanged<StructureSelection> onSelect;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsetsDirectional.fromSTEB(12, 5, 12, 0),
+    child: ExpansionTile(
+      key: ValueKey('structure-category-$category'),
+      initiallyExpanded: false,
+      leading: const Icon(Icons.folder_outlined, size: 20),
+      title: Text(ChecklistCategories.title(category, language)),
+      subtitle: Text(
+        language == 'ar'
+            ? '${sites.length} قوائم فحص'
+            : '${sites.length} checklists',
+      ),
+      children: [
+        if (category == 'facilities')
+          for (final branch in ChecklistSubcategories.available(sites).entries)
+            if (branch.key.isNotEmpty)
+              Padding(
+                padding: const EdgeInsetsDirectional.fromSTEB(12, 4, 12, 4),
+                child: ExpansionTile(
+                  initiallyExpanded: false,
+                  leading: const Icon(Icons.folder_copy_outlined, size: 18),
+                  title: Text(
+                    ChecklistSubcategories.title(branch.key, language),
+                  ),
+                  subtitle: Text(
+                    language == 'ar'
+                        ? '${branch.value.length} قوائم'
+                        : '${branch.value.length} checklists',
+                  ),
+                  children: [
+                    for (final site in branch.value)
+                      _ChecklistLeaf(
+                        key: ValueKey('structure-unit-${site.id}'),
+                        site: site,
+                        selection: selection,
+                        language: language,
+                        onSelect: onSelect,
+                        indent: 12,
+                      ),
+                  ],
+                ),
+              )
+            else
+              for (final site in branch.value)
+                _ChecklistLeaf(
+                  key: ValueKey('structure-unit-${site.id}'),
+                  site: site,
+                  selection: selection,
+                  language: language,
+                  onSelect: onSelect,
+                  indent: 12,
+                )
+        else
+          for (final site in sites)
+            _ChecklistLeaf(
+              key: ValueKey('structure-unit-${site.id}'),
+              site: site,
+              selection: selection,
+              language: language,
+              onSelect: onSelect,
+              indent: 12,
+            ),
+      ],
+    ),
+  );
+}
+
 class _ChecklistLeaf extends StatelessWidget {
   const _ChecklistLeaf({
+    super.key,
     required this.site,
     required this.selection,
     required this.language,
@@ -1138,35 +1619,42 @@ class _ChecklistLeaf extends StatelessWidget {
         selection is StructureChecklistSelection &&
         (selection! as StructureChecklistSelection).siteId == site.id;
     final c = CheckAdminColors.of(context);
-    return ListTile(
-      minTileHeight: 44,
-      dense: true,
-      selected: selected,
-      selectedTileColor: c.primarySoft.withValues(alpha: .55),
-      contentPadding: EdgeInsetsDirectional.only(start: indent, end: 8),
-      leading: CaCodeBadge(
-        code: site.buildingCode,
-        width: 64,
-        tone: selected ? CaTone.accent : CaTone.neutral,
+    return Container(
+      margin: const EdgeInsetsDirectional.fromSTEB(10, 6, 10, 0),
+      decoration: BoxDecoration(
+        color: selected ? c.primarySoft.withValues(alpha: .55) : c.surface,
+        borderRadius: BorderRadius.circular(CaRadius.control),
+        border: Border.all(color: c.rule),
       ),
-      title: Text(
-        site.nameFor(language),
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          color: selected ? c.primaryStrong : c.ink,
-          fontWeight: FontWeight.w500,
-          fontSize: 13,
+      clipBehavior: Clip.antiAlias,
+      child: ListTile(
+        minTileHeight: 52,
+        dense: true,
+        contentPadding: EdgeInsetsDirectional.only(start: indent, end: 8),
+        leading: CaCodeBadge(
+          code: site.buildingCode,
+          width: 64,
+          tone: selected ? CaTone.accent : CaTone.neutral,
         ),
+        title: Text(
+          site.nameFor(language),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: selected ? c.primaryStrong : c.ink,
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
+          ),
+        ),
+        subtitle: site.checklistType.isEmpty
+            ? null
+            : Text(
+                site.checklistType,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+        onTap: () => onSelect(StructureChecklistSelection(site.id)),
       ),
-      subtitle: site.checklistType.isEmpty
-          ? null
-          : Text(
-              site.checklistType,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-      onTap: () => onSelect(StructureChecklistSelection(site.id)),
     );
   }
 }

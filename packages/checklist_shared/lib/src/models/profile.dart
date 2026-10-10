@@ -11,6 +11,8 @@ class Profile {
     required this.approvalStatus,
     this.isPlatformOwner = false,
     this.homeOrganizationId,
+    this.selfServiceCompanySignup = false,
+    this.canReopenApprovedInspections = false,
   });
 
   final String id;
@@ -25,6 +27,8 @@ class Profile {
 
   /// Bound organization for org-scoped [UserRole.superAdmin] (one org).
   final String? homeOrganizationId;
+  final bool selfServiceCompanySignup;
+  final bool canReopenApprovedInspections;
 
   bool get isApprovedActive =>
       isActive && approvalStatus == ApprovalStatus.approved;
@@ -34,8 +38,12 @@ class Profile {
 
   bool get canDeleteInspections => isPlatformOwner || role.canDeleteInspections;
 
-  /// site_admin / super_admin can edit submitted inspections before approve.
+  /// Elevated roles can decide submitted inspections in CheckView.
+  /// Submitted content itself is read-only; correction requires Return.
   bool get canReviewInspections => isPlatformOwner || role.isElevatedAdmin;
+
+  bool get canReopenApproved =>
+      isPlatformOwner || (isApprovedActive && canReopenApprovedInspections);
 
   /// Add / edit / archive organizations — owner only.
   bool get canManageOrganizations => isPlatformOwner;
@@ -80,6 +88,10 @@ class Profile {
       approvalStatus: ApprovalStatus.fromDb(json['approval_status'] as String?),
       isPlatformOwner: json['is_platform_owner'] as bool? ?? false,
       homeOrganizationId: json['home_organization_id'] as String?,
+      selfServiceCompanySignup:
+          json['self_service_company_signup'] as bool? ?? false,
+      canReopenApprovedInspections:
+          json['can_reopen_approved_inspections'] as bool? ?? false,
     );
   }
 }
@@ -95,6 +107,9 @@ class ChecklistSite {
     this.parentSiteId,
     this.pin = '',
     this.checklistType = 'DEFAULT',
+    this.checklistCategory = 'general',
+    this.checklistSubcategory = '',
+    this.floorScope = 'all',
     this.location = 'MOEHE Permanent Headquarters',
     this.isActive = true,
     this.reportLogoPath,
@@ -116,6 +131,9 @@ class ChecklistSite {
   final String buildingCode;
   final String pin;
   final String checklistType;
+  final String checklistCategory;
+  final String checklistSubcategory;
+  final String floorScope;
   final String location;
   final bool isActive;
 
@@ -159,6 +177,16 @@ class ChecklistSite {
 
   String get bldgNo => displayBldgCode;
 
+  String get reportFloor => switch (floorScope) {
+    'floor_number:-1' => 'LGF',
+    'ground' => 'GF',
+    'first' => 'FF',
+    'basement' => 'B',
+    'parking' => 'P',
+    'roof' => 'ROOF',
+    _ => 'ALL',
+  };
+
   ChecklistSite copyWith({
     String? zoneId,
     String? parentSiteId,
@@ -167,6 +195,9 @@ class ChecklistSite {
     String? buildingCode,
     String? pin,
     String? checklistType,
+    String? checklistCategory,
+    String? checklistSubcategory,
+    String? floorScope,
     String? location,
     bool? isActive,
     String? reportLogoPath,
@@ -189,6 +220,9 @@ class ChecklistSite {
       buildingCode: buildingCode ?? this.buildingCode,
       pin: pin ?? this.pin,
       checklistType: checklistType ?? this.checklistType,
+      checklistCategory: checklistCategory ?? this.checklistCategory,
+      checklistSubcategory: checklistSubcategory ?? this.checklistSubcategory,
+      floorScope: floorScope ?? this.floorScope,
       location: location ?? this.location,
       isActive: isActive ?? this.isActive,
       reportLogoPath: clearLogo
@@ -217,6 +251,9 @@ class ChecklistSite {
       buildingCode: (json['building_code'] ?? '') as String,
       pin: (json['pin'] ?? '') as String,
       checklistType: (json['checklist_type'] ?? 'DEFAULT') as String,
+      checklistCategory: (json['checklist_category'] ?? 'general') as String,
+      checklistSubcategory: (json['checklist_subcategory'] ?? '') as String,
+      floorScope: (json['floor_scope'] ?? 'all') as String,
       location: (json['location'] ?? 'MOEHE Permanent Headquarters') as String,
       isActive: json['is_active'] as bool? ?? true,
       reportLogoPath: json['report_logo_path'] as String?,
@@ -268,10 +305,20 @@ class UserSiteAccess {
   final DateTime? validUntil;
   final ChecklistSite? site;
 
-  bool get isCurrentlyValid {
-    final now = DateTime.now();
-    return (validFrom == null || !validFrom!.isAfter(now)) &&
-        (validUntil == null || validUntil!.isAfter(now));
+  bool isValidAt(DateTime instant) {
+    return (validFrom == null || !validFrom!.isAfter(instant)) &&
+        (validUntil == null || validUntil!.isAfter(instant));
+  }
+
+  bool get isCurrentlyValid => isValidAt(DateTime.now());
+
+  bool allows(SiteAccessRequirement requirement, {DateTime? at}) {
+    if (!isValidAt(at ?? DateTime.now())) return false;
+    return switch (requirement) {
+      SiteAccessRequirement.none => true,
+      SiteAccessRequirement.read => canRead,
+      SiteAccessRequirement.write => canWrite,
+    };
   }
 
   factory UserSiteAccess.fromJson(Map<String, dynamic> json) {
