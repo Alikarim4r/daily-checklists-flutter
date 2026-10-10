@@ -333,6 +333,11 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
         }
       }
       await _enqueueOffline(current, action: 'save');
+    } catch (error) {
+      // Timer and app-lifecycle autosaves must never raise unhandled futures.
+      if (mounted) {
+        setState(() => message = checkInUserMessage(error, language));
+      }
     } finally {
       _autoSaving = false;
     }
@@ -472,6 +477,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
     });
     try {
       if (!await _isOnline()) {
+        if (!mounted) return;
         final local = _restoreQueuedLocalDraft() ?? _newOfflineDraft();
         setState(() {
           inspection = local;
@@ -484,6 +490,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
         });
         return;
       }
+      if (!mounted) return;
       final repo = ref.read(inspectionRepositoryProvider);
       var existing = await repo.getForSiteDate(
         siteId: widget.site.id,
@@ -496,6 +503,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
         inspectionTime: DateFormat('h:mm a').format(qatarBusinessNow()),
         language: language,
       );
+      if (!mounted) return;
       final orgId = widget.site.organizationId.isNotEmpty
           ? widget.site.organizationId
           : existing.organizationId;
@@ -503,6 +511,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
       if (orgId.isNotEmpty) {
         pol = await ref.read(policyRepositoryProvider).getOrCreate(orgId);
       }
+      if (!mounted) return;
       setState(() {
         inspection = existing;
         policy = pol;
@@ -514,7 +523,7 @@ class _EntrySiteScreenState extends ConsumerState<EntrySiteScreen>
       }
       await _refreshSignaturePreview();
     } catch (e) {
-      setState(() => message = checkInUserMessage(e, language));
+      if (mounted) setState(() => message = checkInUserMessage(e, language));
     } finally {
       if (mounted) setState(() => loading = false);
     }

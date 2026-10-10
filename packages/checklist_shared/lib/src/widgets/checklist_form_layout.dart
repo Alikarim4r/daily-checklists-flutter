@@ -897,10 +897,7 @@ class ChecklistFormLayout extends ConsumerWidget {
           height: thumbH,
           tooltip: issueTip,
           preferOuterTooltip: true,
-          onClear:
-              !readOnly &&
-                  onClearIssuePhoto != null &&
-                  pair.issuePath!.startsWith('offline://')
+          onClear: !readOnly && onClearIssuePhoto != null
               ? () async {
                   await onClearIssuePhoto!(item, pair.issuePath!, pair.id);
                 }
@@ -926,10 +923,7 @@ class ChecklistFormLayout extends ConsumerWidget {
           width: thumbW,
           height: thumbH,
           tooltip: photoPairLabel(unitIndex, arabic: _ar),
-          onClear:
-              !readOnly &&
-                  onClearFixPhoto != null &&
-                  pair.fixPath!.startsWith('offline://')
+          onClear: !readOnly && onClearFixPhoto != null
               ? () async {
                   await onClearFixPhoto!(item, pair.fixPath!, pair.id);
                 }

@@ -1631,7 +1631,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     );
   }
 
-  Widget _detailToolbar(Inspection insp) {
+  Widget _detailToolbar(Inspection insp, {bool inAppBar = false}) {
     final canEdit = _canEditSelected;
     final canApprove =
         insp.awaitingReview && _isReviewer && _canManageSelected();
@@ -1640,12 +1640,14 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         !insp.isTerminal && failedInspectionItems(insp).isNotEmpty;
     final isOwner = !insp.isTerminal && widget.profile.isPlatformOwner;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        CvSpace.gutter,
-        CvSpace.md,
-        CvSpace.gutter,
-        0,
-      ),
+      padding: inAppBar
+          ? EdgeInsets.zero
+          : const EdgeInsets.fromLTRB(
+              CvSpace.gutter,
+              CvSpace.md,
+              CvSpace.gutter,
+              0,
+            ),
       child: Wrap(
         spacing: CvSpace.sm,
         runSpacing: CvSpace.sm,
@@ -1735,11 +1737,9 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(top: CvSpace.lg),
-          child: inspectionTitleBlock(inspection: insp, language: language),
-        ),
-        _detailToolbar(insp),
+        // Remove the redundant selected-site/date/inspector/status strip.
+        // Keep the original A4 paper and its own header unchanged.
+        if (!_toolbarInAppBar) _detailToolbar(insp),
         if (insp.workflowNote?.trim().isNotEmpty == true)
           InspectionWorkflowNote(inspection: insp, language: language),
         Expanded(child: _formPane()),
@@ -1829,6 +1829,9 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     );
   }
 
+  bool get _toolbarInAppBar =>
+      _wide && MediaQuery.sizeOf(context).width >= 1260;
+
   @override
   Widget build(BuildContext context) {
     final wide = _wide;
@@ -1855,6 +1858,8 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
             overflow: TextOverflow.ellipsis,
           ),
           actions: [
+            if (_toolbarInAppBar && selected != null)
+              _detailToolbar(selected!, inAppBar: true),
             if (ref.watch(notificationsEnabledProvider))
               CvNoticeBell(
                 count: notices.length,

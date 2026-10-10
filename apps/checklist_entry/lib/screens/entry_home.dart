@@ -117,6 +117,7 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
       final groups = results[0] as List<CampusChecklistGroup>;
       final orgs = results[1] as List<Organization>;
       final zones = results[2] as List<Zone>;
+      if (!mounted) return;
       final sections = groupCampusGroupsByOrgThenZone(
         organizations: orgs,
         zones: zones.where((z) => z.isActive).toList(),
@@ -128,6 +129,7 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
         payload: {'sections': _encodeOrgSections(sections)},
       );
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         message = orgSections.isEmpty
             ? checkInUserMessage(e, widget.language)
