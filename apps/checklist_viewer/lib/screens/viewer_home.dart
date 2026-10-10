@@ -55,6 +55,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
   ZoneBrowseSection? browseZone;
   CampusChecklistGroup? browseCampus;
   String? browseCategory;
+  String? browseSubcategory;
   List<OrgBrowseSection> orgSections = [];
   DateTime date = qatarBusinessNow();
   Inspection? selected;
@@ -93,12 +94,16 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       browseZone != null ||
       browseCampus != null ||
       browseCategory != null ||
+      browseSubcategory != null ||
       siteFilter != null;
 
   String get _appBarTitle {
     if (siteFilter != null) {
       final site = sites.where((s) => s.id == siteFilter).firstOrNull;
       if (site != null) return site.buildingCode;
+    }
+    if (browseSubcategory != null) {
+      return ChecklistSubcategories.title(browseSubcategory!, language);
     }
     if (browseCategory != null) {
       return ChecklistCategories.title(browseCategory!, language);
@@ -122,6 +127,8 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       if (browseCampus != null) browseCampus!.titleFor(language),
       if (browseCategory != null)
         ChecklistCategories.title(browseCategory!, language),
+      if (browseSubcategory != null)
+        ChecklistSubcategories.title(browseSubcategory!, language),
       if (siteFilter != null)
         sites.where((s) => s.id == siteFilter).firstOrNull?.buildingCode ?? '',
     ].where((part) => part.trim().isNotEmpty).toList();
@@ -138,9 +145,17 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       _load();
       return;
     }
+    if (browseSubcategory != null) {
+      setState(() {
+        browseSubcategory = null;
+        selected = null;
+      });
+      return;
+    }
     if (browseCategory != null) {
       setState(() {
         browseCategory = null;
+        browseSubcategory = null;
         selected = null;
       });
       return;
@@ -173,6 +188,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       browseZone = null;
       browseCampus = null;
       browseCategory = null;
+      browseSubcategory = null;
       siteFilter = null;
       selected = null;
     });
@@ -183,6 +199,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       browseZone = zone;
       browseCampus = null;
       browseCategory = null;
+      browseSubcategory = null;
       siteFilter = null;
       selected = null;
     });
@@ -192,6 +209,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     setState(() {
       browseCampus = group;
       browseCategory = null;
+      browseSubcategory = null;
       siteFilter = null;
       selected = null;
     });
@@ -201,6 +219,14 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
   void _openCategory(String category) {
     setState(() {
       browseCategory = category;
+      browseSubcategory = null;
+      selected = null;
+    });
+  }
+
+  void _openSubcategory(String subcategory) {
+    setState(() {
+      browseSubcategory = subcategory;
       selected = null;
     });
   }
@@ -224,6 +250,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         insp ??= await repo.createDraft(
           site: site,
           date: date,
+          floorLabel: site.reportFloor,
           inspectorName: '',
           inspectionTime: DateFormat('h:mm a').format(qatarBusinessNow()),
           language: language,
@@ -515,6 +542,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
                     browseCampus!.checklists,
                   ).containsKey(browseCategory))) {
             browseCategory = null;
+            browseSubcategory = null;
           }
         }
         myAccess = access;
@@ -1629,6 +1657,46 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     final units =
         ChecklistCategories.groupAvailable(group.checklists)[category] ??
         const <ChecklistSite>[];
+    // Facilities contains the requested Toilet Checklists subfolder.
+    // Cleaning lists remain directly in their Cleaning category.
+    if (category == 'facilities') {
+      final grouped = ChecklistSubcategories.available(units);
+      if (browseSubcategory == null) {
+        return [
+          CvSectionHeader(
+            title: ChecklistCategories.title(category, language),
+            count: grouped.length,
+            padding: _firstHeaderPadding,
+          ),
+          CvLedger(
+            children: [
+              for (final group in grouped.entries)
+                if (group.key.isNotEmpty)
+                  CvLedgerRow(
+                    title: ChecklistSubcategories.title(group.key, language),
+                    subtitle: ar
+                        ? '${group.value.length} قوائم'
+                        : '${group.value.length} checklists',
+                    onTap: () => _openSubcategory(group.key),
+                  )
+                else
+                  for (final site in group.value) _checklistRow(site),
+            ],
+          ),
+        ];
+      }
+      final childUnits = grouped[browseSubcategory] ?? const <ChecklistSite>[];
+      return [
+        CvSectionHeader(
+          title: ChecklistSubcategories.title(browseSubcategory!, language),
+          count: childUnits.length,
+          padding: _firstHeaderPadding,
+        ),
+        CvLedger(
+          children: [for (final site in childUnits) _checklistRow(site)],
+        ),
+      ];
+    }
     return [
       CvSectionHeader(
         title: ChecklistCategories.title(category, language),

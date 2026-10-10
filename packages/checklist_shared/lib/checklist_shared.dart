@@ -76,3 +76,4 @@ export 'src/widgets/checklist_signature_pad.dart';
 export 'src/widgets/language_toggle.dart';
 export 'src/photos/storage_image_optimizer.dart';
 export 'src/utils/checklist_categories.dart';
+export 'src/utils/checklist_subcategories.dart';

@@ -12,7 +12,7 @@ class SiteRepository {
 
   static const _siteSelect =
       'id, organization_id, zone_id, parent_site_id, name_en, name_ar, '
-      'building_code, pin, checklist_type, checklist_category, location, is_active, report_logo_path, '
+      'building_code, pin, checklist_type, checklist_category, checklist_subcategory, floor_scope, location, is_active, report_logo_path, '
       'form_theme, form_theme_accent';
 
   Future<List<ChecklistSite>> _withEffectiveThemes(

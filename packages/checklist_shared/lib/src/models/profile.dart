@@ -96,6 +96,8 @@ class ChecklistSite {
     this.pin = '',
     this.checklistType = 'DEFAULT',
     this.checklistCategory = 'general',
+    this.checklistSubcategory = '',
+    this.floorScope = 'all',
     this.location = 'MOEHE Permanent Headquarters',
     this.isActive = true,
     this.reportLogoPath,
@@ -118,6 +120,8 @@ class ChecklistSite {
   final String pin;
   final String checklistType;
   final String checklistCategory;
+  final String checklistSubcategory;
+  final String floorScope;
   final String location;
   final bool isActive;
 
@@ -161,6 +165,16 @@ class ChecklistSite {
 
   String get bldgNo => displayBldgCode;
 
+  String get reportFloor => switch (floorScope) {
+    'floor_number:-1' => 'LGF',
+    'ground' => 'GF',
+    'first' => 'FF',
+    'basement' => 'B',
+    'parking' => 'P',
+    'roof' => 'ROOF',
+    _ => 'ALL',
+  };
+
   ChecklistSite copyWith({
     String? zoneId,
     String? parentSiteId,
@@ -170,6 +184,8 @@ class ChecklistSite {
     String? pin,
     String? checklistType,
     String? checklistCategory,
+    String? checklistSubcategory,
+    String? floorScope,
     String? location,
     bool? isActive,
     String? reportLogoPath,
@@ -193,6 +209,8 @@ class ChecklistSite {
       pin: pin ?? this.pin,
       checklistType: checklistType ?? this.checklistType,
       checklistCategory: checklistCategory ?? this.checklistCategory,
+      checklistSubcategory: checklistSubcategory ?? this.checklistSubcategory,
+      floorScope: floorScope ?? this.floorScope,
       location: location ?? this.location,
       isActive: isActive ?? this.isActive,
       reportLogoPath: clearLogo
@@ -222,6 +240,8 @@ class ChecklistSite {
       pin: (json['pin'] ?? '') as String,
       checklistType: (json['checklist_type'] ?? 'DEFAULT') as String,
       checklistCategory: (json['checklist_category'] ?? 'general') as String,
+      checklistSubcategory: (json['checklist_subcategory'] ?? '') as String,
+      floorScope: (json['floor_scope'] ?? 'all') as String,
       location: (json['location'] ?? 'MOEHE Permanent Headquarters') as String,
       isActive: json['is_active'] as bool? ?? true,
       reportLogoPath: json['report_logo_path'] as String?,

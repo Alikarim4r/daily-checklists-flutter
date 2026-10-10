@@ -348,39 +348,150 @@ class EntryCategoryScreen extends ConsumerWidget {
               title: ar ? 'قوائم الفحص' : 'Checklists',
               count: units.length,
             ),
-            CiQueuePanel(
-              children: [
-                for (final site in units)
-                  CiQueueRow(
-                    title: site.nameFor(language),
-                    subtitle: site.location,
-                    icon: Icons.fact_check_outlined,
-                    meta: [
-                      CiMeta(site.buildingCode, icon: Icons.tag_rounded),
-                      CiMeta(
-                        site.checklistType,
-                        icon: Icons.description_outlined,
-                      ),
-                    ],
-                    trailing: Container(
-                      width: 12,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: site.paperTheme.accent,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                    ),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => EntrySiteScreen(
-                          profile: profile,
+            if (category == 'facilities')
+              CiQueuePanel(
+                children: [
+                  for (final subgroup in ChecklistSubcategories.available(
+                    units,
+                  ).entries)
+                    if (subgroup.key.isNotEmpty)
+                      CiQueueRow(
+                        title: ChecklistSubcategories.title(
+                          subgroup.key,
+                          language,
+                        ),
+                        subtitle: ar
+                            ? '${subgroup.value.length} قوائم'
+                            : '${subgroup.value.length} checklists',
+                        icon: Icons.folder_outlined,
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => EntrySubcategoryScreen(
+                              profile: profile,
+                              group: group,
+                              subcategory: subgroup.key,
+                              language: language,
+                              onLanguageChanged: onLanguageChanged,
+                            ),
+                          ),
+                        ),
+                      )
+                    else
+                      for (final site in subgroup.value)
+                        _DirectChecklistRow(
                           site: site,
-                          parentCampus: group.campus,
+                          profile: profile,
+                          group: group,
                           language: language,
                           onLanguageChanged: onLanguageChanged,
                         ),
+                ],
+              )
+            else
+              CiQueuePanel(
+                children: [
+                  for (final site in units)
+                    CiQueueRow(
+                      title: site.nameFor(language),
+                      subtitle: site.location,
+                      icon: Icons.fact_check_outlined,
+                      meta: [
+                        CiMeta(site.buildingCode, icon: Icons.tag_rounded),
+                        CiMeta(
+                          site.checklistType,
+                          icon: Icons.description_outlined,
+                        ),
+                      ],
+                      trailing: Container(
+                        width: 12,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: site.paperTheme.accent,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                      ),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => EntrySiteScreen(
+                            profile: profile,
+                            site: site,
+                            parentCampus: group.campus,
+                            language: language,
+                            onLanguageChanged: onLanguageChanged,
+                          ),
+                        ),
                       ),
                     ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A facilities subfolder; cleaning is intentionally not nested.
+class EntrySubcategoryScreen extends ConsumerWidget {
+  const EntrySubcategoryScreen({
+    super.key,
+    required this.profile,
+    required this.group,
+    required this.subcategory,
+    required this.language,
+    required this.onLanguageChanged,
+  });
+  final Profile profile;
+  final CampusChecklistGroup group;
+  final String subcategory;
+  final String language;
+  final ValueChanged<String> onLanguageChanged;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ar = language == 'ar';
+    final units =
+        ChecklistSubcategories.available(
+          ChecklistCategories.groupAvailable(group.checklists)['facilities'] ??
+              const <ChecklistSite>[],
+        )[subcategory] ??
+        const <ChecklistSite>[];
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(ChecklistSubcategories.title(subcategory, language)),
+      ),
+      body: CiPageWidth(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          children: [
+            CiBreadcrumbs(
+              items: [
+                CiCrumb(
+                  group.titleFor(language),
+                  onTap: () => Navigator.pop(context),
+                ),
+                CiCrumb(ChecklistSubcategories.title(subcategory, language)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            CiWorkHeader(
+              title: ChecklistSubcategories.title(subcategory, language),
+              subtitle: ar ? 'اختر الحمام' : 'Select washroom',
+              meta: [CiMeta('${units.length}', icon: Icons.checklist_rounded)],
+            ),
+            CiSectionLabel(
+              title: ar ? 'قوائم الحمامات' : 'Washroom checklists',
+              count: units.length,
+            ),
+            CiQueuePanel(
+              children: [
+                for (final site in units)
+                  _DirectChecklistRow(
+                    site: site,
+                    profile: profile,
+                    group: group,
+                    language: language,
+                    onLanguageChanged: onLanguageChanged,
                   ),
               ],
             ),
@@ -389,4 +500,42 @@ class EntryCategoryScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Single checklist entry point shared by facilities child folders.
+class _DirectChecklistRow extends StatelessWidget {
+  const _DirectChecklistRow({
+    required this.site,
+    required this.profile,
+    required this.group,
+    required this.language,
+    required this.onLanguageChanged,
+  });
+  final ChecklistSite site;
+  final Profile profile;
+  final CampusChecklistGroup group;
+  final String language;
+  final ValueChanged<String> onLanguageChanged;
+
+  @override
+  Widget build(BuildContext context) => CiQueueRow(
+    title: site.nameFor(language),
+    subtitle: site.location,
+    icon: Icons.fact_check_outlined,
+    meta: [
+      CiMeta(site.buildingCode, icon: Icons.tag_rounded),
+      CiMeta(site.checklistType, icon: Icons.description_outlined),
+    ],
+    onTap: () => Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => EntrySiteScreen(
+          profile: profile,
+          site: site,
+          parentCampus: group.campus,
+          language: language,
+          onLanguageChanged: onLanguageChanged,
+        ),
+      ),
+    ),
+  );
 }
