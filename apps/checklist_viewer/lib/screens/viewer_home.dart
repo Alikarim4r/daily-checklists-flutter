@@ -1761,6 +1761,12 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         onInspectorChanged: (v) => setState(() => selected!.inspectorName = v),
         onTimeChanged: (v) => setState(() => selected!.inspectionTime = v),
         onFloorChanged: (v) => setState(() => selected!.floorLabel = v),
+        onLocationChanged: (v) => setState(() => selected!.locationLabel = v),
+        onPinChanged: (v) => setState(() {
+          selected!.pin = v;
+          selected!.pinOverride = v;
+        }),
+        onBuildingNoChanged: (v) => setState(() => selected!.buildingCode = v),
         onResponseChanged: (item, value) {
           final err = item.trySetResponse(value, language: language);
           if (err != null && mounted) {

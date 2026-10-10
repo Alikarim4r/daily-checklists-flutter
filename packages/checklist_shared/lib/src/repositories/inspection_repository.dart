@@ -589,6 +589,10 @@ class InspectionRepository {
           'inspector_name': inspection.inspectorName,
           'inspection_time': inspection.inspectionTime,
           'floor_label': inspection.floorLabel,
+          'location_label': inspection.locationLabel,
+          'building_code': inspection.buildingCode,
+          if (inspection.pinOverride != null)
+            'pin_override': inspection.pinOverride,
           'signature_path': inspection.signaturePath,
         },
         'p_items': [for (final item in inspection.items) item.toRpcJson()],
@@ -835,7 +839,8 @@ class InspectionRepository {
     String? evidenceItemId,
     String? evidenceKind,
   }) async {
-    final isCompressiblePhoto = contentType == 'image/jpeg' || contentType == 'image/jpg';
+    final isCompressiblePhoto =
+        contentType == 'image/jpeg' || contentType == 'image/jpg';
     final uploadBytes = isCompressiblePhoto
         ? StorageImageOptimizer.optimize(bytes)
         : bytes;

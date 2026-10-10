@@ -776,6 +776,14 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
                     setState(() => inspection.inspectionTime = v),
                 onFloorChanged: (v) =>
                     setState(() => inspection.floorLabel = v),
+                onLocationChanged: (v) =>
+                    setState(() => inspection.locationLabel = v),
+                onPinChanged: (v) => setState(() {
+                  inspection.pin = v;
+                  inspection.pinOverride = v;
+                }),
+                onBuildingNoChanged: (v) =>
+                    setState(() => inspection.buildingCode = v),
                 onResponseChanged: (item, value) {
                   final err = item.trySetResponse(
                     value,

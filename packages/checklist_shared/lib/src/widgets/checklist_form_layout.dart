@@ -29,6 +29,9 @@ class ChecklistFormLayout extends ConsumerWidget {
     this.onInspectorChanged,
     this.onTimeChanged,
     this.onFloorChanged,
+    this.onLocationChanged,
+    this.onPinChanged,
+    this.onBuildingNoChanged,
     this.onPickIssuePhoto,
     this.onPickFixPhoto,
     this.onClearIssuePhoto,
@@ -55,6 +58,9 @@ class ChecklistFormLayout extends ConsumerWidget {
   final ValueChanged<String>? onInspectorChanged;
   final ValueChanged<String>? onTimeChanged;
   final ValueChanged<String>? onFloorChanged;
+  final ValueChanged<String>? onLocationChanged;
+  final ValueChanged<String>? onPinChanged;
+  final ValueChanged<String>? onBuildingNoChanged;
   final Future<void> Function(InspectionItem item, [String? pairId])?
   onPickIssuePhoto;
   final Future<void> Function(InspectionItem item, [String? pairId])?
@@ -252,7 +258,12 @@ class ChecklistFormLayout extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       _metaLabel(_ar ? 'الموقع:' : 'Location:'),
-                      Expanded(child: _metaValue(inspection.locationLabel)),
+                      Expanded(
+                        child: _metaValue(
+                          inspection.locationLabel,
+                          onChanged: onLocationChanged,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -295,6 +306,7 @@ class ChecklistFormLayout extends ConsumerWidget {
                             Expanded(
                               child: _metaValue(
                                 pin,
+                                onChanged: onPinChanged,
                                 maxLines: 1,
                                 fitToWidth: true,
                               ),
@@ -312,6 +324,7 @@ class ChecklistFormLayout extends ConsumerWidget {
                               flex: 3,
                               child: _metaValue(
                                 inspection.bldgNo,
+                                onChanged: onBuildingNoChanged,
                                 align: TextAlign.center,
                                 maxLines: 1,
                                 fitToWidth: true,

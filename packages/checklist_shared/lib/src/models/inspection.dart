@@ -439,6 +439,7 @@ class Inspection {
     this.siteNameEn = '',
     this.siteNameAr = '',
     this.pin = '',
+    this.pinOverride,
     this.organizationId = '',
     this.formTheme = 'classic_gold',
     this.formThemeAccent,
@@ -452,7 +453,7 @@ class Inspection {
 
   final String id;
   final String siteId;
-  final String buildingCode;
+  String buildingCode;
   final DateTime inspectionDate;
   String inspectionTime;
   String floorLabel;
@@ -481,7 +482,8 @@ class Inspection {
   final List<InspectionItem> items;
   final String siteNameEn;
   final String siteNameAr;
-  final String pin;
+  String pin;
+  String? pinOverride;
   final String organizationId;
   final String formTheme;
   final String? formThemeAccent;
@@ -567,7 +569,8 @@ class Inspection {
       items: items,
       siteNameEn: (site?['name_en'] ?? '') as String,
       siteNameAr: (site?['name_ar'] ?? '') as String,
-      pin: (site?['pin'] ?? '') as String,
+      pin: (json['pin_override'] ?? site?['pin'] ?? '') as String,
+      pinOverride: json['pin_override'] as String?,
       organizationId:
           (site?['organization_id'] ?? json['organization_id'] ?? '') as String,
       formTheme: (site?['form_theme'] as String?) ?? 'classic_gold',
