@@ -14,6 +14,7 @@ import '../design/checkview_errors.dart';
 import '../design/checkview_widgets.dart';
 import '../models/stacked_checklist_filtering.dart';
 import '../models/viewer_filter_distribution.dart';
+import '../widgets/responsive_filter_grid.dart';
 import 'checkview_notices.dart';
 import 'corrective_actions_screen.dart';
 import 'inspection_dialogs.dart';
@@ -2054,94 +2055,50 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
   Widget _fluidFilterStrip() => LayoutBuilder(
     builder: (context, constraints) {
       final facets = _visibleFacets;
-      // Completion status shares exactly the same row, height and width as
-      // every other filter, regardless of the user's organization/permissions.
-      final count = facets.length + 1;
-      const margin = 8.0;
-      const gap = 8.0;
-      const minWidth = 142.0;
-      final width = ViewerFilterDistribution.fieldWidth(
-        constraints.maxWidth,
-        count,
-        minimum: minWidth,
-        margin: margin,
-        gap: gap,
-      );
-      Widget cell(Widget child) => SizedBox(width: width, child: child);
-      return Material(
-        color: Theme.of(context).colorScheme.surfaceContainerLowest,
-        child: SizedBox(
-          height: 76,
-          child: SingleChildScrollView(
-            key: const Key('viewer-fluid-filter-scroll'),
-            scrollDirection: Axis.horizontal,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: margin,
-                vertical: 8,
-              ),
-              child: Row(
-                spacing: gap,
-                children: [
-                  for (final facet in facets)
-                    cell(
-                      OperationsStyleDropdown<String>(
-                        key: ValueKey('viewer-facet-${facet.name}'),
-                        label: _facetLabel(facet),
-                        valueLabel: topFilters.valueFor(facet) == null
-                            ? (ar ? 'الكل' : 'All')
-                            : _filterScope
-                                      .optionsFor(facet, topFilters)
-                                      .where(
-                                        (e) =>
-                                            e.value ==
-                                            topFilters.valueFor(facet),
-                                      )
-                                      .map((e) => e.nameFor(language))
-                                      .firstOrNull ??
-                                  (ar ? 'الكل' : 'All'),
-                        choices: [
-                          OperationsFilterChoice(
-                            value: '',
-                            label: ar ? 'الكل' : 'All',
-                          ),
-                          for (final option in _filterScope.optionsFor(
-                            facet,
-                            topFilters,
-                          ))
-                            OperationsFilterChoice(
-                              value: option.value,
-                              label: option.nameFor(language),
-                            ),
-                        ],
-                        onSelected: (value) => _onTopFiltersChanged(
-                          topFilters.choose(
-                            facet,
-                            value.isEmpty ? null : value,
-                          ),
-                        ),
-                      ),
-                    ),
-                  cell(
-                    OperationsStyleDropdown<ChecklistFillFilter>(
-                      key: const Key('viewer-completion-filter'),
-                      label: ar ? 'حالة التعبئة' : 'Completion',
-                      valueLabel: _completionLabel(_completionFilter),
-                      choices: [
-                        for (final value in ChecklistFillFilter.values)
-                          OperationsFilterChoice(
-                            value: value,
-                            label: _completionLabel(value),
-                          ),
-                      ],
-                      onSelected: _setCompletionFilter,
-                    ),
-                  ),
-                ],
-              ),
+      // Completion is a normal facet: it is *always* last in the same
+      // sequence, not in a separate distant field or horizontal scroll strip.
+      final fields = <Widget>[
+        for (final facet in facets)
+          OperationsStyleDropdown<String>(
+            key: ValueKey('viewer-facet-${facet.name}'),
+            label: _facetLabel(facet),
+            valueLabel: topFilters.valueFor(facet) == null
+                ? (ar ? 'الكل' : 'All')
+                : _filterScope
+                          .optionsFor(facet, topFilters)
+                          .where((e) => e.value == topFilters.valueFor(facet))
+                          .map((e) => e.nameFor(language))
+                          .firstOrNull ??
+                      (ar ? 'الكل' : 'All'),
+            choices: [
+              OperationsFilterChoice(value: '', label: ar ? 'الكل' : 'All'),
+              for (final option in _filterScope.optionsFor(facet, topFilters))
+                OperationsFilterChoice(
+                  value: option.value,
+                  label: option.nameFor(language),
+                ),
+            ],
+            onSelected: (value) => _onTopFiltersChanged(
+              topFilters.choose(facet, value.isEmpty ? null : value),
             ),
           ),
+        OperationsStyleDropdown<ChecklistFillFilter>(
+          key: const Key('viewer-completion-filter'),
+          label: ar ? 'حالة التعبئة' : 'Completion',
+          valueLabel: _completionLabel(_completionFilter),
+          choices: [
+            for (final value in ChecklistFillFilter.values)
+              OperationsFilterChoice(
+                value: value,
+                label: _completionLabel(value),
+              ),
+          ],
+          onSelected: _setCompletionFilter,
         ),
+      ];
+      return ResponsiveFilterGrid(
+        fields: fields,
+        key: const Key('viewer-responsive-filter-grid'),
       );
     },
   );
@@ -2629,7 +2586,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
               ),
             IconButton(
               tooltip: ar ? 'تحديث' : 'Refresh',
-              onPressed: loading ? null : _load,
+              onPressed: loading ? null : () => _load(refreshWorkspace: true),
               icon: const Icon(Icons.refresh),
             ),
             IconButton(

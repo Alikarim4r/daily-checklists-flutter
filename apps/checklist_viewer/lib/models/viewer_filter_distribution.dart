@@ -16,19 +16,35 @@ class ViewerFilterDistribution {
         facet,
   ];
 
-  /// Completion is always one of the equally-sized fields on this row.
-  /// Narrow screens scroll horizontally, but each usable row is fully filled.
-  static double fieldWidth(
+  /// Fit every authorized facet and Completion into the available screen.
+  /// Desktop uses one row, regardless of how many facets the user can see;
+  /// smaller screens add rows rather than hiding Completion offscreen.
+  static int columnsFor(
     double viewport,
     int totalFields, {
-    double minimum = 142,
+    double margin = 8,
+    double gap = 8,
+    double mobileMinimum = 142,
+    double desktopBreakpoint = 1000,
+  }) {
+    if (totalFields <= 0) return 0;
+    if (!viewport.isFinite || viewport <= 0) return 1;
+    if (viewport >= desktopBreakpoint) return totalFields;
+    final usable = math.max(0, viewport - 2 * margin);
+    final fit = ((usable + gap) / (mobileMinimum + gap)).floor();
+    return math.min(totalFields, math.max(1, fit));
+  }
+
+  static double fieldWidth(
+    double viewport,
+    int fieldsInRow, {
     double margin = 8,
     double gap = 8,
   }) {
-    if (totalFields <= 0 || !viewport.isFinite) return minimum;
+    if (!viewport.isFinite || fieldsInRow <= 0) return 0;
     return math.max(
-      minimum,
-      (viewport - margin * 2 - gap * (totalFields - 1)) / totalFields,
+      0,
+      (viewport - margin * 2 - gap * (fieldsInRow - 1)) / fieldsInRow,
     );
   }
 }
