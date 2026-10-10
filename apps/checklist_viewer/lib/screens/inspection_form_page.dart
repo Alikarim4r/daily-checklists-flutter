@@ -592,18 +592,83 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
     String? pairId,
   }) async {
     if (!_canEdit || saving) return;
+    final previousPairs = item.photoPairs;
+    final previousResponse = item.response;
+    final repository = ref.read(inspectionRepositoryProvider);
     setState(() {
+      saving = true;
+      message = null;
       if (isIssue) {
         item.removeIssueImage(path, pairId: pairId);
       } else {
         item.removeFixImage(path, pairId: pairId);
       }
     });
-    await ref.read(inspectionRepositoryProvider).saveItems(inspection);
     try {
-      await ref.read(inspectionRepositoryProvider).deleteMedia(path);
-    } catch (_) {
-      // The database no longer references the object; cleanup can be retried.
+      await repository.detachPhoto(
+        inspection: inspection,
+        item: item,
+        storagePath: path,
+        isIssue: isIssue,
+      );
+      // Removing the final fix automatically re-opens the problem answer.
+      // That additional answer correction is saved normally after the photo
+      // has been atomically detached through the authorized audit RPC.
+      if (item.response != previousResponse) {
+        await repository.saveItems(inspection);
+      }
+      final serverCopy = await repository.getById(inspection.id);
+      if (serverCopy == null ||
+          serverCopy.items.any(
+            (row) => row.remarkPhotos.any(
+              (photo) => storagePathOf(photo.path) == storagePathOf(path),
+            ),
+          )) {
+        throw StateError(
+          'Unable to confirm removal of the picture from the saved checklist',
+        );
+      }
+      inspection.version = serverCopy.version;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              ar
+                  ? 'أُزيلت الصورة من القائمة، مع حفظ الدليل في السجل'
+                  : 'Photo removed from checklist; audit evidence preserved',
+            ),
+          ),
+        );
+      }
+      try {
+        await widget.onChanged();
+      } catch (_) {}
+    } catch (error) {
+      // A lost response may follow a successful RPC. Re-read before restoring
+      // the photo so the on-screen state never contradicts a committed change.
+      Inspection? serverCopy;
+      try {
+        serverCopy = await repository.getById(inspection.id);
+      } catch (_) {}
+      final stillLinked = serverCopy?.items.any(
+        (row) =>
+            row.id == item.id &&
+            row.remarkPhotos.any(
+              (photo) => storagePathOf(photo.path) == storagePathOf(path),
+            ),
+      );
+      if (mounted) {
+        setState(() {
+          if (stillLinked != false) {
+            item.setPhotoPairs(previousPairs);
+            item.response = previousResponse;
+          }
+          if (serverCopy != null) inspection.version = serverCopy.version;
+          message = cvUserMessage(error, widget.language);
+        });
+      }
+    } finally {
+      if (mounted) setState(() => saving = false);
     }
   }
 

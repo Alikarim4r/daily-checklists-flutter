@@ -664,6 +664,37 @@ class InspectionRepository {
     inspection.version = (nextVersion as num).toInt();
   }
 
+  /// Detach a previously uploaded issue/fix picture from an editable
+  /// inspection. The server checks the expected version, site access, one
+  /// specific path and keeps the immutable file plus its audit history.
+  /// The caller provides the item's new paired-photo metadata (one removal).
+  Future<void> detachPhoto({
+    required Inspection inspection,
+    required InspectionItem item,
+    required String storagePath,
+    required bool isIssue,
+  }) async {
+    final itemId = item.id;
+    if (itemId == null || itemId.isEmpty) {
+      throw StateError('Cannot detach an image from an unsaved item');
+    }
+    final result = await _client.rpc(
+      'detach_checklist_item_photo',
+      params: {
+        'p_inspection_id': inspection.id,
+        'p_item_id': itemId,
+        'p_storage_path': storagePathOf(storagePath),
+        'p_media_kind': isIssue ? 'issue_photo' : 'fix_photo',
+        'p_image_path': item.imagePath,
+        'p_issue_image_path': item.issueImagePath,
+        'p_fix_image_path': item.fixImagePath,
+        'p_expected_version': inspection.version,
+      },
+    );
+    inspection.version = (result as num).toInt();
+    // Do not delete the storage object. Historical evidence is immutable.
+  }
+
   Future<void> deleteInspectionItem(
     Inspection inspection,
     String itemId,

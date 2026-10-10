@@ -1398,19 +1398,83 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     String? pairId,
   }) async {
     final current = selected;
-    if (current == null || !_canEditSelected || _photoBusy) return;
+    if (!_canEditSelected || _photoBusy || current == null) return;
+    final previousPairs = item.photoPairs;
+    final previousResponse = item.response;
+    final repository = ref.read(inspectionRepositoryProvider);
     setState(() {
+      _photoBusy = true;
+      message = null;
       if (isIssue) {
         item.removeIssueImage(path, pairId: pairId);
       } else {
         item.removeFixImage(path, pairId: pairId);
       }
     });
-    await ref.read(inspectionRepositoryProvider).saveItems(current);
     try {
-      await ref.read(inspectionRepositoryProvider).deleteMedia(path);
-    } catch (_) {
-      // The database no longer references the object; cleanup can be retried.
+      await repository.detachPhoto(
+        inspection: current,
+        item: item,
+        storagePath: path,
+        isIssue: isIssue,
+      );
+      // Removing the final fix automatically re-opens the problem answer.
+      // That additional answer correction is saved normally after the photo
+      // has been atomically detached through the authorized audit RPC.
+      if (item.response != previousResponse) {
+        await repository.saveItems(current);
+      }
+      final serverCopy = await repository.getById(current.id);
+      if (serverCopy == null ||
+          serverCopy.items.any(
+            (row) => row.remarkPhotos.any(
+              (photo) => storagePathOf(photo.path) == storagePathOf(path),
+            ),
+          )) {
+        throw StateError(
+          'Unable to confirm removal of the picture from the saved checklist',
+        );
+      }
+      current.version = serverCopy.version;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              ar
+                  ? 'أُزيلت الصورة من القائمة، مع حفظ الدليل في السجل'
+                  : 'Photo removed from checklist; audit evidence preserved',
+            ),
+          ),
+        );
+      }
+      // A refresh is not required to detach the selected photo. The row and
+      // inspection version are already updated; reload only in the background.
+    } catch (error) {
+      // A lost response may follow a successful RPC. Re-read before restoring
+      // the photo so the on-screen state never contradicts a committed change.
+      Inspection? serverCopy;
+      try {
+        serverCopy = await repository.getById(current.id);
+      } catch (_) {}
+      final stillLinked = serverCopy?.items.any(
+        (row) =>
+            row.id == item.id &&
+            row.remarkPhotos.any(
+              (photo) => storagePathOf(photo.path) == storagePathOf(path),
+            ),
+      );
+      if (mounted) {
+        setState(() {
+          if (stillLinked != false) {
+            item.setPhotoPairs(previousPairs);
+            item.response = previousResponse;
+          }
+          if (serverCopy != null) current.version = serverCopy.version;
+          message = cvUserMessage(error, language);
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _photoBusy = false);
     }
   }
 
