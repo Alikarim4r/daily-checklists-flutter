@@ -994,7 +994,7 @@ class ChecklistFormLayout extends ConsumerWidget {
     final color = switch (item.checkColorFor(column)) {
       ColorCode.ok => _okBlue,
       ColorCode.problem => _problemRed,
-      ColorCode.na => Colors.black87,
+      ColorCode.na => Colors.black,
       ColorCode.empty => _emptyGray,
     };
     return InkWell(

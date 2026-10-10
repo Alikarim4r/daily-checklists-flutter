@@ -1998,6 +1998,8 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
                   selection: topFilters,
                   language: language,
                   onChanged: _onTopFiltersChanged,
+                  operationsStyle: true,
+                  showResetButton: false,
                 ),
               ),
               if (_isReviewer && MediaQuery.sizeOf(context).width < 560)
@@ -2010,38 +2012,29 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
                 width: MediaQuery.sizeOf(context).width < 560 ? 136 : 162,
                 child: Padding(
                   padding: const EdgeInsetsDirectional.only(end: 8),
-                  child: DropdownButtonFormField<ChecklistFillFilter>(
+                  child: OperationsStyleDropdown<ChecklistFillFilter>(
                     key: const Key('viewer-completion-filter'),
-                    initialValue: _completionFilter,
-                    isExpanded: true,
-                    decoration: InputDecoration(
-                      labelText: ar ? 'حالة التعبئة' : 'Completion',
-                      labelStyle: const TextStyle(fontSize: 11),
-                      isDense: true,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                    ),
-                    items: [
+                    label: ar ? 'حالة التعبئة' : 'Completion',
+                    valueLabel: switch (_completionFilter) {
+                      ChecklistFillFilter.all => ar ? 'الكل' : 'All',
+                      ChecklistFillFilter.filled => ar ? 'المعبأة' : 'Filled',
+                      ChecklistFillFilter.unfilled =>
+                        ar ? 'غير المكتملة' : 'Not filled',
+                    },
+                    choices: [
                       for (final option in ChecklistFillFilter.values)
-                        DropdownMenuItem(
+                        OperationsFilterChoice<ChecklistFillFilter>(
                           value: option,
-                          child: Text(
-                            switch (option) {
-                              ChecklistFillFilter.all => ar ? 'الكل' : 'All',
-                              ChecklistFillFilter.filled =>
-                                ar ? 'المعبأة' : 'Filled',
-                              ChecklistFillFilter.unfilled =>
-                                ar ? 'غير المكتملة' : 'Not filled',
-                            },
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                          label: switch (option) {
+                            ChecklistFillFilter.all => ar ? 'الكل' : 'All',
+                            ChecklistFillFilter.filled =>
+                              ar ? 'المعبأة' : 'Filled',
+                            ChecklistFillFilter.unfilled =>
+                              ar ? 'غير المكتملة' : 'Not filled',
+                          },
                         ),
                     ],
-                    onChanged: (v) {
-                      if (v != null) _setCompletionFilter(v);
-                    },
+                    onSelected: _setCompletionFilter,
                   ),
                 ),
               ),
@@ -2064,8 +2057,9 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       }
       return;
     }
-    // One click prints the entire filtered stack. No per-list opening or
-    // intermediate report selection dialog is required.
+    // Preserve the same output and photo choices as the original PDF report.
+    final request = await showReportOptionsSheet(context, language);
+    if (request == null || !mounted) return;
     try {
       final snapshotBySite = StackedChecklistFiltering.newestPerSite(records);
       final allPapers = <Inspection>[];
@@ -2087,8 +2081,8 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         allPapers,
         language: language,
         filename: 'checklists_${_dateIso}_${allPapers.length}.pdf',
-        print: true,
-        photoMode: ReportPhotoMode.links,
+        print: request.delivery == ReportDelivery.print,
+        photoMode: request.photoMode,
         onProgress: (completed, total) {
           if (mounted) setState(() => _status = 'PDF: $completed/$total');
         },
@@ -2158,7 +2152,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
               key: ValueKey('stack-${site.id}'),
               padding: const EdgeInsets.only(bottom: 4),
               child: saved != null
-                  ? _stackPaper(saved)
+                  ? _stackPaper(saved, onTap: () => _open(saved))
                   : FutureBuilder<Inspection>(
                       future: blankFuture,
                       builder: (context, snapshot) {
@@ -2178,7 +2172,12 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
                             child: Center(child: CircularProgressIndicator()),
                           );
                         }
-                        return _stackPaper(snapshot.data!);
+                        return _stackPaper(
+                          snapshot.data!,
+                          onTap: _canWriteSite(site.id)
+                              ? () => _openChecklist(site)
+                              : null,
+                        );
                       },
                     ),
             );
@@ -2188,42 +2187,57 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     );
   }
 
-  Widget _stackPaper(Inspection inspection) => LayoutBuilder(
-    builder: (context, constraints) {
-      const paperWidth = 794.0;
-      final width = math.min(paperWidth, math.max(280.0, constraints.maxWidth));
-      final sheet = Material(
-        color: Colors.white,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(28, 32, 28, 36),
-          child: ChecklistFormLayout(
-            key: ValueKey('paper-${inspection.siteId}'),
-            inspection: inspection,
-            language: language,
-            readOnly: true,
-            forceTableLayout: true,
-          ),
-        ),
-      );
-      return Center(
-        child: Card(
-          elevation: 2,
-          margin: EdgeInsets.zero,
-          clipBehavior: Clip.antiAlias,
-          child: width >= paperWidth
-              ? SizedBox(width: paperWidth, child: sheet)
-              : SizedBox(
-                  width: width,
-                  child: FittedBox(
-                    alignment: Alignment.topCenter,
-                    fit: BoxFit.fitWidth,
-                    child: SizedBox(width: paperWidth, child: sheet),
-                  ),
+  /// A4 stays unmodified; tapping it opens the existing edit/save controls.
+  /// Historical dates are supported; approved forms remain read-only.
+  Widget _stackPaper(Inspection inspection, {VoidCallback? onTap}) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          const paperWidth = 794.0;
+          final width = math.min(
+            paperWidth,
+            math.max(280.0, constraints.maxWidth),
+          );
+          final sheet = Material(
+            color: Colors.white,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(28, 32, 28, 36),
+              child: ChecklistFormLayout(
+                key: ValueKey('paper-${inspection.siteId}'),
+                inspection: inspection,
+                language: language,
+                readOnly: true,
+                forceTableLayout: true,
+              ),
+            ),
+          );
+          return Center(
+            child: MouseRegion(
+              cursor: onTap == null
+                  ? SystemMouseCursors.basic
+                  : SystemMouseCursors.click,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onTap,
+                child: Card(
+                  elevation: 2,
+                  margin: EdgeInsets.zero,
+                  clipBehavior: Clip.antiAlias,
+                  child: width >= paperWidth
+                      ? SizedBox(width: paperWidth, child: sheet)
+                      : SizedBox(
+                          width: width,
+                          child: FittedBox(
+                            alignment: Alignment.topCenter,
+                            fit: BoxFit.fitWidth,
+                            child: SizedBox(width: paperWidth, child: sheet),
+                          ),
+                        ),
                 ),
-        ),
+              ),
+            ),
+          );
+        },
       );
-    },
-  );
 
   Widget _detailToolbar(Inspection insp, {bool inAppBar = false}) {
     final canEdit = _canEditSelected;
