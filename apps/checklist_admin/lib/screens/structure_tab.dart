@@ -53,6 +53,22 @@ class _StructureTabState extends ConsumerState<StructureTab> {
   List<Organization> orgs = [];
   List<Zone> zones = [];
   List<ChecklistSite> sites = [];
+  List<LocationScopeLeaf> _locationLeaves = [];
+  ChecklistFilterSelection topFilters = const ChecklistFilterSelection();
+  ChecklistScopeFilters get _filterScope => ChecklistScopeFilters.fromCatalog(
+    organizations: orgs,
+    zones: zones,
+    sites: sites,
+    locationLeaves: _locationLeaves,
+  );
+
+  void _onTopFiltersChanged(ChecklistFilterSelection next) {
+    setState(() {
+      topFilters = next;
+      selection = null;
+    });
+  }
+
   List<ChecklistTemplate> templates = [];
   bool loading = true;
   String? message;
@@ -86,11 +102,17 @@ class _StructureTabState extends ConsumerState<StructureTab> {
       final t = await ref
           .read(catalogRepositoryProvider)
           .listTemplates(activeOnly: false);
+      final locationLeaves = await ref
+          .read(locationHierarchyRepositoryProvider)
+          .listMyChecklistLocationScope()
+          .then((scope) => scope.leaves)
+          .catchError((_) => <LocationScopeLeaf>[]);
       final activeOrgs = o.where((x) => x.isActive).toList();
       setState(() {
         orgs = activeOrgs;
         zones = z;
         sites = s;
+        _locationLeaves = locationLeaves;
         templates = t;
         selection = _sanitizeSelection(selection);
       });
@@ -998,10 +1020,46 @@ class _StructureTabState extends ConsumerState<StructureTab> {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= CaBreakpoint.twoPane;
+    final allowed = _filterScope.matchingSiteIds(topFilters);
+    final visibleSites = topFilters.isAll
+        ? sites
+        : [
+            for (final site in sites)
+              if ((site.isChecklistUnit && allowed.contains(site.id)) ||
+                  (site.isCampus &&
+                      sites.any(
+                        (unit) =>
+                            allowed.contains(unit.id) &&
+                            unit.parentSiteId == site.id,
+                      )))
+                site,
+          ];
+    final visibleOrgs = topFilters.isAll
+        ? orgs
+        : [
+            for (final org in orgs)
+              if (visibleSites.any((site) => site.organizationId == org.id))
+                org,
+          ];
+    final visibleZones = topFilters.isAll
+        ? zones
+        : [
+            for (final zone in zones)
+              if (visibleSites.any(
+                (site) =>
+                    (site.zoneId == zone.id ||
+                    sites.any(
+                      (campus) =>
+                          campus.id == site.parentSiteId &&
+                          campus.zoneId == zone.id,
+                    )),
+              ))
+                zone,
+          ];
     final tree = _TreePane(
-      orgs: orgs,
-      zones: zones,
-      sites: sites,
+      orgs: visibleOrgs,
+      zones: visibleZones,
+      sites: visibleSites,
       selection: selection,
       language: widget.language,
       canEdit: canManageOrgs,
@@ -1069,6 +1127,12 @@ class _StructureTabState extends ConsumerState<StructureTab> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        ChecklistScopeFilterBar(
+          scope: _filterScope,
+          selection: topFilters,
+          language: widget.language,
+          onChanged: _onTopFiltersChanged,
+        ),
         CaContextBlock(
           loading: loading,
           fields: [

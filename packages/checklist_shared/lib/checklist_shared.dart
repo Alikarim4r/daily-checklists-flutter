@@ -83,3 +83,5 @@ export 'src/widgets/location_filter_panel.dart';
 export 'src/photos/storage_image_optimizer.dart';
 export 'src/utils/checklist_categories.dart';
 export 'src/utils/checklist_subcategories.dart';
+export 'src/utils/checklist_scope_filters.dart';
+export 'src/widgets/checklist_scope_filter_bar.dart';
