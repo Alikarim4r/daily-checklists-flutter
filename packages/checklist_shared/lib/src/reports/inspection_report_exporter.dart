@@ -228,7 +228,100 @@ class InspectionReportExporter {
     );
   }
 
+  /// Combines every visible checklist in filter order into one printable
+  /// document. Each inspection starts a fresh A4 section, retaining the
+  /// existing report layout, logos, signature and photo-evidence checks.
+  Future<Uint8List> buildBatchPdfBytes(
+    Iterable<Inspection> inspections, {
+    String language = 'en',
+    ReportPhotoMode photoMode = ReportPhotoMode.links,
+    InspectionReportFonts? fonts,
+    ReportBrandingBytes? branding,
+    FormPaperTheme? paperTheme,
+    void Function(int completed, int total)? onProgress,
+  }) async {
+    final ordered = inspections.toList();
+    if (ordered.isEmpty) {
+      throw StateError('No checklists match the selected filters');
+    }
+    final resolvedFonts =
+        fonts ??
+        InspectionReportFonts(
+          latinRegular: await PdfGoogleFonts.notoSansRegular(),
+          latinBold: await PdfGoogleFonts.notoSansBold(),
+          arabicRegular: await PdfGoogleFonts.notoNaskhArabicRegular(),
+          arabicBold: await PdfGoogleFonts.notoNaskhArabicBold(),
+        );
+    final pdf = pw.Document();
+    for (var index = 0; index < ordered.length; index++) {
+      await _appendReportToPdf(
+        pdf,
+        ordered[index],
+        language: language,
+        photoMode: photoMode,
+        fonts: resolvedFonts,
+        branding: branding,
+        paperTheme: paperTheme,
+      );
+      onProgress?.call(index + 1, ordered.length);
+    }
+    return pdf.save();
+  }
+
+  Future<void> exportBatch(
+    Iterable<Inspection> inspections, {
+    String language = 'en',
+    String filename = 'checklists.pdf',
+    bool print = false,
+    ReportPhotoMode photoMode = ReportPhotoMode.links,
+    void Function(int completed, int total)? onProgress,
+  }) async {
+    final bytes = await buildBatchPdfBytes(
+      inspections,
+      language: language,
+      photoMode: photoMode,
+      onProgress: onProgress,
+    );
+    if (print) {
+      try {
+        if ((await Printing.info()).canPrint) {
+          final printed = await Printing.layoutPdf(
+            onLayout: (_) async => bytes,
+            name: filename,
+            format: PdfPageFormat.a4,
+          );
+          if (printed) return;
+        }
+      } catch (_) {
+        // Platforms without a print entitlement still offer PDF download.
+      }
+    }
+    await Printing.sharePdf(bytes: bytes, filename: filename);
+  }
+
   Future<Uint8List> buildPdfBytes(
+    Inspection inspection, {
+    String language = 'en',
+    ReportBrandingBytes? branding,
+    FormPaperTheme? paperTheme,
+    ReportPhotoMode photoMode = ReportPhotoMode.links,
+    InspectionReportFonts? fonts,
+  }) async {
+    final doc = pw.Document();
+    await _appendReportToPdf(
+      doc,
+      inspection,
+      language: language,
+      branding: branding,
+      paperTheme: paperTheme,
+      photoMode: photoMode,
+      fonts: fonts,
+    );
+    return doc.save();
+  }
+
+  Future<void> _appendReportToPdf(
+    pw.Document doc,
     Inspection inspection, {
     String language = 'en',
     ReportBrandingBytes? branding,
@@ -386,7 +479,6 @@ class InspectionReportExporter {
         ? 'توفر هذه القائمة المتطلبات الأساسية للفحوصات اليومية لخدمات البنية. عند تسجيل «لا» لأي بند أعلاه، يجب اتخاذ إجراء فوري لمعالجة المشكلة لضمان استمرار التشغيل الآمن.'
         : 'This checklist provides the basic requirements for hard services operations daily checks. Should a "No" be recorded for any of the above checklist items, immediate action to be taken to address the issues, to have safe, continued operation.';
 
-    final doc = pw.Document(theme: theme);
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
@@ -432,7 +524,6 @@ class InspectionReportExporter {
         ],
       ),
     );
-    return doc.save();
   }
 
   Uint8List? _optimizeReportPhoto(Uint8List bytes) {

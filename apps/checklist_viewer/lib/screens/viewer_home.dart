@@ -555,11 +555,17 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         groups: groups,
       );
       final siteList = [for (final g in groups) ...g.checklists];
-      final list = await inspRepo.listInspections(
-        siteId: siteFilter,
-        date: date,
-        reviewStatuses: _reviewFilterFor(access),
-      );
+      final list = siteFilter == null
+          ? await inspRepo.listInspectionsForSites(
+              siteIds: siteList.map((site) => site.id),
+              date: date,
+              reviewStatuses: _reviewFilterFor(access),
+            )
+          : await inspRepo.listInspections(
+              siteId: siteFilter,
+              date: date,
+              reviewStatuses: _reviewFilterFor(access),
+            );
       if (!mounted || generation != _loadGeneration) return;
       final checklistTypeBySiteId = {
         for (final site in siteList) site.id: site.checklistType,
@@ -2045,9 +2051,80 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     ],
   );
 
+  Future<void> _exportFilteredPapers() async {
+    if (_status != null && _status!.startsWith('PDF:')) return;
+    final rows = _visibleChecklistRows;
+    if (rows.isEmpty) {
+      if (mounted) {
+        setState(
+          () => message = ar
+              ? 'لا توجد قوائم مطابقة للفلترة للطباعة.'
+              : 'There are no matching checklists to print.',
+        );
+      }
+      return;
+    }
+    // One click prints the entire filtered stack. No per-list opening or
+    // intermediate report selection dialog is required.
+    try {
+      final snapshotBySite = StackedChecklistFiltering.newestPerSite(records);
+      final allPapers = <Inspection>[];
+      for (var index = 0; index < rows.length; index++) {
+        final site = rows[index].unit;
+        final saved = snapshotBySite[site.id];
+        final inspection =
+            saved ??
+            await _blankPreviews.putIfAbsent(
+              '$_dateIso:${site.id}',
+              () => _makeBlankPreview(site),
+            );
+        allPapers.add(inspection);
+        if (!mounted) return;
+        setState(() => _status = 'PDF: ${index + 1}/${rows.length}');
+      }
+      // A single document, in the exact order displayed by the filter.
+      await InspectionReportExporter().exportBatch(
+        allPapers,
+        language: language,
+        filename: 'checklists_${_dateIso}_${allPapers.length}.pdf',
+        print: true,
+        photoMode: ReportPhotoMode.links,
+        onProgress: (completed, total) {
+          if (mounted) setState(() => _status = 'PDF: $completed/$total');
+        },
+      );
+      if (mounted) setState(() => _status = null);
+    } catch (error, stack) {
+      await StructuredErrorReporter.capture(
+        error,
+        stack,
+        module: 'viewer.bulk_pdf',
+      );
+      if (mounted) {
+        setState(() {
+          _status = null;
+          message = error is InspectionReportEvidenceException
+              ? error.messageFor(language)
+              : (ar
+                    ? 'تعذر إنشاء ملف PDF المشترك. حاول مجددًا أو قلّل نطاق الفلترة.'
+                    : 'Could not create the combined PDF. Try again or narrow the filters.');
+        });
+      }
+    }
+  }
+
   Widget _stackPane() {
     if (!_loadedOnce) return const Center(child: CircularProgressIndicator());
     final ordered = _visibleChecklistRows;
+    if (ordered.isEmpty) {
+      return Center(
+        child: Text(
+          ar
+              ? 'لا توجد قوائم فحص مطابقة. غيّر الفلاتر لعرض القوائم.'
+              : 'No matching checklists. Change the filters to view lists.',
+        ),
+      );
+    }
     final recordBySite = StackedChecklistFiltering.newestPerSite(records);
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
@@ -2064,118 +2141,46 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         child: ListView.builder(
           key: const Key('viewer-checklist-stack'),
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 36),
-          itemCount: ordered.length + 1,
+          padding: const EdgeInsets.fromLTRB(6, 0, 6, 12),
+          itemCount: ordered.length,
           itemBuilder: (context, index) {
-            if (index == 0) {
-              return Padding(
-                padding: const EdgeInsets.fromLTRB(7, 8, 7, 14),
-                child: Row(
-                  children: [
-                    const Icon(Icons.layers_outlined, size: 18),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        ar
-                            ? 'قوائم الفحص المطابقة: ${ordered.length}'
-                            : 'Matching checklists: ${ordered.length}',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    if (ordered.isEmpty)
-                      Text(ar ? 'لا توجد نتائج' : 'No matching lists'),
-                  ],
-                ),
-              );
-            }
-            final site = ordered[index - 1].unit;
+            final site = ordered[index].unit;
             final saved = recordBySite[site.id];
-            final isFilled =
-                saved != null && StackedChecklistFiltering.isFilled(saved);
             final Future<Inspection>? blankFuture = saved == null
                 ? _blankPreviews.putIfAbsent(
                     '$_dateIso:${site.id}',
                     () => _makeBlankPreview(site),
                   )
                 : null;
+            // No individual header, status strip, or Open button: the A4
+            // form itself fills the entire slot, followed directly by next A4.
             return Padding(
               key: ValueKey('stack-${site.id}'),
-              padding: const EdgeInsets.only(bottom: 24),
-              child: Column(
-                children: [
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 980),
-                    child: Card(
-                      margin: EdgeInsets.zero,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                site.nameFor(language),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Chip(
-                              label: Text(
-                                isFilled
-                                    ? (ar ? 'معبأة' : 'Filled')
-                                    : (saved == null
-                                          ? (ar ? 'لم تُعبأ' : 'Not started')
-                                          : (ar ? 'غير مكتملة' : 'Incomplete')),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            TextButton.icon(
-                              onPressed: saved != null
-                                  ? () => _open(saved)
-                                  : (_canWriteSite(site.id)
-                                        ? () => _openChecklist(site)
-                                        : null),
-                              icon: const Icon(Icons.open_in_full, size: 16),
-                              label: Text(ar ? 'فتح' : 'Open'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  if (saved != null)
-                    _stackPaper(saved)
-                  else
-                    FutureBuilder<Inspection>(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: saved != null
+                  ? _stackPaper(saved)
+                  : FutureBuilder<Inspection>(
                       future: blankFuture,
                       builder: (context, snapshot) {
                         if (snapshot.hasError) {
-                          return Card(
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Text(
-                                ar
-                                    ? 'تعذر تحميل بنود القائمة، يمكنك تحديث الصفحة وإعادة المحاولة.'
-                                    : 'Unable to load the checklist items. Refresh and try again.',
-                              ),
+                          return Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Text(
+                              ar
+                                  ? 'تعذر تحميل القائمة. اضغط تحديث للمحاولة مجددًا.'
+                                  : 'Checklist could not load. Press Refresh to retry.',
                             ),
                           );
                         }
                         if (!snapshot.hasData) {
                           return const Padding(
                             padding: EdgeInsets.all(24),
-                            child: CircularProgressIndicator(),
+                            child: Center(child: CircularProgressIndicator()),
                           );
                         }
                         return _stackPaper(snapshot.data!);
                       },
                     ),
-                ],
-              ),
             );
           },
         ),
@@ -2465,6 +2470,31 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
             overflow: TextOverflow.ellipsis,
           ),
           actions: [
+            if (selected == null)
+              Builder(
+                builder: (context) {
+                  final narrow = MediaQuery.sizeOf(context).width < 720;
+                  final disabled =
+                      loading ||
+                      _visibleChecklistRows.isEmpty ||
+                      (_status?.startsWith('PDF:') ?? false);
+                  return narrow
+                      ? IconButton(
+                          key: const Key('viewer-print-all'),
+                          tooltip: ar
+                              ? 'تقرير PDF لجميع القوائم المعروضة'
+                              : 'PDF report for all filtered checklists',
+                          onPressed: disabled ? null : _exportFilteredPapers,
+                          icon: const Icon(Icons.picture_as_pdf_outlined),
+                        )
+                      : TextButton.icon(
+                          key: const Key('viewer-print-all'),
+                          onPressed: disabled ? null : _exportFilteredPapers,
+                          icon: const Icon(Icons.picture_as_pdf_outlined),
+                          label: Text(ar ? 'تقرير PDF' : 'PDF report'),
+                        );
+                },
+              ),
             if (_toolbarInAppBar && selected != null)
               _detailToolbar(selected!, inAppBar: true),
             if (ref.watch(notificationsEnabledProvider))

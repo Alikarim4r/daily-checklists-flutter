@@ -210,6 +210,7 @@ class InspectionRepository {
 
   Future<List<Inspection>> listInspections({
     String? siteId,
+    List<String>? siteIds,
     DateTime? date,
     InspectionStatus? status,
     ReviewStatus? reviewStatus,
@@ -221,6 +222,9 @@ class InspectionRepository {
           '*, sites(name_en, name_ar, pin, organization_id, checklist_type, parent_site_id, zone_id, form_theme, form_theme_accent)',
         );
     if (siteId != null && siteId.isNotEmpty) q = q.eq('site_id', siteId);
+    if (siteId == null && siteIds != null && siteIds.isNotEmpty) {
+      q = q.inFilter('site_id', siteIds);
+    }
     if (date != null) {
       final iso =
           '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
@@ -241,6 +245,30 @@ class InspectionRepository {
     ];
     await _attachResolvedThemeData(maps);
     return maps.map(Inspection.fromJson).toList();
+  }
+
+  /// Restricts each request to a modest set of *authorized* checklist units.
+  /// Avoids long-running, unscoped RLS queries on large facilities.
+  Future<List<Inspection>> listInspectionsForSites({
+    required Iterable<String> siteIds,
+    required DateTime date,
+    List<ReviewStatus>? reviewStatuses,
+  }) async {
+    final unique = siteIds.where((id) => id.isNotEmpty).toSet().toList();
+    if (unique.isEmpty) return [];
+    const batchSize = 20;
+    final results = <Inspection>[];
+    for (var i = 0; i < unique.length; i += batchSize) {
+      final chunk = unique.skip(i).take(batchSize).toList();
+      results.addAll(
+        await listInspections(
+          siteIds: chunk,
+          date: date,
+          reviewStatuses: reviewStatuses,
+        ),
+      );
+    }
+    return results;
   }
 
   /// Recent inspections for a site (with items) used for overdue streak calc.
@@ -341,16 +369,25 @@ class InspectionRepository {
     final ids = inspectionIds.where((id) => id.isNotEmpty).toSet().toList();
     if (ids.isEmpty) return const {};
 
-    final rows = await _client
-        .from('checklist_inspection_items')
-        .select()
-        .inFilter('inspection_id', ids)
-        .order('inspection_id')
-        .order('item_index');
+    // Very large IN clauses can exhaust the PostgREST upstream timeout.
+    // Keep each request small while retaining the complete response snapshot.
+    const chunkSize = 25;
+    final rows = <dynamic>[];
+    for (var offset = 0; offset < ids.length; offset += chunkSize) {
+      final chunk = ids.skip(offset).take(chunkSize).toList();
+      rows.addAll(
+        await _client
+            .from('checklist_inspection_items')
+            .select()
+            .inFilter('inspection_id', chunk)
+            .order('inspection_id')
+            .order('item_index'),
+      );
+    }
     final grouped = <String, List<InspectionItem>>{
       for (final id in ids) id: <InspectionItem>[],
     };
-    for (final value in rows as List) {
+    for (final value in rows) {
       final row = Map<String, dynamic>.from(value as Map);
       final inspectionId = row['inspection_id'] as String?;
       if (inspectionId == null) continue;
