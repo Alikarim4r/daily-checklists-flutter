@@ -54,6 +54,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
   OrgBrowseSection? browseOrg;
   ZoneBrowseSection? browseZone;
   CampusChecklistGroup? browseCampus;
+  String? browseCategory;
   List<OrgBrowseSection> orgSections = [];
   DateTime date = qatarBusinessNow();
   Inspection? selected;
@@ -91,12 +92,16 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       browseOrg != null ||
       browseZone != null ||
       browseCampus != null ||
+      browseCategory != null ||
       siteFilter != null;
 
   String get _appBarTitle {
     if (siteFilter != null) {
       final site = sites.where((s) => s.id == siteFilter).firstOrNull;
       if (site != null) return site.buildingCode;
+    }
+    if (browseCategory != null) {
+      return ChecklistCategories.title(browseCategory!, language);
     }
     if (browseCampus != null) {
       return browseCampus!.titleFor(language);
@@ -115,6 +120,8 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       if (browseOrg != null) browseOrg!.organization.nameFor(language),
       if (browseZone != null) browseZone!.titleFor(language),
       if (browseCampus != null) browseCampus!.titleFor(language),
+      if (browseCategory != null)
+        ChecklistCategories.title(browseCategory!, language),
       if (siteFilter != null)
         sites.where((s) => s.id == siteFilter).firstOrNull?.buildingCode ?? '',
     ].where((part) => part.trim().isNotEmpty).toList();
@@ -129,6 +136,13 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         selected = null;
       });
       _load();
+      return;
+    }
+    if (browseCategory != null) {
+      setState(() {
+        browseCategory = null;
+        selected = null;
+      });
       return;
     }
     if (browseCampus != null) {
@@ -158,6 +172,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       browseOrg = org;
       browseZone = null;
       browseCampus = null;
+      browseCategory = null;
       siteFilter = null;
       selected = null;
     });
@@ -167,27 +182,27 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     setState(() {
       browseZone = zone;
       browseCampus = null;
+      browseCategory = null;
       siteFilter = null;
       selected = null;
     });
   }
 
   Future<void> _openCampus(CampusChecklistGroup group) async {
-    if (group.checklists.length == 1 && group.campus == null) {
-      setState(() {
-        browseCampus = null;
-        siteFilter = group.checklists.first.id;
-        selected = null;
-      });
-      await _load();
-      return;
-    }
     setState(() {
       browseCampus = group;
+      browseCategory = null;
       siteFilter = null;
       selected = null;
     });
     await _load();
+  }
+
+  void _openCategory(String category) {
+    setState(() {
+      browseCategory = category;
+      selected = null;
+    });
   }
 
   Future<void> _openChecklist(ChecklistSite site) async {
@@ -479,6 +494,29 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         orgSections = sections;
         campusGroups = groups;
         sites = siteList;
+        // Refresh category grouping after an administrator reclassifies a list.
+        if (browseCampus != null) {
+          final previous = browseCampus!;
+          browseCampus = groups
+              .where(
+                (g) => (previous.campus != null
+                    ? g.campus?.id == previous.campus!.id
+                    : g.campus == null &&
+                          g.checklists.any(
+                            (site) => previous.checklists.any(
+                              (old) => old.id == site.id,
+                            ),
+                          )),
+              )
+              .firstOrNull;
+          if (browseCampus == null ||
+              (browseCategory != null &&
+                  !ChecklistCategories.groupAvailable(
+                    browseCampus!.checklists,
+                  ).containsKey(browseCategory))) {
+            browseCategory = null;
+          }
+        }
         myAccess = access;
         records = withItems;
         overdueByInspectionId = overdueMap;
@@ -1552,16 +1590,54 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     );
   }
 
-  List<Widget> _checklistSections(CampusChecklistGroup group) => [
-    CvSectionHeader(
-      title: ar ? 'قوائم الفحص' : 'Checklists',
-      count: group.checklists.length,
-      padding: _firstHeaderPadding,
-    ),
-    CvLedger(
-      children: [for (final site in group.checklists) _checklistRow(site)],
-    ),
-  ];
+  List<Widget> _categorySections(CampusChecklistGroup group) {
+    final categories = ChecklistCategories.groupAvailable(group.checklists);
+    return [
+      CvSectionHeader(
+        title: ar ? 'أصناف قوائم الفحص' : 'Checklist categories',
+        count: categories.length,
+        padding: _firstHeaderPadding,
+      ),
+      if (categories.isEmpty)
+        CvEmptyState(
+          icon: Icons.folder_off_outlined,
+          title: ar ? 'لا توجد قوائم فحص' : 'No checklists',
+          message: ar
+              ? 'لم تُضف بعد قائمة فحص إلى هذا الموقع.'
+              : 'No checklists have been assigned to this site.',
+        )
+      else
+        CvLedger(
+          children: [
+            for (final entry in categories.entries)
+              CvLedgerRow(
+                title: ChecklistCategories.title(entry.key, language),
+                subtitle: ar
+                    ? '${entry.value.length} قوائم'
+                    : '${entry.value.length} checklists',
+                onTap: () => _openCategory(entry.key),
+                meta: [?_coverageMeta(entry.value)],
+              ),
+          ],
+        ),
+    ];
+  }
+
+  List<Widget> _checklistSections(CampusChecklistGroup group) {
+    final category = browseCategory;
+    if (category == null) return _categorySections(group);
+    final units =
+        ChecklistCategories.groupAvailable(group.checklists)[category] ??
+        const <ChecklistSite>[];
+    return [
+      CvSectionHeader(
+        title: ChecklistCategories.title(category, language),
+        count: units.length,
+        padding: _firstHeaderPadding,
+      ),
+      CvLedger(children: [for (final site in units) _checklistRow(site)]),
+    ];
+  }
 
   List<Widget> _recordSections() {
     if (records.isEmpty) {

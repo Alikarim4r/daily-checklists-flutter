@@ -63,6 +63,7 @@ Map<String, dynamic> _encodeSite(ChecklistSite site) => {
   'building_code': site.buildingCode,
   'pin': site.pin,
   'checklist_type': site.checklistType,
+  'checklist_category': site.checklistCategory,
   'location': site.location,
   'is_active': site.isActive,
   'report_logo_path': site.reportLogoPath,

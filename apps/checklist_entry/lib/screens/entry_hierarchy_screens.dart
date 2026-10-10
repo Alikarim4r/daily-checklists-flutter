@@ -116,24 +116,7 @@ class EntryCampusesScreen extends ConsumerWidget {
   final String language;
   final ValueChanged<String> onLanguageChanged;
 
-  void _openChecklist(BuildContext context, ChecklistSite site) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => EntrySiteScreen(
-          profile: profile,
-          site: site,
-          language: language,
-          onLanguageChanged: onLanguageChanged,
-        ),
-      ),
-    );
-  }
-
   void _openCampus(BuildContext context, CampusChecklistGroup group) {
-    if (group.checklists.length == 1 && group.campus == null) {
-      _openChecklist(context, group.checklists.first);
-      return;
-    }
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => EntryCampusScreen(
@@ -232,7 +215,6 @@ class EntryCampusScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final L = AppLabels(language);
     final ar = language == 'ar';
     return Scaffold(
       appBar: AppBar(title: Text(group.titleFor(language))),
@@ -251,8 +233,8 @@ class EntryCampusScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 10),
             CiWorkHeader(
-              title: L.siteChecklists,
-              subtitle: L.selectChecklistHint,
+              title: ar ? 'اختر صنف قوائم الفحص' : 'Select checklist category',
+              subtitle: group.titleFor(language),
               meta: [
                 CiMeta(
                   ar
@@ -263,56 +245,145 @@ class EntryCampusScreen extends ConsumerWidget {
               ],
             ),
             CiSectionLabel(
-              title: ar ? 'قوائم الفحص' : 'Checklists',
-              count: group.checklists.length,
+              title: ar ? 'أصناف قوائم الفحص' : 'Checklist categories',
+              count: ChecklistCategories.groupAvailable(
+                group.checklists,
+              ).length,
             ),
-            if (group.checklists.isEmpty)
+            if (ChecklistCategories.groupAvailable(group.checklists).isEmpty)
               CiEmptyState(
                 title: ar ? 'لا توجد قوائم فحص' : 'No checklists available',
                 message: ar
-                    ? 'هذا الموقع لا يحتوي حاليًا على قائمة قابلة للإدخال.'
-                    : 'This site currently has no checklist available for entry.',
+                    ? 'لم تُنشأ أي قائمة لهذا الموقع بعد.'
+                    : 'No checklists are assigned to this site yet.',
                 icon: Icons.playlist_remove_rounded,
               )
             else
               CiQueuePanel(
                 children: [
-                  for (final site in group.checklists)
+                  for (final entry in ChecklistCategories.groupAvailable(
+                    group.checklists,
+                  ).entries)
                     CiQueueRow(
-                      title: site.nameFor(language),
-                      subtitle: site.location,
-                      icon: Icons.fact_check_outlined,
-                      meta: [
-                        CiMeta(site.buildingCode, icon: Icons.tag_rounded),
-                        CiMeta(
-                          site.checklistType,
-                          icon: Icons.description_outlined,
-                        ),
-                      ],
-                      trailing: Container(
-                        width: 12,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: site.paperTheme.accent,
-                          borderRadius: BorderRadius.circular(6),
+                      title: ChecklistCategories.title(entry.key, language),
+                      subtitle: ar
+                          ? '${entry.value.length} قوائم'
+                          : '${entry.value.length} checklists',
+                      icon: Icons.folder_outlined,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => EntryCategoryScreen(
+                            profile: profile,
+                            group: group,
+                            category: entry.key,
+                            language: language,
+                            onLanguageChanged: onLanguageChanged,
+                          ),
                         ),
                       ),
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => EntrySiteScreen(
-                              profile: profile,
-                              site: site,
-                              parentCampus: group.campus,
-                              language: language,
-                              onLanguageChanged: onLanguageChanged,
-                            ),
-                          ),
-                        );
-                      },
                     ),
                 ],
               ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Only lists belonging to the selected, nonempty category are rendered.
+class EntryCategoryScreen extends ConsumerWidget {
+  const EntryCategoryScreen({
+    super.key,
+    required this.profile,
+    required this.group,
+    required this.category,
+    required this.language,
+    required this.onLanguageChanged,
+  });
+
+  final Profile profile;
+  final CampusChecklistGroup group;
+  final String category;
+  final String language;
+  final ValueChanged<String> onLanguageChanged;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ar = language == 'ar';
+    final units =
+        ChecklistCategories.groupAvailable(group.checklists)[category] ??
+        const <ChecklistSite>[];
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(ChecklistCategories.title(category, language)),
+      ),
+      body: CiPageWidth(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          children: [
+            CiBreadcrumbs(
+              items: [
+                CiCrumb(
+                  group.titleFor(language),
+                  onTap: () => Navigator.pop(context),
+                ),
+                CiCrumb(ChecklistCategories.title(category, language)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            CiWorkHeader(
+              title: ChecklistCategories.title(category, language),
+              subtitle: ar
+                  ? 'اختر قائمة الفحص للإدخال'
+                  : 'Select a checklist to enter',
+              meta: [
+                CiMeta(
+                  ar ? '${units.length} قوائم' : '${units.length} checklists',
+                  icon: Icons.checklist_rounded,
+                ),
+              ],
+            ),
+            CiSectionLabel(
+              title: ar ? 'قوائم الفحص' : 'Checklists',
+              count: units.length,
+            ),
+            CiQueuePanel(
+              children: [
+                for (final site in units)
+                  CiQueueRow(
+                    title: site.nameFor(language),
+                    subtitle: site.location,
+                    icon: Icons.fact_check_outlined,
+                    meta: [
+                      CiMeta(site.buildingCode, icon: Icons.tag_rounded),
+                      CiMeta(
+                        site.checklistType,
+                        icon: Icons.description_outlined,
+                      ),
+                    ],
+                    trailing: Container(
+                      width: 12,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: site.paperTheme.accent,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                    ),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => EntrySiteScreen(
+                          profile: profile,
+                          site: site,
+                          parentCampus: group.campus,
+                          language: language,
+                          onLanguageChanged: onLanguageChanged,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ],
         ),
       ),

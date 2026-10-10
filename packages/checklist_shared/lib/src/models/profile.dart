@@ -95,6 +95,7 @@ class ChecklistSite {
     this.parentSiteId,
     this.pin = '',
     this.checklistType = 'DEFAULT',
+    this.checklistCategory = 'general',
     this.location = 'MOEHE Permanent Headquarters',
     this.isActive = true,
     this.reportLogoPath,
@@ -116,6 +117,7 @@ class ChecklistSite {
   final String buildingCode;
   final String pin;
   final String checklistType;
+  final String checklistCategory;
   final String location;
   final bool isActive;
 
@@ -167,6 +169,7 @@ class ChecklistSite {
     String? buildingCode,
     String? pin,
     String? checklistType,
+    String? checklistCategory,
     String? location,
     bool? isActive,
     String? reportLogoPath,
@@ -189,6 +192,7 @@ class ChecklistSite {
       buildingCode: buildingCode ?? this.buildingCode,
       pin: pin ?? this.pin,
       checklistType: checklistType ?? this.checklistType,
+      checklistCategory: checklistCategory ?? this.checklistCategory,
       location: location ?? this.location,
       isActive: isActive ?? this.isActive,
       reportLogoPath: clearLogo
@@ -217,6 +221,7 @@ class ChecklistSite {
       buildingCode: (json['building_code'] ?? '') as String,
       pin: (json['pin'] ?? '') as String,
       checklistType: (json['checklist_type'] ?? 'DEFAULT') as String,
+      checklistCategory: (json['checklist_category'] ?? 'general') as String,
       location: (json['location'] ?? 'MOEHE Permanent Headquarters') as String,
       isActive: json['is_active'] as bool? ?? true,
       reportLogoPath: json['report_logo_path'] as String?,
