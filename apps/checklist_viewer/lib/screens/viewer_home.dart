@@ -145,6 +145,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       _filterScope.filteredSections(orgSections, topFilters);
 
   void _onTopFiltersChanged(ChecklistFilterSelection next) {
+    if (_photoBusy || _unconfirmedPhotoPaths.isNotEmpty) return;
     final restricted = siteFilter != null;
     setState(() {
       topFilters = next;
@@ -183,6 +184,8 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
   );
   Uint8List? _signaturePreviewBytes;
   final Set<String> _pendingMediaDeletes = {};
+  bool _photoBusy = false;
+  final Set<String> _unconfirmedPhotoPaths = {};
 
   String get language => widget.language;
   bool get ar => language == 'ar';
@@ -934,10 +937,29 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
 
   Future<void> _save() async {
     final current = selected;
-    if (current == null || !_canEditSelected) return;
+    if (current == null || !_canEditSelected || _photoBusy) return;
     try {
       await _persistSignatureIfNeeded(current);
-      await ref.read(inspectionRepositoryProvider).saveItems(current);
+      final repository = ref.read(inspectionRepositoryProvider);
+      if (_unconfirmedPhotoPaths.isEmpty) {
+        await repository.saveItems(current);
+      } else {
+        final waiting = _unconfirmedPhotoPaths.toList();
+        final confirmed = await VerifiedPhotoSave.saveAndConfirm(
+          local: current,
+          photoPath: waiting.first,
+          save: repository.saveItems,
+          reload: repository.getById,
+        );
+        if (waiting.any(
+          (path) => !VerifiedPhotoSave.isLinked(confirmed, path),
+        )) {
+          throw StateError(
+            'One or more uploaded photos are not saved on the checklist.',
+          );
+        }
+        _unconfirmedPhotoPaths.clear();
+      }
       await _flushMediaDeletes();
       await ChecklistFeedback.success(
         soundEnabled: ref.read(soundEnabledProvider),
@@ -956,7 +978,20 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
 
   Future<void> _submit() async {
     final current = selected;
-    if (current == null || current.isSubmitted || !_canWriteSelected()) {
+    if (_unconfirmedPhotoPaths.isNotEmpty) {
+      if (mounted) {
+        setState(
+          () => message = ar
+              ? 'هناك صور تحتاج إلى تأكيد الحفظ. اضغط حفظ أولًا.'
+              : 'Photo attachments are not confirmed. Save this checklist first.',
+        );
+      }
+      return;
+    }
+    if (_photoBusy ||
+        current == null ||
+        current.isSubmitted ||
+        !_canWriteSelected()) {
       return;
     }
     if (!await _checkPhotoPolicy(current)) return;
@@ -1250,7 +1285,13 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     String? pairId,
   }) async {
     final current = selected;
-    if (current == null || !_canEditSelected) return;
+    if (current == null || !_canEditSelected || _photoBusy) return;
+    if (mounted) {
+      setState(() {
+        _photoBusy = true;
+        message = null;
+      });
+    }
     try {
       final file = await ImagePicker().pickImage(
         source: ImageSource.gallery,
@@ -1319,9 +1360,34 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
           item.appendFixImage(path, pairId: pairId);
         }
       });
-      await ref.read(inspectionRepositoryProvider).saveItems(current);
+      final repository = ref.read(inspectionRepositoryProvider);
+      _unconfirmedPhotoPaths.add(path);
+      await VerifiedPhotoSave.saveAndConfirm(
+        local: current,
+        photoPath: path,
+        save: repository.saveItems,
+        reload: repository.getById,
+      );
+      _unconfirmedPhotoPaths.remove(path);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              ar ? 'تم حفظ الصورة في الفحص' : 'Photo saved to checklist',
+            ),
+          ),
+        );
+      }
     } catch (e) {
-      if (mounted) setState(() => message = cvUserMessage(e, language));
+      if (mounted) {
+        setState(
+          () => message =
+              '${cvUserMessage(e, language)}  '
+              '${ar ? 'إذا ظهرت الصورة فلا تغلق الفحص؛ اضغط حفظ لإعادة المحاولة.' : 'If the photo is visible, keep the form open and retry Save.'}',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _photoBusy = false);
     }
   }
 
@@ -1332,7 +1398,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     String? pairId,
   }) async {
     final current = selected;
-    if (current == null || !_canEditSelected) return;
+    if (current == null || !_canEditSelected || _photoBusy) return;
     setState(() {
       if (isIssue) {
         item.removeIssueImage(path, pairId: pairId);
@@ -2330,6 +2396,12 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         alignment: WrapAlignment.end,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
+          if (_photoBusy)
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
           OutlinedButton.icon(
             onPressed: _exportSelected,
             icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
@@ -2370,14 +2442,17 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
             ),
           if (canEdit && !canSubmitDraft && !canApprove)
             FilledButton(
-              onPressed: _save,
+              onPressed: _photoBusy ? null : _save,
               child: Text(ar ? 'حفظ التعديلات' : 'Save changes'),
             ),
           if (canEdit && (canSubmitDraft || canApprove))
-            OutlinedButton(onPressed: _save, child: Text(ar ? 'حفظ' : 'Save')),
+            OutlinedButton(
+              onPressed: _photoBusy ? null : _save,
+              child: Text(ar ? 'حفظ' : 'Save'),
+            ),
           if (canSubmitDraft)
             FilledButton(
-              onPressed: _submit,
+              onPressed: _photoBusy ? null : _submit,
               child: Text(ar ? 'إرسال للاعتماد' : 'Submit for review'),
             ),
           if (canApprove) ...[
@@ -2390,7 +2465,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
               child: Text(ar ? 'رفض' : 'Reject'),
             ),
             FilledButton(
-              onPressed: _approve,
+              onPressed: _photoBusy ? null : _approve,
               child: Text(ar ? 'اعتماد للعرض' : 'Approve for view'),
             ),
           ],
@@ -2516,6 +2591,22 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
 
   void _closeExpandedInspection() {
     if (!mounted) return;
+    if (_photoBusy || _unconfirmedPhotoPaths.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _photoBusy
+                ? (ar
+                      ? 'انتظر اكتمال رفع الصورة'
+                      : 'Please wait for photo upload')
+                : (ar
+                      ? 'توجد صور لم يُتأكد من حفظها. اضغط حفظ قبل الرجوع.'
+                      : 'Unconfirmed photos: press Save before returning.'),
+          ),
+        ),
+      );
+      return;
+    }
     setState(() {
       selected = null;
       siteFilter = null;

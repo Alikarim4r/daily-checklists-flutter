@@ -53,6 +53,10 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
   );
   Uint8List? _signaturePreviewBytes;
   final Set<String> _pendingMediaDeletes = {};
+  // An uploaded storage object is not necessarily linked to its checklist.
+  // Keep it available for a manual Save retry until the server confirms it.
+  final Set<String> _unconfirmedPhotoPaths = {};
+  bool _exitAfterConfirmation = false;
 
   bool get ar => widget.language == 'ar';
 
@@ -215,13 +219,35 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
   }
 
   Future<void> _save() async {
-    if (!_canEdit) return;
+    if (!_canEdit || saving) return;
     setState(() => saving = true);
     try {
       await _persistSignatureIfNeeded();
-      await ref.read(inspectionRepositoryProvider).saveItems(inspection);
+      final repository = ref.read(inspectionRepositoryProvider);
+      if (_unconfirmedPhotoPaths.isEmpty) {
+        await repository.saveItems(inspection);
+      } else {
+        final waiting = _unconfirmedPhotoPaths.toList();
+        final confirmed = await VerifiedPhotoSave.saveAndConfirm(
+          local: inspection,
+          photoPath: waiting.first,
+          save: repository.saveItems,
+          reload: repository.getById,
+        );
+        if (waiting.any(
+          (path) => !VerifiedPhotoSave.isLinked(confirmed, path),
+        )) {
+          throw StateError(
+            'One or more uploaded photos are not saved on the checklist.',
+          );
+        }
+        _unconfirmedPhotoPaths.clear();
+      }
       await _flushMediaDeletes();
-      await widget.onChanged();
+      try {
+        await widget.onChanged();
+      } catch (_) {}
+
       await ChecklistFeedback.success(
         soundEnabled: ref.read(soundEnabledProvider),
         hapticsEnabled: ref.read(hapticsEnabledProvider),
@@ -239,7 +265,15 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
   }
 
   Future<void> _submit() async {
-    if (inspection.isSubmitted || !_canWrite) return;
+    if (saving || inspection.isSubmitted || !_canWrite) return;
+    if (_unconfirmedPhotoPaths.isNotEmpty) {
+      setState(
+        () => message = ar
+            ? 'هناك صور لم يتم تأكيد حفظها بعد. اضغط حفظ أولًا.'
+            : 'Some photo attachments are unconfirmed. Save the checklist first.',
+      );
+      return;
+    }
     if (!await _checkPhotoPolicy()) return;
     if (!mounted) return;
     final ok = await showDialog<bool>(
@@ -433,7 +467,13 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
     required bool isIssue,
     String? pairId,
   }) async {
-    if (!_canEdit) return;
+    if (!_canEdit || saving) return;
+    if (mounted) {
+      setState(() {
+        saving = true;
+        message = null;
+      });
+    }
     try {
       final file = await ImagePicker().pickImage(
         source: ImageSource.gallery,
@@ -509,9 +549,39 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
           item.appendFixImage(path, pairId: pairId);
         }
       });
-      await ref.read(inspectionRepositoryProvider).saveItems(inspection);
+      final repository = ref.read(inspectionRepositoryProvider);
+      _unconfirmedPhotoPaths.add(path);
+      await VerifiedPhotoSave.saveAndConfirm(
+        local: inspection,
+        photoPath: path,
+        save: repository.saveItems,
+        reload: repository.getById,
+      );
+      _unconfirmedPhotoPaths.remove(path);
+      // The Viewer stack also needs refreshing after auto-save; don't show a
+      // misleading failure when a nonessential background refresh times out.
+      try {
+        await widget.onChanged();
+      } catch (_) {}
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              ar ? 'تم حفظ الصورة في الفحص' : 'Photo saved to checklist',
+            ),
+          ),
+        );
+      }
     } catch (e) {
-      if (mounted) setState(() => message = cvUserMessage(e, widget.language));
+      if (mounted) {
+        setState(
+          () => message =
+              '${cvUserMessage(e, widget.language)}  '
+              '${ar ? 'إذا ظهرت الصورة فلا تغلق الفحص؛ اضغط حفظ لإعادة المحاولة.' : 'If the photo is visible, keep the form open and retry Save.'}',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => saving = false);
     }
   }
 
@@ -521,7 +591,7 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
     required bool isIssue,
     String? pairId,
   }) async {
-    if (!_canEdit) return;
+    if (!_canEdit || saving) return;
     setState(() {
       if (isIssue) {
         item.removeIssueImage(path, pairId: pairId);
@@ -666,6 +736,46 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
     return actions.isEmpty ? null : CvActionBar(actions: actions);
   }
 
+  Future<void> _confirmExitWithPhotos() async {
+    if (saving) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            ar
+                ? 'انتظر حتى يكتمل رفع الصورة'
+                : 'Wait for photo upload to finish',
+          ),
+        ),
+      );
+      return;
+    }
+    if (_unconfirmedPhotoPaths.isEmpty) return;
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(ar ? 'صور لم تُحفظ بعد' : 'Unsaved photo attachments'),
+        content: Text(
+          ar
+              ? 'تم رفع صورة ولكن لم يتأكد حفظها داخل الفحص. يمكنك البقاء والضغط على حفظ، أو المغادرة دون ربط الصورة.'
+              : 'A photo was uploaded, but saving its checklist link was not confirmed. Stay and retry Save, or leave without attaching it.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(ar ? 'البقاء' : 'Stay'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(ar ? 'المغادرة' : 'Leave'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || leave != true) return;
+    setState(() => _exitAfterConfirmation = true);
+    Navigator.of(context).pop();
+  }
+
   @override
   Widget build(BuildContext context) {
     final canEdit = _canEdit;
@@ -709,142 +819,153 @@ class _InspectionFormPageState extends ConsumerState<InspectionFormPage> {
         ),
     ];
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          inspection.buildingCode,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        actions: [
-          IconButton(
-            tooltip: ar ? 'تقرير PDF' : 'PDF report',
-            onPressed: busy ? null : _exportReport,
-            icon: const Icon(Icons.picture_as_pdf_outlined),
+    return PopScope(
+      canPop:
+          _exitAfterConfirmation || (!saving && _unconfirmedPhotoPaths.isEmpty),
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) _confirmExitWithPhotos();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(
+            inspection.buildingCode,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
-          if (menu.isNotEmpty)
-            PopupMenuButton<_FormMenuAction>(
-              tooltip: ar ? 'إجراءات أخرى' : 'More actions',
-              enabled: !busy,
-              icon: const Icon(Icons.more_vert),
-              itemBuilder: (_) => menu,
-              onSelected: (action) => switch (action) {
-                _FormMenuAction.createCorrectiveAction =>
-                  _createCorrectiveAction(),
-                _FormMenuAction.save => _save(),
-                _FormMenuAction.cancelInspection => _cancelWorkflow(),
-              },
+          actions: [
+            IconButton(
+              tooltip: ar ? 'تقرير PDF' : 'PDF report',
+              onPressed: busy ? null : _exportReport,
+              icon: const Icon(Icons.picture_as_pdf_outlined),
             ),
-          const SizedBox(width: 4),
-        ],
-      ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Keep the form usable with the keyboard open or on short screens.
-          if (compactHeader)
-            CvDatumLine(loading: busy)
-          else
-            inspectionTitleBlock(
-              inspection: inspection,
-              language: widget.language,
-              loading: busy,
-            ),
-          if (message != null)
-            CvBanner(
-              tone: CvBannerTone.error,
-              message: message!,
-              onDismiss: () => setState(() => message = null),
-            ),
-          if (inspection.workflowNote?.trim().isNotEmpty == true)
-            InspectionWorkflowNote(
-              inspection: inspection,
-              language: widget.language,
-            ),
-          Expanded(
-            child: A4PaperSheet(
-              child: ChecklistFormLayout(
+            if (menu.isNotEmpty)
+              PopupMenuButton<_FormMenuAction>(
+                tooltip: ar ? 'إجراءات أخرى' : 'More actions',
+                enabled: !busy,
+                icon: const Icon(Icons.more_vert),
+                itemBuilder: (_) => menu,
+                onSelected: (action) => switch (action) {
+                  _FormMenuAction.createCorrectiveAction =>
+                    _createCorrectiveAction(),
+                  _FormMenuAction.save => _save(),
+                  _FormMenuAction.cancelInspection => _cancelWorkflow(),
+                },
+              ),
+            const SizedBox(width: 4),
+          ],
+        ),
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Keep the form usable with the keyboard open or on short screens.
+            if (compactHeader)
+              CvDatumLine(loading: busy)
+            else
+              inspectionTitleBlock(
                 inspection: inspection,
                 language: widget.language,
-                forceTableLayout: true,
-                readOnly: !canEdit,
-                overdueItemIndexes: overdueIndexes,
-                issueOpenTooltipsByPath: issueOpenTooltips,
-                onInspectorChanged: (v) =>
-                    setState(() => inspection.inspectorName = v),
-                onTimeChanged: (v) =>
-                    setState(() => inspection.inspectionTime = v),
-                onFloorChanged: (v) =>
-                    setState(() => inspection.floorLabel = v),
-                onLocationChanged: (v) =>
-                    setState(() => inspection.locationLabel = v),
-                onPinChanged: (v) => setState(() {
-                  inspection.pin = v;
-                  inspection.pinOverride = v;
-                }),
-                onBuildingNoChanged: (v) =>
-                    setState(() => inspection.buildingCode = v),
-                onResponseChanged: (item, value) {
-                  final err = item.trySetResponse(
-                    value,
-                    language: widget.language,
-                  );
-                  if (err != null && mounted) {
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(SnackBar(content: Text(err)));
-                  }
-                  setState(() {});
-                },
-                onActionsChanged: (item, value) =>
-                    setState(() => item.actionsTaken = value),
-                onPickIssuePhoto: canEdit
-                    ? (item, [pairId]) =>
-                          _pickPhoto(item, isIssue: true, pairId: pairId)
-                    : null,
-                onPickFixPhoto: canEdit
-                    ? (item, [pairId]) =>
-                          _pickPhoto(item, isIssue: false, pairId: pairId)
-                    : null,
-                onClearIssuePhoto: canEdit
-                    ? (item, path, [pairId]) =>
-                          _clearPhoto(item, path, isIssue: true, pairId: pairId)
-                    : null,
-                onClearFixPhoto: canEdit
-                    ? (item, path, [pairId]) => _clearPhoto(
-                        item,
-                        path,
-                        isIssue: false,
-                        pairId: pairId,
-                      )
-                    : null,
-                onAddItem: canManage ? _addCustomItem : null,
-                onDeleteItem: canManage ? _deleteCustomItem : null,
-                signatureController: canEdit ? _signature : null,
-                signaturePreviewBytes: _signaturePreviewBytes,
-                onClearSignature: canEdit
-                    ? () {
-                        _signature.clear();
-                        final oldPath = inspection.signaturePath;
-                        if (oldPath != null && oldPath.isNotEmpty) {
-                          _pendingMediaDeletes.add(oldPath);
+                loading: busy,
+              ),
+            if (message != null)
+              CvBanner(
+                tone: CvBannerTone.error,
+                message: message!,
+                onDismiss: () => setState(() => message = null),
+              ),
+            if (inspection.workflowNote?.trim().isNotEmpty == true)
+              InspectionWorkflowNote(
+                inspection: inspection,
+                language: widget.language,
+              ),
+            Expanded(
+              child: A4PaperSheet(
+                child: ChecklistFormLayout(
+                  inspection: inspection,
+                  language: widget.language,
+                  forceTableLayout: true,
+                  readOnly: !canEdit,
+                  overdueItemIndexes: overdueIndexes,
+                  issueOpenTooltipsByPath: issueOpenTooltips,
+                  onInspectorChanged: (v) =>
+                      setState(() => inspection.inspectorName = v),
+                  onTimeChanged: (v) =>
+                      setState(() => inspection.inspectionTime = v),
+                  onFloorChanged: (v) =>
+                      setState(() => inspection.floorLabel = v),
+                  onLocationChanged: (v) =>
+                      setState(() => inspection.locationLabel = v),
+                  onPinChanged: (v) => setState(() {
+                    inspection.pin = v;
+                    inspection.pinOverride = v;
+                  }),
+                  onBuildingNoChanged: (v) =>
+                      setState(() => inspection.buildingCode = v),
+                  onResponseChanged: (item, value) {
+                    final err = item.trySetResponse(
+                      value,
+                      language: widget.language,
+                    );
+                    if (err != null && mounted) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text(err)));
+                    }
+                    setState(() {});
+                  },
+                  onActionsChanged: (item, value) =>
+                      setState(() => item.actionsTaken = value),
+                  onPickIssuePhoto: canEdit
+                      ? (item, [pairId]) =>
+                            _pickPhoto(item, isIssue: true, pairId: pairId)
+                      : null,
+                  onPickFixPhoto: canEdit
+                      ? (item, [pairId]) =>
+                            _pickPhoto(item, isIssue: false, pairId: pairId)
+                      : null,
+                  onClearIssuePhoto: canEdit
+                      ? (item, path, [pairId]) => _clearPhoto(
+                          item,
+                          path,
+                          isIssue: true,
+                          pairId: pairId,
+                        )
+                      : null,
+                  onClearFixPhoto: canEdit
+                      ? (item, path, [pairId]) => _clearPhoto(
+                          item,
+                          path,
+                          isIssue: false,
+                          pairId: pairId,
+                        )
+                      : null,
+                  onAddItem: canManage ? _addCustomItem : null,
+                  onDeleteItem: canManage ? _deleteCustomItem : null,
+                  signatureController: canEdit ? _signature : null,
+                  signaturePreviewBytes: _signaturePreviewBytes,
+                  onClearSignature: canEdit
+                      ? () {
+                          _signature.clear();
+                          final oldPath = inspection.signaturePath;
+                          if (oldPath != null && oldPath.isNotEmpty) {
+                            _pendingMediaDeletes.add(oldPath);
+                          }
+                          setState(() {
+                            _signaturePreviewBytes = null;
+                            inspection.signaturePath = null;
+                          });
                         }
-                        setState(() {
-                          _signaturePreviewBytes = null;
-                          inspection.signaturePath = null;
-                        });
-                      }
-                    : null,
+                      : null,
+                ),
               ),
             ),
-          ),
-        ],
-      ),
-      bottomNavigationBar: _actionBar(
-        canEdit: canEdit,
-        canSubmit: canSubmit,
-        canApprove: canApprove,
-        busy: busy,
+          ],
+        ),
+        bottomNavigationBar: _actionBar(
+          canEdit: canEdit,
+          canSubmit: canSubmit,
+          canApprove: canApprove,
+          busy: busy,
+        ),
       ),
     );
   }
