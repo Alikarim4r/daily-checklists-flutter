@@ -15,6 +15,7 @@ class ResolvedOrgHeader extends StatefulWidget {
     required this.siteNameAr,
     required this.siteNameEn,
     required this.buildingCode,
+    this.secondLineOverride,
   });
 
   final String siteId;
@@ -22,6 +23,7 @@ class ResolvedOrgHeader extends StatefulWidget {
   final String siteNameAr;
   final String siteNameEn;
   final String buildingCode;
+  final String? secondLineOverride;
 
   @override
   State<ResolvedOrgHeader> createState() => _ResolvedOrgHeaderState();
@@ -90,9 +92,10 @@ class _ResolvedOrgHeaderState extends State<ResolvedOrgHeader> {
               ),
               const SizedBox(height: 4),
               Text(
-                _ar
-                    ? 'قائمة الفحص اليومي للمرافق - $siteLabel'
-                    : 'Facilities Daily Inspection Checklist - $siteLabel',
+                widget.secondLineOverride ??
+                    (_ar
+                        ? 'قائمة الفحص اليومي للمرافق - $siteLabel'
+                        : 'Facilities Daily Inspection Checklist - $siteLabel'),
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w800,

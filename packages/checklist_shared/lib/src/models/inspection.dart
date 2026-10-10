@@ -438,6 +438,7 @@ class Inspection {
     List<InspectionItem>? items,
     this.siteNameEn = '',
     this.siteNameAr = '',
+    this.siteChecklistType = '',
     this.pin = '',
     this.pinOverride,
     this.organizationId = '',
@@ -482,6 +483,10 @@ class Inspection {
   final List<InspectionItem> items;
   final String siteNameEn;
   final String siteNameAr;
+
+  /// Joined site template code, used only for accurate paper header labels.
+  /// Does not modify stored form responses or site metadata.
+  final String siteChecklistType;
   String pin;
   String? pinOverride;
   final String organizationId;
@@ -569,6 +574,7 @@ class Inspection {
       items: items,
       siteNameEn: (site?['name_en'] ?? '') as String,
       siteNameAr: (site?['name_ar'] ?? '') as String,
+      siteChecklistType: (site?['checklist_type'] ?? '') as String,
       pin: (json['pin_override'] ?? site?['pin'] ?? '') as String,
       pinOverride: json['pin_override'] as String?,
       organizationId:

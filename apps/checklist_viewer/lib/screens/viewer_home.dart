@@ -117,6 +117,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       pin: site.pin,
       siteNameEn: site.nameEn,
       siteNameAr: site.nameAr,
+      siteChecklistType: site.checklistType,
       organizationId: site.organizationId,
       formTheme: site.formTheme,
       formThemeAccent: site.formThemeAccent,

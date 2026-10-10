@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/enums.dart';
 import '../models/inspection.dart';
+import '../utils/washroom_paper_title.dart';
 import '../repositories/inspection_repository.dart';
 import '../theme/form_paper_theme.dart';
 import '../utils/signature_ink.dart';
@@ -712,9 +713,10 @@ class InspectionReportExporter {
           ),
           pw.SizedBox(height: 3),
           pw.Text(
-            ar
-                ? 'قائمة الفحص اليومي للمرافق - $siteName'
-                : 'Facilities Daily Inspection Checklist - $siteName',
+            washroomPaperSecondLine(inspection) ??
+                (ar
+                    ? 'قائمة الفحص اليومي للمرافق - $siteName'
+                    : 'Facilities Daily Inspection Checklist - $siteName'),
             style: pw.TextStyle(
               fontSize: 11,
               fontWeight: pw.FontWeight.bold,

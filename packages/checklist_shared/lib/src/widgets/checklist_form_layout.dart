@@ -12,6 +12,7 @@ import '../providers/providers.dart';
 import '../theme/checklist_brand.dart';
 import '../theme/form_paper_theme.dart';
 import '../utils/photo_pair.dart';
+import '../utils/washroom_paper_title.dart';
 import '../utils/signature_ink.dart';
 import '../utils/storage_path_list.dart';
 import 'checklist_branding_widgets.dart';
@@ -187,6 +188,7 @@ class ChecklistFormLayout extends ConsumerWidget {
       siteNameAr: inspection.siteNameAr,
       siteNameEn: inspection.siteNameEn,
       buildingCode: inspection.buildingCode,
+      secondLineOverride: washroomPaperSecondLine(inspection),
     );
   }
 
