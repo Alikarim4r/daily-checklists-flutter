@@ -13,6 +13,7 @@ import '../design/checkview_tokens.dart';
 import '../design/checkview_errors.dart';
 import '../design/checkview_widgets.dart';
 import '../models/stacked_checklist_filtering.dart';
+import '../models/viewer_filter_distribution.dart';
 import 'checkview_notices.dart';
 import 'corrective_actions_screen.dart';
 import 'inspection_dialogs.dart';
@@ -65,6 +66,29 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
   bool filtersExpanded = true;
   ChecklistFillFilter _completionFilter = ChecklistFillFilter.all;
   final Map<String, Future<Inspection>> _blankPreviews = {};
+  Future<Map<String, List<CatalogItem>>>? _previewCatalogFuture;
+  String _previewCatalogSiteSignature = '';
+
+  Future<Map<String, List<CatalogItem>>> _catalogForPreview() {
+    final signature = sites.map((s) => '${s.id}:${s.checklistType}').toList()
+      ..sort();
+    final next = signature.join('|');
+    if (_previewCatalogFuture == null || next != _previewCatalogSiteSignature) {
+      _previewCatalogSiteSignature = next;
+      final future = ref
+          .read(catalogRepositoryProvider)
+          .listEffectiveCatalogForSites(sites);
+      _previewCatalogFuture = future.catchError((
+        Object error,
+        StackTrace stack,
+      ) {
+        // A failed request must never be cached forever: allow retry.
+        _previewCatalogFuture = null;
+        Error.throwWithStackTrace(error, stack);
+      });
+    }
+    return _previewCatalogFuture!;
+  }
 
   List<ChecklistFilterRow> get _visibleChecklistRows =>
       StackedChecklistFiltering.select(
@@ -75,12 +99,13 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       );
 
   Future<Inspection> _makeBlankPreview(ChecklistSite site) async {
-    final catalog = await ref
-        .read(catalogRepositoryProvider)
-        .listEffectiveCatalogForSite(
-          checklistType: site.checklistType,
-          siteId: site.id,
-        );
+    // All blank sheets share a batched catalog. Individual exceptions are not
+    // converted to empty checklists, which would hide missing inspection items.
+    final catalogBySite = await _catalogForPreview();
+    final catalog = catalogBySite[site.id];
+    if (catalog == null) {
+      throw StateError('Checklist catalog unavailable for ${site.id}');
+    }
     return Inspection(
       id: 'preview-${site.id}',
       siteId: site.id,
@@ -512,14 +537,16 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
   }
 
   /// Reloads the workspace (used by the shell when returning to this tab).
-  Future<void> reload() => _load();
+  Future<void> reload() => _load(refreshWorkspace: true);
 
   void _setCompletionFilter(ChecklistFillFilter value) {
     setState(() => _completionFilter = value);
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool refreshWorkspace = false}) async {
     final generation = ++_loadGeneration;
+    // Make a refresh retry failures instead of reusing rejected preview futures.
+    _blankPreviews.clear();
     if (mounted) {
       setState(() {
         loading = true;
@@ -530,30 +557,47 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       final siteRepo = ref.read(siteRepositoryProvider);
       final inspRepo = ref.read(inspectionRepositoryProvider);
       final orgRepo = ref.read(organizationRepositoryProvider);
-      final foundation = await Future.wait<Object>([
-        siteRepo.listAccessibleCampusGroups(profile: widget.profile),
-        orgRepo.listOrganizations(activeOnly: true),
-        orgRepo.listAllZones(),
-        siteRepo.listMySiteAccess(),
-        _safeUnreadNotifications(),
-        ref
-            .read(locationHierarchyRepositoryProvider)
-            .listMyChecklistLocationScope()
-            .then((s) => s.leaves)
-            .catchError((_) => <LocationScopeLeaf>[]),
-      ]);
-      if (!mounted || generation != _loadGeneration) return;
-      final groups = foundation[0] as List<CampusChecklistGroup>;
-      final orgs = foundation[1] as List<Organization>;
-      final allZones = foundation[2] as List<Zone>;
-      final access = foundation[3] as List<UserSiteAccess>;
-      final workflow = foundation[4] as List<WorkflowNotification>;
-      final locationLeaves = foundation[5] as List<LocationScopeLeaf>;
-      final sections = groupCampusGroupsByOrgThenZone(
-        organizations: orgs,
-        zones: allZones.where((z) => z.isActive).toList(),
-        groups: groups,
-      );
+      // Date changes need inspection data only. The organization/site tree,
+      // hierarchy and access grants are cached until explicit refresh/reload.
+      final bool useCachedWorkspace =
+          !refreshWorkspace && _loadedOnce && campusGroups.isNotEmpty;
+      late final List<CampusChecklistGroup> groups;
+      late final List<OrgBrowseSection> sections;
+      late final List<UserSiteAccess> access;
+      late final List<WorkflowNotification> workflow;
+      late final List<LocationScopeLeaf> locationLeaves;
+      if (useCachedWorkspace) {
+        groups = campusGroups;
+        sections = orgSections;
+        access = myAccess;
+        workflow = workflowNotifications;
+        locationLeaves = _locationLeaves;
+      } else {
+        final foundation = await Future.wait<Object>([
+          siteRepo.listAccessibleCampusGroups(profile: widget.profile),
+          orgRepo.listOrganizations(activeOnly: true),
+          orgRepo.listAllZones(),
+          siteRepo.listMySiteAccess(),
+          _safeUnreadNotifications(),
+          ref
+              .read(locationHierarchyRepositoryProvider)
+              .listMyChecklistLocationScope()
+              .then((s) => s.leaves)
+              .catchError((_) => <LocationScopeLeaf>[]),
+        ]);
+        if (!mounted || generation != _loadGeneration) return;
+        groups = foundation[0] as List<CampusChecklistGroup>;
+        final orgs = foundation[1] as List<Organization>;
+        final allZones = foundation[2] as List<Zone>;
+        access = foundation[3] as List<UserSiteAccess>;
+        workflow = foundation[4] as List<WorkflowNotification>;
+        locationLeaves = foundation[5] as List<LocationScopeLeaf>;
+        sections = groupCampusGroupsByOrgThenZone(
+          organizations: orgs,
+          zones: allZones.where((z) => z.isActive).toList(),
+          groups: groups,
+        );
+      }
       final siteList = [for (final g in groups) ...g.checklists];
       final list = siteFilter == null
           ? await inspRepo.listInspectionsForSites(
@@ -1172,6 +1216,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       selected = null;
       siteFilter = null;
       _blankPreviews.clear();
+      records = [];
     });
     await _load();
   }
@@ -1853,7 +1898,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       sections = _rootSections();
     }
     return RefreshIndicator(
-      onRefresh: _load,
+      onRefresh: () => _load(refreshWorkspace: true),
       child: AnimatedOpacity(
         // Stale content stays readable but visibly yields while refreshing.
         opacity: loading ? 0.55 : 1,
@@ -1979,68 +2024,133 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       selected = null;
       siteFilter = null;
       _blankPreviews.clear();
+      records = [];
     });
     _load();
   }
+
+  String _facetLabel(ChecklistFacet facet) => switch (facet) {
+    ChecklistFacet.organization =>
+      ar ? 'المنظمات / الشركات' : 'Organizations / Companies',
+    ChecklistFacet.zone => ar ? 'المناطق' : 'Zones',
+    ChecklistFacet.site => ar ? 'المواقع' : 'Sites',
+    ChecklistFacet.category => ar ? 'أصناف القوائم' : 'Checklist Categories',
+    ChecklistFacet.building => ar ? 'المباني' : 'Buildings',
+    ChecklistFacet.floor => ar ? 'الطوابق' : 'Floors',
+    ChecklistFacet.area => ar ? 'الأحيزة' : 'Areas / Spaces',
+  };
+
+  /// Only show filters that offer a real choice within the user's permitted
+  /// locations. Selected filters stay visible so the user can choose All.
+  List<ChecklistFacet> get _visibleFacets =>
+      ViewerFilterDistribution.visibleFacets(_filterScope, topFilters);
+
+  String _completionLabel(ChecklistFillFilter value) => switch (value) {
+    ChecklistFillFilter.all => ar ? 'الكل' : 'All',
+    ChecklistFillFilter.filled => ar ? 'المعبأة' : 'Filled',
+    ChecklistFillFilter.unfilled => ar ? 'غير المكتملة' : 'Not filled',
+  };
+
+  Widget _fluidFilterStrip() => LayoutBuilder(
+    builder: (context, constraints) {
+      final facets = _visibleFacets;
+      // Completion status shares exactly the same row, height and width as
+      // every other filter, regardless of the user's organization/permissions.
+      final count = facets.length + 1;
+      const margin = 8.0;
+      const gap = 8.0;
+      const minWidth = 142.0;
+      final width = ViewerFilterDistribution.fieldWidth(
+        constraints.maxWidth,
+        count,
+        minimum: minWidth,
+        margin: margin,
+        gap: gap,
+      );
+      Widget cell(Widget child) => SizedBox(width: width, child: child);
+      return Material(
+        color: Theme.of(context).colorScheme.surfaceContainerLowest,
+        child: SizedBox(
+          height: 76,
+          child: SingleChildScrollView(
+            key: const Key('viewer-fluid-filter-scroll'),
+            scrollDirection: Axis.horizontal,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: margin,
+                vertical: 8,
+              ),
+              child: Row(
+                spacing: gap,
+                children: [
+                  for (final facet in facets)
+                    cell(
+                      OperationsStyleDropdown<String>(
+                        key: ValueKey('viewer-facet-${facet.name}'),
+                        label: _facetLabel(facet),
+                        valueLabel: topFilters.valueFor(facet) == null
+                            ? (ar ? 'الكل' : 'All')
+                            : _filterScope
+                                      .optionsFor(facet, topFilters)
+                                      .where(
+                                        (e) =>
+                                            e.value ==
+                                            topFilters.valueFor(facet),
+                                      )
+                                      .map((e) => e.nameFor(language))
+                                      .firstOrNull ??
+                                  (ar ? 'الكل' : 'All'),
+                        choices: [
+                          OperationsFilterChoice(
+                            value: '',
+                            label: ar ? 'الكل' : 'All',
+                          ),
+                          for (final option in _filterScope.optionsFor(
+                            facet,
+                            topFilters,
+                          ))
+                            OperationsFilterChoice(
+                              value: option.value,
+                              label: option.nameFor(language),
+                            ),
+                        ],
+                        onSelected: (value) => _onTopFiltersChanged(
+                          topFilters.choose(
+                            facet,
+                            value.isEmpty ? null : value,
+                          ),
+                        ),
+                      ),
+                    ),
+                  cell(
+                    OperationsStyleDropdown<ChecklistFillFilter>(
+                      key: const Key('viewer-completion-filter'),
+                      label: ar ? 'حالة التعبئة' : 'Completion',
+                      valueLabel: _completionLabel(_completionFilter),
+                      choices: [
+                        for (final value in ChecklistFillFilter.values)
+                          OperationsFilterChoice(
+                            value: value,
+                            label: _completionLabel(value),
+                          ),
+                      ],
+                      onSelected: _setCompletionFilter,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
 
   Widget _stackFilterPanel() => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       _compactFilterHeader(),
-      if (filtersExpanded)
-        SizedBox(
-          height: 76,
-          child: Row(
-            children: [
-              Expanded(
-                child: ChecklistScopeFilterBar(
-                  scope: _filterScope,
-                  selection: topFilters,
-                  language: language,
-                  onChanged: _onTopFiltersChanged,
-                  operationsStyle: true,
-                  showResetButton: false,
-                ),
-              ),
-              if (_isReviewer && MediaQuery.sizeOf(context).width < 560)
-                IconButton(
-                  tooltip: _listModeLabel(listMode),
-                  onPressed: _pickListMode,
-                  icon: const Icon(Icons.fact_check_outlined),
-                ),
-              SizedBox(
-                width: MediaQuery.sizeOf(context).width < 560 ? 136 : 162,
-                child: Padding(
-                  padding: const EdgeInsetsDirectional.only(end: 8),
-                  child: OperationsStyleDropdown<ChecklistFillFilter>(
-                    key: const Key('viewer-completion-filter'),
-                    label: ar ? 'حالة التعبئة' : 'Completion',
-                    valueLabel: switch (_completionFilter) {
-                      ChecklistFillFilter.all => ar ? 'الكل' : 'All',
-                      ChecklistFillFilter.filled => ar ? 'المعبأة' : 'Filled',
-                      ChecklistFillFilter.unfilled =>
-                        ar ? 'غير المكتملة' : 'Not filled',
-                    },
-                    choices: [
-                      for (final option in ChecklistFillFilter.values)
-                        OperationsFilterChoice<ChecklistFillFilter>(
-                          value: option,
-                          label: switch (option) {
-                            ChecklistFillFilter.all => ar ? 'الكل' : 'All',
-                            ChecklistFillFilter.filled =>
-                              ar ? 'المعبأة' : 'Filled',
-                            ChecklistFillFilter.unfilled =>
-                              ar ? 'غير المكتملة' : 'Not filled',
-                          },
-                        ),
-                    ],
-                    onSelected: _setCompletionFilter,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
+      if (filtersExpanded) _fluidFilterStrip(),
     ],
   );
 
@@ -2131,7 +2241,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         return false;
       },
       child: RefreshIndicator(
-        onRefresh: _load,
+        onRefresh: () => _load(refreshWorkspace: true),
         child: ListView.builder(
           key: const Key('viewer-checklist-stack'),
           physics: const AlwaysScrollableScrollPhysics(),
