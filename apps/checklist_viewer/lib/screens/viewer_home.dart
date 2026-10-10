@@ -12,6 +12,7 @@ import 'package:signature/signature.dart';
 import '../design/checkview_tokens.dart';
 import '../design/checkview_errors.dart';
 import '../design/checkview_widgets.dart';
+import '../models/stacked_checklist_filtering.dart';
 import 'checkview_notices.dart';
 import 'corrective_actions_screen.dart';
 import 'inspection_dialogs.dart';
@@ -59,6 +60,56 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
   List<OrgBrowseSection> orgSections = [];
   List<LocationScopeLeaf> _locationLeaves = [];
   ChecklistFilterSelection topFilters = const ChecklistFilterSelection();
+  // The top filters replace the former organization/site navigation pane.
+  bool filtersPinned = true;
+  bool filtersExpanded = true;
+  ChecklistFillFilter _completionFilter = ChecklistFillFilter.all;
+  final Map<String, Future<Inspection>> _blankPreviews = {};
+
+  List<ChecklistFilterRow> get _visibleChecklistRows =>
+      StackedChecklistFiltering.select(
+        scope: _filterScope,
+        selection: topFilters,
+        fill: _completionFilter,
+        records: records,
+      );
+
+  Future<Inspection> _makeBlankPreview(ChecklistSite site) async {
+    final catalog = await ref
+        .read(catalogRepositoryProvider)
+        .listEffectiveCatalogForSite(
+          checklistType: site.checklistType,
+          siteId: site.id,
+        );
+    return Inspection(
+      id: 'preview-${site.id}',
+      siteId: site.id,
+      buildingCode: site.displayBldgCode,
+      inspectionDate: date,
+      locationLabel: site.location.isNotEmpty ? site.location : site.nameEn,
+      floorLabel: site.reportFloor,
+      pin: site.pin,
+      siteNameEn: site.nameEn,
+      siteNameAr: site.nameAr,
+      organizationId: site.organizationId,
+      formTheme: site.formTheme,
+      formThemeAccent: site.formThemeAccent,
+      resolvedFormTheme: site.effectiveFormTheme,
+      resolvedFormThemeAccent: site.effectiveFormThemeAccent,
+      items: [
+        for (final item in catalog)
+          InspectionItem(
+            itemIndex: item.itemIndex,
+            description: item.descriptionEn,
+            descriptionAr: item.descriptionAr,
+            localizedDescriptions: item.localizedDescriptions,
+            defaultAnswer: item.defaultAnswer,
+            overdueAfterDays: item.overdueAfterDays,
+          ),
+      ],
+    );
+  }
+
   ChecklistScopeFilters get _filterScope => ChecklistScopeFilters.fromSections(
     orgSections,
     locationLeaves: _locationLeaves,
@@ -67,18 +118,14 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       _filterScope.filteredSections(orgSections, topFilters);
 
   void _onTopFiltersChanged(ChecklistFilterSelection next) {
-    final wasOnChecklist = siteFilter != null;
+    final restricted = siteFilter != null;
     setState(() {
       topFilters = next;
-      browseOrg = null;
-      browseZone = null;
-      browseCampus = null;
-      browseCategory = null;
-      browseSubcategory = null;
-      siteFilter = null;
       selected = null;
+      siteFilter = null;
+      _signaturePreviewBytes = null;
     });
-    if (wasOnChecklist) _load();
+    if (restricted) _load();
   }
 
   DateTime date = qatarBusinessNow();
@@ -113,6 +160,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
   String get language => widget.language;
   bool get ar => language == 'ar';
 
+  // ignore: unused_element
   bool get _canNavBack =>
       browseOrg != null ||
       browseZone != null ||
@@ -160,6 +208,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     return parts.join('  /  ');
   }
 
+  // ignore: unused_element
   void _navBack() {
     if (siteFilter != null) {
       setState(() {
@@ -464,6 +513,10 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
 
   /// Reloads the workspace (used by the shell when returning to this tab).
   Future<void> reload() => _load();
+
+  void _setCompletionFilter(ChecklistFillFilter value) {
+    setState(() => _completionFilter = value);
+  }
 
   Future<void> _load() async {
     final generation = ++_loadGeneration;
@@ -1108,7 +1161,12 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       lastDate: today,
     );
     if (picked == null || !mounted) return;
-    setState(() => date = picked);
+    setState(() {
+      date = picked;
+      selected = null;
+      siteFilter = null;
+      _blankPreviews.clear();
+    });
     await _load();
   }
 
@@ -1391,6 +1449,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
 
   String get _dateIso => DateFormat('yyyy-MM-dd').format(date);
 
+  // ignore: unused_element
   CvTitleBlock _contextBlock() {
     return CvTitleBlock(
       loading: loading,
@@ -1767,6 +1826,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     ];
   }
 
+  // ignore: unused_element
   Widget _browsePane() {
     if (!_loadedOnce) {
       return ListView(
@@ -1805,6 +1865,360 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       ),
     );
   }
+
+  Widget _compactFilterHeader() {
+    final colors = Theme.of(context).colorScheme;
+    final compact = MediaQuery.sizeOf(context).width < 560;
+    const smallIcon = BoxConstraints.tightFor(width: 36, height: 40);
+    return Material(
+      color: colors.surface,
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: colors.outlineVariant)),
+        ),
+        child: Row(
+          children: [
+            IconButton(
+              key: const Key('viewer-filter-toggle'),
+              constraints: compact ? smallIcon : null,
+              padding: EdgeInsets.zero,
+              tooltip: filtersExpanded
+                  ? (ar ? 'طيّ الفلاتر' : 'Collapse filters')
+                  : (ar ? 'إظهار الفلاتر' : 'Show filters'),
+              icon: Icon(
+                filtersExpanded
+                    ? Icons.keyboard_arrow_up_rounded
+                    : Icons.keyboard_arrow_down_rounded,
+              ),
+              onPressed: () =>
+                  setState(() => filtersExpanded = !filtersExpanded),
+            ),
+            Expanded(
+              child: InkWell(
+                onTap: () => setState(() => filtersExpanded = !filtersExpanded),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 9,
+                    horizontal: 3,
+                  ),
+                  child: Text(
+                    ar ? 'الفلاتر' : 'Filters',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ),
+            IconButton(
+              key: const Key('viewer-filter-pin'),
+              constraints: compact ? smallIcon : null,
+              padding: EdgeInsets.zero,
+              tooltip: filtersPinned
+                  ? (ar ? 'إلغاء تثبيت الفلاتر' : 'Unpin filters')
+                  : (ar ? 'تثبيت الفلاتر' : 'Pin filters'),
+              icon: Icon(
+                filtersPinned ? Icons.push_pin : Icons.push_pin_outlined,
+              ),
+              onPressed: () => setState(() {
+                filtersPinned = !filtersPinned;
+                filtersExpanded = filtersPinned;
+              }),
+            ),
+            if (_isReviewer && !compact)
+              IconButton(
+                tooltip: _listModeLabel(listMode),
+                onPressed: _pickListMode,
+                icon: const Icon(Icons.fact_check_outlined),
+              ),
+            IconButton(
+              constraints: compact ? smallIcon : null,
+              padding: EdgeInsets.zero,
+              tooltip: ar ? 'اليوم السابق' : 'Previous day',
+              icon: const Icon(Icons.chevron_left),
+              onPressed: () => _moveStackDate(-1),
+            ),
+            TextButton.icon(
+              onPressed: _pickDate,
+              icon: Icon(
+                Icons.calendar_today_outlined,
+                size: compact ? 14 : 16,
+              ),
+              label: Text(compact ? '${date.month}/${date.day}' : _dateIso),
+            ),
+            IconButton(
+              constraints: compact ? smallIcon : null,
+              padding: EdgeInsets.zero,
+              tooltip: ar ? 'اليوم التالي' : 'Next day',
+              icon: const Icon(Icons.chevron_right),
+              onPressed: _isStackToday ? null : () => _moveStackDate(1),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  bool get _isStackToday {
+    final now = qatarBusinessNow();
+    return !DateTime(
+      date.year,
+      date.month,
+      date.day,
+    ).isBefore(DateTime(now.year, now.month, now.day));
+  }
+
+  void _moveStackDate(int days) {
+    if (days > 0 && _isStackToday) return;
+    setState(() {
+      date = date.add(Duration(days: days));
+      selected = null;
+      siteFilter = null;
+      _blankPreviews.clear();
+    });
+    _load();
+  }
+
+  Widget _stackFilterPanel() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      _compactFilterHeader(),
+      if (filtersExpanded)
+        SizedBox(
+          height: 76,
+          child: Row(
+            children: [
+              Expanded(
+                child: ChecklistScopeFilterBar(
+                  scope: _filterScope,
+                  selection: topFilters,
+                  language: language,
+                  onChanged: _onTopFiltersChanged,
+                ),
+              ),
+              if (_isReviewer && MediaQuery.sizeOf(context).width < 560)
+                IconButton(
+                  tooltip: _listModeLabel(listMode),
+                  onPressed: _pickListMode,
+                  icon: const Icon(Icons.fact_check_outlined),
+                ),
+              SizedBox(
+                width: MediaQuery.sizeOf(context).width < 560 ? 136 : 162,
+                child: Padding(
+                  padding: const EdgeInsetsDirectional.only(end: 8),
+                  child: DropdownButtonFormField<ChecklistFillFilter>(
+                    key: const Key('viewer-completion-filter'),
+                    initialValue: _completionFilter,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      labelText: ar ? 'حالة التعبئة' : 'Completion',
+                      labelStyle: const TextStyle(fontSize: 11),
+                      isDense: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    items: [
+                      for (final option in ChecklistFillFilter.values)
+                        DropdownMenuItem(
+                          value: option,
+                          child: Text(
+                            switch (option) {
+                              ChecklistFillFilter.all => ar ? 'الكل' : 'All',
+                              ChecklistFillFilter.filled =>
+                                ar ? 'المعبأة' : 'Filled',
+                              ChecklistFillFilter.unfilled =>
+                                ar ? 'غير المكتملة' : 'Not filled',
+                            },
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) _setCompletionFilter(v);
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+    ],
+  );
+
+  Widget _stackPane() {
+    if (!_loadedOnce) return const Center(child: CircularProgressIndicator());
+    final ordered = _visibleChecklistRows;
+    final recordBySite = StackedChecklistFiltering.newestPerSite(records);
+    return NotificationListener<ScrollNotification>(
+      onNotification: (notification) {
+        if (!filtersPinned &&
+            filtersExpanded &&
+            notification is ScrollUpdateNotification &&
+            (notification.scrollDelta ?? 0) > 4) {
+          setState(() => filtersExpanded = false);
+        }
+        return false;
+      },
+      child: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView.builder(
+          key: const Key('viewer-checklist-stack'),
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 36),
+          itemCount: ordered.length + 1,
+          itemBuilder: (context, index) {
+            if (index == 0) {
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(7, 8, 7, 14),
+                child: Row(
+                  children: [
+                    const Icon(Icons.layers_outlined, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        ar
+                            ? 'قوائم الفحص المطابقة: ${ordered.length}'
+                            : 'Matching checklists: ${ordered.length}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    if (ordered.isEmpty)
+                      Text(ar ? 'لا توجد نتائج' : 'No matching lists'),
+                  ],
+                ),
+              );
+            }
+            final site = ordered[index - 1].unit;
+            final saved = recordBySite[site.id];
+            final isFilled =
+                saved != null && StackedChecklistFiltering.isFilled(saved);
+            final Future<Inspection>? blankFuture = saved == null
+                ? _blankPreviews.putIfAbsent(
+                    '$_dateIso:${site.id}',
+                    () => _makeBlankPreview(site),
+                  )
+                : null;
+            return Padding(
+              key: ValueKey('stack-${site.id}'),
+              padding: const EdgeInsets.only(bottom: 24),
+              child: Column(
+                children: [
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 980),
+                    child: Card(
+                      margin: EdgeInsets.zero,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                site.nameFor(language),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Chip(
+                              label: Text(
+                                isFilled
+                                    ? (ar ? 'معبأة' : 'Filled')
+                                    : (saved == null
+                                          ? (ar ? 'لم تُعبأ' : 'Not started')
+                                          : (ar ? 'غير مكتملة' : 'Incomplete')),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            TextButton.icon(
+                              onPressed: saved != null
+                                  ? () => _open(saved)
+                                  : (_canWriteSite(site.id)
+                                        ? () => _openChecklist(site)
+                                        : null),
+                              icon: const Icon(Icons.open_in_full, size: 16),
+                              label: Text(ar ? 'فتح' : 'Open'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  if (saved != null)
+                    _stackPaper(saved)
+                  else
+                    FutureBuilder<Inspection>(
+                      future: blankFuture,
+                      builder: (context, snapshot) {
+                        if (snapshot.hasError) {
+                          return Card(
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Text(
+                                ar
+                                    ? 'تعذر تحميل بنود القائمة، يمكنك تحديث الصفحة وإعادة المحاولة.'
+                                    : 'Unable to load the checklist items. Refresh and try again.',
+                              ),
+                            ),
+                          );
+                        }
+                        if (!snapshot.hasData) {
+                          return const Padding(
+                            padding: EdgeInsets.all(24),
+                            child: CircularProgressIndicator(),
+                          );
+                        }
+                        return _stackPaper(snapshot.data!);
+                      },
+                    ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _stackPaper(Inspection inspection) => LayoutBuilder(
+    builder: (context, constraints) {
+      const paperWidth = 794.0;
+      final width = math.min(paperWidth, math.max(280.0, constraints.maxWidth));
+      final sheet = Material(
+        color: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(28, 32, 28, 36),
+          child: ChecklistFormLayout(
+            key: ValueKey('paper-${inspection.siteId}'),
+            inspection: inspection,
+            language: language,
+            readOnly: true,
+            forceTableLayout: true,
+          ),
+        ),
+      );
+      return Center(
+        child: Card(
+          elevation: 2,
+          margin: EdgeInsets.zero,
+          clipBehavior: Clip.antiAlias,
+          child: width >= paperWidth
+              ? SizedBox(width: paperWidth, child: sheet)
+              : SizedBox(
+                  width: width,
+                  child: FittedBox(
+                    alignment: Alignment.topCenter,
+                    fit: BoxFit.fitWidth,
+                    child: SizedBox(width: paperWidth, child: sheet),
+                  ),
+                ),
+        ),
+      );
+    },
+  );
 
   Widget _detailToolbar(Inspection insp, {bool inAppBar = false}) {
     final canEdit = _canEditSelected;
@@ -2013,14 +2427,26 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
   bool get _toolbarInAppBar =>
       _wide && MediaQuery.sizeOf(context).width >= 1260;
 
+  void _closeExpandedInspection() {
+    if (!mounted) return;
+    setState(() {
+      selected = null;
+      siteFilter = null;
+      _signaturePreviewBytes = null;
+    });
+    // A draft-opening operation can scope the last query to one checklist.
+    _load();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final wide = _wide;
-    final canNavBack = _canNavBack;
+    final canNavBack = selected != null;
     return PopScope(
       canPop: !(widget.active && canNavBack),
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && widget.active && _canNavBack) _navBack();
+        if (!didPop && widget.active && selected != null) {
+          _closeExpandedInspection();
+        }
       },
       child: Scaffold(
         appBar: AppBar(
@@ -2028,7 +2454,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
               ? IconButton(
                   icon: const BackButtonIcon(),
                   tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-                  onPressed: _navBack,
+                  onPressed: _closeExpandedInspection,
                 )
               : _brandMark(),
           leadingWidth: canNavBack ? null : 30 + CvSpace.gutter,
@@ -2063,13 +2489,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         body: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            ChecklistScopeFilterBar(
-              scope: _filterScope,
-              selection: topFilters,
-              language: language,
-              onChanged: _onTopFiltersChanged,
-            ),
-            _contextBlock(),
+            _stackFilterPanel(),
             if (message != null)
               CvBanner(
                 tone: CvBannerTone.error,
@@ -2081,18 +2501,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
                 message: _status!,
                 onDismiss: () => setState(() => _status = null),
               ),
-            Expanded(
-              child: wide
-                  ? Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        SizedBox(width: 380, child: _browsePane()),
-                        const VerticalDivider(width: 1),
-                        Expanded(child: _detailPane()),
-                      ],
-                    )
-                  : _browsePane(),
-            ),
+            Expanded(child: selected == null ? _stackPane() : _detailPane()),
           ],
         ),
       ),
