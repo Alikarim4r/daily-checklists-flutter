@@ -9,6 +9,7 @@ import '../repositories/catalog_repository.dart';
 import '../repositories/correction_repository.dart';
 import '../repositories/corrective_action_repository.dart';
 import '../repositories/inspection_repository.dart';
+import '../repositories/location_hierarchy_repository.dart';
 import '../repositories/notification_repository.dart';
 import '../repositories/ops_metrics_repository.dart';
 import '../repositories/organization_repository.dart';
@@ -28,6 +29,11 @@ final auditRepositoryProvider = Provider<AuditRepository>(
 final siteRepositoryProvider = Provider<SiteRepository>(
   (ref) => SiteRepository(ref.watch(supabaseClientProvider)),
 );
+
+final locationHierarchyRepositoryProvider =
+    Provider<LocationHierarchyRepository>(
+      (ref) => LocationHierarchyRepository(ref.watch(supabaseClientProvider)),
+    );
 
 final organizationRepositoryProvider = Provider<OrganizationRepository>(
   (ref) => OrganizationRepository(ref.watch(supabaseClientProvider)),

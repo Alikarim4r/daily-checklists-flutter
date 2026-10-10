@@ -57,6 +57,30 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
   String? browseCategory;
   String? browseSubcategory;
   List<OrgBrowseSection> orgSections = [];
+  List<LocationScopeLeaf> _locationLeaves = [];
+  ChecklistFilterSelection topFilters = const ChecklistFilterSelection();
+  ChecklistScopeFilters get _filterScope => ChecklistScopeFilters.fromSections(
+    orgSections,
+    locationLeaves: _locationLeaves,
+  );
+  List<OrgBrowseSection> get _filteredSections =>
+      _filterScope.filteredSections(orgSections, topFilters);
+
+  void _onTopFiltersChanged(ChecklistFilterSelection next) {
+    final wasOnChecklist = siteFilter != null;
+    setState(() {
+      topFilters = next;
+      browseOrg = null;
+      browseZone = null;
+      browseCampus = null;
+      browseCategory = null;
+      browseSubcategory = null;
+      siteFilter = null;
+      selected = null;
+    });
+    if (wasOnChecklist) _load();
+  }
+
   DateTime date = qatarBusinessNow();
   Inspection? selected;
   Set<int> overdueIndexes = {};
@@ -459,6 +483,11 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         orgRepo.listAllZones(),
         siteRepo.listMySiteAccess(),
         _safeUnreadNotifications(),
+        ref
+            .read(locationHierarchyRepositoryProvider)
+            .listMyChecklistLocationScope()
+            .then((s) => s.leaves)
+            .catchError((_) => <LocationScopeLeaf>[]),
       ]);
       if (!mounted || generation != _loadGeneration) return;
       final groups = foundation[0] as List<CampusChecklistGroup>;
@@ -466,6 +495,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       final allZones = foundation[2] as List<Zone>;
       final access = foundation[3] as List<UserSiteAccess>;
       final workflow = foundation[4] as List<WorkflowNotification>;
+      final locationLeaves = foundation[5] as List<LocationScopeLeaf>;
       final sections = groupCampusGroupsByOrgThenZone(
         organizations: orgs,
         zones: allZones.where((z) => z.isActive).toList(),
@@ -519,6 +549,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
           _lastNoticeCount != null && built.length > _lastNoticeCount!;
       setState(() {
         orgSections = sections;
+        _locationLeaves = locationLeaves;
         campusGroups = groups;
         sites = siteList;
         // Refresh category grouping after an administrator reclassifies a list.
@@ -1502,9 +1533,9 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       ],
       CvSectionHeader(
         title: ar ? 'المواقع' : 'Locations',
-        count: orgSections.isEmpty ? null : orgSections.length,
+        count: _filteredSections.length,
       ),
-      if (orgSections.isEmpty)
+      if (_filteredSections.isEmpty)
         CvEmptyState(
           icon: Icons.location_city_outlined,
           title: ar ? 'لا توجد مواقع' : 'No locations yet',
@@ -1515,7 +1546,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       else
         CvLedger(
           children: [
-            for (final org in orgSections)
+            for (final org in _filteredSections)
               CvLedgerRow(
                 title: org.organization.nameFor(language),
                 onTap: () => _openOrg(org),
@@ -2032,6 +2063,12 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         body: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            ChecklistScopeFilterBar(
+              scope: _filterScope,
+              selection: topFilters,
+              language: language,
+              onChanged: _onTopFiltersChanged,
+            ),
             _contextBlock(),
             if (message != null)
               CvBanner(

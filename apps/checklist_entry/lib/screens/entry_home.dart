@@ -18,6 +18,14 @@ class EntryHome extends ConsumerStatefulWidget {
 
 class _EntryHomeState extends ConsumerState<EntryHome> {
   List<OrgBrowseSection> orgSections = [];
+  List<LocationScopeLeaf> _locationLeaves = [];
+  ChecklistFilterSelection topFilters = const ChecklistFilterSelection();
+  ChecklistScopeFilters get _filterScope => ChecklistScopeFilters.fromSections(
+    orgSections,
+    locationLeaves: _locationLeaves,
+  );
+  List<OrgBrowseSection> get _filteredSections =>
+      _filterScope.filteredSections(orgSections, topFilters);
   List<WorkflowNotification> workflowNotifications = [];
   bool loading = true;
   String? message;
@@ -113,17 +121,28 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
             .read(organizationRepositoryProvider)
             .listOrganizations(activeOnly: true),
         ref.read(organizationRepositoryProvider).listAllZones(),
+        ref
+            .read(locationHierarchyRepositoryProvider)
+            .listMyChecklistLocationScope(
+              requirement: SiteAccessRequirement.write,
+            )
+            .then((s) => s.leaves)
+            .catchError((_) => <LocationScopeLeaf>[]),
       ]);
       final groups = results[0] as List<CampusChecklistGroup>;
       final orgs = results[1] as List<Organization>;
       final zones = results[2] as List<Zone>;
+      final locationLeaves = results[3] as List<LocationScopeLeaf>;
       if (!mounted) return;
       final sections = groupCampusGroupsByOrgThenZone(
         organizations: orgs,
         zones: zones.where((z) => z.isActive).toList(),
         groups: groups,
       );
-      setState(() => orgSections = sections);
+      setState(() {
+        orgSections = sections;
+        _locationLeaves = locationLeaves;
+      });
       await OfflineInspectionQueue.instance.cacheHierarchy(
         userId: widget.profile.id,
         payload: {'sections': _encodeOrgSections(sections)},
@@ -516,6 +535,7 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
     final ar = widget.language == 'ar';
     final queue = OfflineInspectionQueue.instance;
     final date = DateFormat('yyyy-MM-dd').format(qatarBusinessNow());
+    final filteredSections = _filteredSections;
     return Scaffold(
       drawer: ChecklistSettingsDrawer(
         profile: widget.profile,
@@ -564,103 +584,119 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _refreshHome,
-        child: CiPageWidth(
-          child: ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 36),
-            children: [
-              CiWorkHeader(
-                title: '${L.welcome}, $name',
-                subtitle: ar
-                    ? 'عمل اليوم مرتب حسب الجهة والموقع'
-                    : "Today's work, organized by organization and site",
-                meta: [
-                  CiMeta(date, icon: Icons.today_outlined),
-                  CiMeta(
-                    ar
-                        ? '$_checklistCount قائمة'
-                        : '$_checklistCount checklists',
-                    icon: Icons.fact_check_outlined,
-                  ),
-                  CiMeta(
-                    queue.pendingCount == 0
-                        ? (ar ? 'تمت المزامنة' : 'Synced')
-                        : (ar
-                              ? '${queue.pendingCount} بانتظار المزامنة'
-                              : '${queue.pendingCount} awaiting sync'),
-                    icon: queue.pendingCount == 0
-                        ? Icons.cloud_done_outlined
-                        : Icons.cloud_upload_outlined,
-                    tone: queue.pendingCount == 0
-                        ? CiTone.good
-                        : CiTone.warning,
-                  ),
-                ],
-                trailing: IconButton(
-                  tooltip: ar ? 'تحديث قائمة العمل' : 'Refresh work queue',
-                  onPressed: loading ? null : _refreshHome,
-                  icon: const Icon(Icons.refresh_rounded),
-                ),
-              ),
-              if (message != null) ...[
-                const SizedBox(height: 12),
-                CiInlineNotice(
-                  message: message!,
-                  tone: orgSections.isEmpty ? CiTone.danger : CiTone.warning,
-                ),
-              ],
-              CiSectionLabel(
-                title: ar ? 'مسار العمل' : 'Work queue',
-                count: orgSections.length,
-              ),
-              if (loading && orgSections.isEmpty)
-                const CiLoadingList(rows: 4)
-              else if (orgSections.isEmpty)
-                CiEmptyState(
-                  title: ar ? 'لا توجد مواقع متاحة' : 'No assigned sites',
-                  message: ar
-                      ? 'لم تُعيَّن مواقع قابلة للإدخال لهذا الحساب. اطلب من المشرف مراجعة الصلاحيات.'
-                      : 'No writable sites are assigned to this account. Ask an administrator to review access.',
-                  icon: Icons.location_off_outlined,
-                  action: OutlinedButton.icon(
-                    onPressed: _refreshHome,
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: Text(ar ? 'إعادة المحاولة' : 'Try again'),
-                  ),
-                )
-              else
-                CiQueuePanel(
+      body: Column(
+        children: [
+          ChecklistScopeFilterBar(
+            scope: _filterScope,
+            selection: topFilters,
+            language: widget.language,
+            onChanged: (next) => setState(() => topFilters = next),
+          ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _refreshHome,
+              child: CiPageWidth(
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 36),
                   children: [
-                    for (final org in orgSections)
-                      CiQueueRow(
-                        title: org.organization.nameFor(widget.language),
-                        subtitle: ar
-                            ? '${org.campusCount} مواقع متاحة'
-                            : '${org.campusCount} available sites',
-                        icon: Icons.domain_outlined,
-                        meta: [
-                          CiMeta(
-                            ar
-                                ? '${org.zones.length} مناطق'
-                                : '${org.zones.length} zones',
-                            icon: Icons.map_outlined,
-                          ),
-                          CiMeta(
-                            ar
-                                ? '${org.checklistCount} قوائم'
-                                : '${org.checklistCount} checklists',
-                            icon: Icons.checklist_rounded,
-                          ),
+                    CiWorkHeader(
+                      title: '${L.welcome}, $name',
+                      subtitle: ar
+                          ? 'عمل اليوم مرتب حسب الجهة والموقع'
+                          : "Today's work, organized by organization and site",
+                      meta: [
+                        CiMeta(date, icon: Icons.today_outlined),
+                        CiMeta(
+                          ar
+                              ? '$_checklistCount قائمة'
+                              : '$_checklistCount checklists',
+                          icon: Icons.fact_check_outlined,
+                        ),
+                        CiMeta(
+                          queue.pendingCount == 0
+                              ? (ar ? 'تمت المزامنة' : 'Synced')
+                              : (ar
+                                    ? '${queue.pendingCount} بانتظار المزامنة'
+                                    : '${queue.pendingCount} awaiting sync'),
+                          icon: queue.pendingCount == 0
+                              ? Icons.cloud_done_outlined
+                              : Icons.cloud_upload_outlined,
+                          tone: queue.pendingCount == 0
+                              ? CiTone.good
+                              : CiTone.warning,
+                        ),
+                      ],
+                      trailing: IconButton(
+                        tooltip: ar
+                            ? 'تحديث قائمة العمل'
+                            : 'Refresh work queue',
+                        onPressed: loading ? null : _refreshHome,
+                        icon: const Icon(Icons.refresh_rounded),
+                      ),
+                    ),
+                    if (message != null) ...[
+                      const SizedBox(height: 12),
+                      CiInlineNotice(
+                        message: message!,
+                        tone: orgSections.isEmpty
+                            ? CiTone.danger
+                            : CiTone.warning,
+                      ),
+                    ],
+                    CiSectionLabel(
+                      title: ar ? 'مسار العمل' : 'Work queue',
+                      count: filteredSections.length,
+                    ),
+                    if (loading && orgSections.isEmpty)
+                      const CiLoadingList(rows: 4)
+                    else if (filteredSections.isEmpty)
+                      CiEmptyState(
+                        title: ar ? 'لا توجد مواقع متاحة' : 'No assigned sites',
+                        message: ar
+                            ? 'لم تُعيَّن مواقع قابلة للإدخال لهذا الحساب. اطلب من المشرف مراجعة الصلاحيات.'
+                            : 'No writable sites are assigned to this account. Ask an administrator to review access.',
+                        icon: Icons.location_off_outlined,
+                        action: OutlinedButton.icon(
+                          onPressed: _refreshHome,
+                          icon: const Icon(Icons.refresh_rounded),
+                          label: Text(ar ? 'إعادة المحاولة' : 'Try again'),
+                        ),
+                      )
+                    else
+                      CiQueuePanel(
+                        children: [
+                          for (final org in filteredSections)
+                            CiQueueRow(
+                              title: org.organization.nameFor(widget.language),
+                              subtitle: ar
+                                  ? '${org.campusCount} مواقع متاحة'
+                                  : '${org.campusCount} available sites',
+                              icon: Icons.domain_outlined,
+                              meta: [
+                                CiMeta(
+                                  ar
+                                      ? '${org.zones.length} مناطق'
+                                      : '${org.zones.length} zones',
+                                  icon: Icons.map_outlined,
+                                ),
+                                CiMeta(
+                                  ar
+                                      ? '${org.checklistCount} قوائم'
+                                      : '${org.checklistCount} checklists',
+                                  icon: Icons.checklist_rounded,
+                                ),
+                              ],
+                              onTap: () => _openOrg(org),
+                            ),
                         ],
-                        onTap: () => _openOrg(org),
                       ),
                   ],
                 ),
-            ],
+              ),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
