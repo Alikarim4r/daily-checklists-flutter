@@ -14,9 +14,12 @@ import 'design/checkadmin_widgets.dart';
 import 'screens/audit_log_screen.dart';
 import 'screens/checklists_tab.dart';
 import 'screens/client_error_log_screen.dart';
+import 'screens/company_onboarding_screen.dart';
+import 'screens/company_tab.dart';
 import 'screens/delete_tab.dart';
+import 'screens/first_company_setup_screen.dart';
 import 'screens/policies_screen.dart';
-import 'screens/reviews_tab.dart';
+import 'screens/ppm_tab.dart';
 import 'screens/structure_tab.dart';
 import 'screens/users_tab.dart';
 
@@ -47,6 +50,10 @@ class AdminRoot extends ConsumerStatefulWidget {
 class _AdminRootState extends ConsumerState<AdminRoot> {
   String language = 'en';
 
+  void _setLanguage(String value) => setState(() {
+    language = adminLanguages.contains(value) ? value : 'en';
+  });
+
   @override
   Widget build(BuildContext context) {
     final rtl = isRtlLanguage(language);
@@ -67,19 +74,221 @@ class _AdminRootState extends ConsumerState<AdminRoot> {
             ? 'مركز قيادة للهيكل والقوائم والمستخدمين والحوكمة'
             : 'Command center for structure, checklists, users and governance',
         language: language,
-        onLanguageChanged: (v) => setState(() => language = v),
-        allowSelfRegistration: false,
+        onLanguageChanged: _setLanguage,
+        allowSelfRegistration: true,
+        registrationRequestedRole: 'company_owner_request',
+        registrationIntroEn:
+            'Create the company owner account. After sign-in, set up the company and choose its Google Play subscription.',
+        registrationIntroAr:
+            'أنشئ حساب مالك الشركة، ثم أكمل بيانات الشركة واختر اشتراكها عبر Google Play.',
+        registrationSuccessEn:
+            'Account created. Verify your email if requested, then sign in to finish company setup.',
+        registrationSuccessAr:
+            'تم إنشاء الحساب. أكّد بريدك إذا طُلب منك ذلك، ثم سجّل الدخول لإكمال إعداد الشركة.',
+        registrationActionLabelEn: 'Create company account',
+        registrationActionLabelAr: 'إنشاء حساب شركة',
+        pendingProfileBuilder: (context, profile) =>
+            CompanyOnboardingScreen(profile: profile, language: language),
         brandMarkAsset: 'assets/branding/app_icon_simple.png',
         userErrorMessage: (error) => checkAdminUserMessage(error, language),
         allowedForProfile: (p) => p.canUseAdminApp,
-        homeBuilder: (context, profile) => AdminShell(
+        homeBuilder: (context, profile) => AdminHomeGate(
           profile: profile,
           language: language,
-          onLanguageChanged: (v) => setState(() => language = v),
+          onLanguageChanged: _setLanguage,
         ),
       ),
     );
   }
+}
+
+class AdminHomeGate extends StatefulWidget {
+  const AdminHomeGate({
+    super.key,
+    required this.profile,
+    required this.language,
+    required this.onLanguageChanged,
+  });
+
+  final Profile profile;
+  final String language;
+  final ValueChanged<String> onLanguageChanged;
+
+  @override
+  State<AdminHomeGate> createState() => _AdminHomeGateState();
+}
+
+class _AdminHomeGateState extends State<AdminHomeGate> {
+  late Future<_AdminCompanyAccess> _future = _resolve();
+
+  bool get ar => widget.language == 'ar';
+
+  @override
+  void didUpdateWidget(covariant AdminHomeGate oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.profile.id != widget.profile.id ||
+        oldWidget.profile.homeOrganizationId !=
+            widget.profile.homeOrganizationId) {
+      _future = _resolve();
+    }
+  }
+
+  Future<_AdminCompanyAccess> _resolve() async {
+    if (widget.profile.isPlatformOwner) {
+      return const _AdminCompanyAccess.allowed();
+    }
+    final orgId = widget.profile.homeOrganizationId;
+    if (orgId == null) {
+      return const _AdminCompanyAccess.blocked(
+        'Administrator account is not linked to a company.',
+      );
+    }
+    final organization = await OrganizationRepository(supabase).getById(orgId);
+    if (organization == null) {
+      return const _AdminCompanyAccess.blocked('Company not found.');
+    }
+    if (!organization.selfService) {
+      return _AdminCompanyAccess.allowed(organization: organization);
+    }
+    final entitlement = await SubscriptionRepository().currentEntitlement();
+    if (entitlement?.isActive == true) {
+      if (!organization.setupCompleted) {
+        return _AdminCompanyAccess.setupRequired(
+          organization: organization,
+          entitlement: entitlement!,
+        );
+      }
+      return _AdminCompanyAccess.allowed(
+        organization: organization,
+        entitlement: entitlement,
+      );
+    }
+    return _AdminCompanyAccess.subscriptionRequired(
+      organization: organization,
+      entitlement: entitlement,
+    );
+  }
+
+  void _refresh() => setState(() => _future = _resolve());
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<_AdminCompanyAccess>(
+      future: _future,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Scaffold(
+            body: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.cloud_off_outlined, size: 46),
+                    const SizedBox(height: 12),
+                    Text(
+                      checkAdminUserMessage(snapshot.error, widget.language),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 14),
+                    FilledButton.icon(
+                      onPressed: _refresh,
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: Text(ar ? 'إعادة المحاولة' : 'Try again'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+        final access = snapshot.data;
+        if (access == null) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (access.blockedMessage != null) {
+          return Scaffold(
+            body: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  ar
+                      ? 'تعذر ربط حساب الإدارة بالشركة. تواصل مع الدعم.'
+                      : access.blockedMessage!,
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+          );
+        }
+        if (access.requiresSubscription) {
+          return SubscriptionManagementScreen(
+            profile: widget.profile,
+            language: widget.language,
+            onEntitlementChanged: (entitlement) {
+              if (entitlement?.isActive == true) _refresh();
+            },
+          );
+        }
+        if (access.requiresSetup) {
+          return FirstCompanySetupScreen(
+            profile: widget.profile,
+            language: widget.language,
+            onCompleted: _refresh,
+          );
+        }
+        return AdminShell(
+          profile: widget.profile,
+          language: widget.language,
+          onLanguageChanged: widget.onLanguageChanged,
+        );
+      },
+    );
+  }
+}
+
+class _AdminCompanyAccess {
+  const _AdminCompanyAccess._({
+    this.organization,
+    this.entitlement,
+    this.requiresSubscription = false,
+    this.requiresSetup = false,
+    this.blockedMessage,
+  });
+
+  const _AdminCompanyAccess.allowed({
+    Organization? organization,
+    SubscriptionEntitlement? entitlement,
+  }) : this._(organization: organization, entitlement: entitlement);
+
+  const _AdminCompanyAccess.subscriptionRequired({
+    required Organization organization,
+    SubscriptionEntitlement? entitlement,
+  }) : this._(
+         organization: organization,
+         entitlement: entitlement,
+         requiresSubscription: true,
+       );
+
+  const _AdminCompanyAccess.setupRequired({
+    required Organization organization,
+    required SubscriptionEntitlement entitlement,
+  }) : this._(
+         organization: organization,
+         entitlement: entitlement,
+         requiresSetup: true,
+       );
+
+  const _AdminCompanyAccess.blocked(String message)
+    : this._(blockedMessage: message);
+
+  final Organization? organization;
+  final SubscriptionEntitlement? entitlement;
+  final bool requiresSubscription;
+  final bool requiresSetup;
+  final String? blockedMessage;
 }
 
 class _AdminDestination {
@@ -134,20 +343,26 @@ class _AdminShellState extends ConsumerState<AdminShell> {
         page: ChecklistsTab(profile: p, language: widget.language),
       ),
       _AdminDestination(
+        labelEn: 'Assets & PPM',
+        labelAr: 'الأصول والصيانة',
+        icon: Icons.handyman_outlined,
+        selectedIcon: Icons.handyman,
+        page: PpmTab(profile: p, language: widget.language),
+      ),
+      _AdminDestination(
         labelEn: 'Users',
         labelAr: 'المستخدمون',
         icon: Icons.manage_accounts_outlined,
         selectedIcon: Icons.manage_accounts,
         page: UsersTab(profile: p, language: widget.language),
       ),
-      if (p.canReviewInspections)
-        _AdminDestination(
-          labelEn: 'Reviews',
-          labelAr: 'الاعتمادات',
-          icon: Icons.approval_outlined,
-          selectedIcon: Icons.approval,
-          page: ReviewsTab(profile: p, language: widget.language),
-        ),
+      _AdminDestination(
+        labelEn: 'Organization',
+        labelAr: 'المنظمة',
+        icon: Icons.business_outlined,
+        selectedIcon: Icons.business,
+        page: CompanyTab(profile: p, language: widget.language),
+      ),
     ];
   }
 
@@ -174,6 +389,21 @@ class _AdminShellState extends ConsumerState<AdminShell> {
     onTap: onTap,
   );
 
+  Widget _adminMark(CheckAdminColors c, {double size = 36}) => Container(
+    width: size,
+    height: size,
+    decoration: BoxDecoration(
+      color: c.primarySoft,
+      borderRadius: BorderRadius.circular(CaRadius.control),
+    ),
+    alignment: Alignment.center,
+    child: Icon(
+      Icons.admin_panel_settings_outlined,
+      size: size * .56,
+      color: c.primaryStrong,
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     final c = CheckAdminColors.of(context);
@@ -183,7 +413,6 @@ class _AdminShellState extends ConsumerState<AdminShell> {
     final width = MediaQuery.sizeOf(context).width;
     final useRail = width >= CaBreakpoint.rail;
     final extended = width >= CaBreakpoint.extendedRail;
-    final current = destinations[tab];
     final pages = IndexedStack(
       index: tab,
       children: destinations.map((d) => d.page).toList(),
@@ -193,7 +422,7 @@ class _AdminShellState extends ConsumerState<AdminShell> {
       profile: p,
       language: widget.language,
       onLanguageChanged: widget.onLanguageChanged,
-      languages: supportedLanguages,
+      languages: adminLanguages,
       appIconAsset: 'assets/branding/app_icon_simple.png',
       advancedItems: [
         _advancedItem(
@@ -289,22 +518,10 @@ class _AdminShellState extends ConsumerState<AdminShell> {
         titleSpacing: useRail ? 20 : 16,
         title: Row(
           children: [
-            if (!useRail) ...[
-              ClipRRect(
-                borderRadius: BorderRadius.circular(CaRadius.control),
-                child: Image.asset(
-                  'assets/branding/app_icon_simple.png',
-                  width: 28,
-                  height: 28,
-                  errorBuilder: (_, _, _) =>
-                      const SizedBox.square(dimension: 28),
-                ),
-              ),
-              const SizedBox(width: 10),
-            ],
+            if (!useRail) ...[_adminMark(c), const SizedBox(width: 10)],
             Expanded(
               child: Text(
-                current.label(ar),
+                checkAdminName,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.titleLarge,
@@ -358,7 +575,7 @@ class _AdminShellState extends ConsumerState<AdminShell> {
                     extended: extended,
                     minWidth: 72,
                     minExtendedWidth: 210,
-                    useIndicator: false,
+                    useIndicator: true,
                     selectedIndex: tab,
                     onDestinationSelected: (i) => setState(() => tab = i),
                     groupAlignment: -1,
@@ -368,18 +585,7 @@ class _AdminShellState extends ConsumerState<AdminShell> {
                           ? Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(
-                                    CaRadius.control,
-                                  ),
-                                  child: Image.asset(
-                                    'assets/branding/app_icon_simple.png',
-                                    width: 28,
-                                    height: 28,
-                                    errorBuilder: (_, _, _) =>
-                                        const SizedBox.square(dimension: 28),
-                                  ),
-                                ),
+                                _adminMark(c, size: 32),
                                 const SizedBox(width: 10),
                                 Text(
                                   checkAdminName,
@@ -389,18 +595,7 @@ class _AdminShellState extends ConsumerState<AdminShell> {
                                 ),
                               ],
                             )
-                          : ClipRRect(
-                              borderRadius: BorderRadius.circular(
-                                CaRadius.control,
-                              ),
-                              child: Image.asset(
-                                'assets/branding/app_icon_simple.png',
-                                width: 28,
-                                height: 28,
-                                errorBuilder: (_, _, _) =>
-                                    const SizedBox.square(dimension: 28),
-                              ),
-                            ),
+                          : _adminMark(c, size: 32),
                     ),
                     destinations: [
                       for (final d in destinations)
@@ -419,74 +614,23 @@ class _AdminShellState extends ConsumerState<AdminShell> {
           : pages,
       bottomNavigationBar: useRail
           ? null
-          : Material(
-              color: c.surface,
+          : DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: c.rule)),
+              ),
               child: SafeArea(
                 top: false,
-                child: Container(
-                  height: 56,
-                  decoration: BoxDecoration(
-                    border: Border(top: BorderSide(color: c.rule)),
-                  ),
-                  child: Row(
-                    children: [
-                      for (var i = 0; i < destinations.length; i++)
-                        Expanded(
-                          child: Semantics(
-                            selected: tab == i,
-                            button: true,
-                            label: destinations[i].label(ar),
-                            child: InkWell(
-                              onTap: () => setState(() => tab = i),
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  border: Border(
-                                    top: BorderSide(
-                                      color: tab == i
-                                          ? c.primaryStrong
-                                          : Colors.transparent,
-                                      width: 2,
-                                    ),
-                                  ),
-                                ),
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      tab == i
-                                          ? destinations[i].selectedIcon
-                                          : destinations[i].icon,
-                                      size: 22,
-                                      color: tab == i
-                                          ? c.primaryStrong
-                                          : c.inkMuted,
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      destinations[i].label(ar),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      textAlign: TextAlign.center,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .labelSmall
-                                          ?.copyWith(
-                                            color: tab == i
-                                                ? c.primaryStrong
-                                                : c.inkMuted,
-                                            fontWeight: tab == i
-                                                ? FontWeight.w700
-                                                : FontWeight.w600,
-                                          ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
+                child: NavigationBar(
+                  selectedIndex: tab,
+                  onDestinationSelected: (i) => setState(() => tab = i),
+                  destinations: [
+                    for (final d in destinations)
+                      NavigationDestination(
+                        icon: Icon(d.icon),
+                        selectedIcon: Icon(d.selectedIcon),
+                        label: d.label(ar),
+                      ),
+                  ],
                 ),
               ),
             ),

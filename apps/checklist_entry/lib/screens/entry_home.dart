@@ -19,11 +19,19 @@ class EntryHome extends ConsumerStatefulWidget {
 class _EntryHomeState extends ConsumerState<EntryHome> {
   List<OrgBrowseSection> orgSections = [];
   List<WorkflowNotification> workflowNotifications = [];
+  LocationFilterScope locationScope = const LocationFilterScope([]);
+  LocationFilterSelection locationSelection = const LocationFilterSelection();
+  final Map<String, Inspection> previewInspections = {};
+  DateTime date = qatarBusinessNow();
+  bool filtersExpanded = true;
+  bool previewLoading = false;
   bool loading = true;
   String? message;
   Timer? _syncRetryTimer;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   bool _syncingQueue = false;
+  bool _syncingPpmQueue = false;
+  int _previewGeneration = 0;
 
   AppLabels get L => AppLabels(widget.language);
 
@@ -60,6 +68,7 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
     _restoreCachedSites();
     await _loadSites();
     await _loadWorkflowNotifications();
+    await _syncPendingPpm();
     if (!mounted || OfflineInspectionQueue.instance.pendingCount == 0) return;
     // Retry the encrypted outbox immediately after a successful online load.
     await _syncOfflineQueue();
@@ -73,17 +82,55 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
   }
 
   Future<void> _retryQueuedWhenReachable() async {
-    if (!mounted ||
-        _syncingQueue ||
-        OfflineInspectionQueue.instance.pendingCount == 0) {
+    if (!mounted || _syncingQueue) return;
+    await _syncPendingPpm();
+    if (!mounted || OfflineInspectionQueue.instance.pendingCount == 0) {
       return;
     }
     final client = ref.read(supabaseClientProvider);
-    if (!await ChecklistConnectivity.canReachBackend(client)) {
-      return;
-    }
+    final auth = ref.read(authRepositoryProvider);
+    if (!await auth.ensureActiveSession()) return;
+    if (!await ChecklistConnectivity.canReachBackend(client)) return;
     if (!mounted) return;
     await _syncOfflineQueue(silentWhenOffline: true);
+  }
+
+  Future<void> _syncPendingPpm() async {
+    final offline = OfflineInspectionQueue.instance;
+    if (!mounted ||
+        _syncingPpmQueue ||
+        offline.pendingPpmCount(widget.profile.id) == 0) {
+      return;
+    }
+    _syncingPpmQueue = true;
+    try {
+      final auth = ref.read(authRepositoryProvider);
+      if (!await auth.ensureActiveSession()) return;
+      if (!await ChecklistConnectivity.canReachBackend(
+        ref.read(supabaseClientProvider),
+      )) {
+        return;
+      }
+      final ppm = ref.read(fmPpmRepositoryProvider);
+      for (final pending in offline.pendingPpm(widget.profile.id)) {
+        final payload = pending.value;
+        try {
+          await ppm.completeJob(
+            payload['jobId'] as String,
+            notes: payload['notes'] as String,
+            readings: Map<String, dynamic>.from(payload['readings'] as Map),
+            inspectionId: payload['inspectionId'] as String?,
+          );
+          await offline.remove(pending.key);
+        } catch (e) {
+          await offline.markFailure(pending.key, e);
+          // Keep the evidence encrypted until a valid authenticated retry.
+        }
+      }
+    } finally {
+      _syncingPpmQueue = false;
+      if (mounted) setState(() {});
+    }
   }
 
   Future<void> _loadWorkflowNotifications() async {
@@ -97,6 +144,7 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
 
   Future<void> _refreshHome() async {
     await Future.wait([_loadSites(), _loadWorkflowNotifications()]);
+    await _syncPendingPpm();
   }
 
   Future<void> _loadSites() async {
@@ -113,21 +161,35 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
             .read(organizationRepositoryProvider)
             .listOrganizations(activeOnly: true),
         ref.read(organizationRepositoryProvider).listAllZones(),
+        ref
+            .read(locationHierarchyRepositoryProvider)
+            .listMyChecklistLocationScope(
+              requirement: SiteAccessRequirement.write,
+            ),
       ]);
       final groups = results[0] as List<CampusChecklistGroup>;
       final orgs = results[1] as List<Organization>;
       final zones = results[2] as List<Zone>;
+      final scope = results[3] as LocationFilterScope;
+      if (!mounted) return;
       final sections = groupCampusGroupsByOrgThenZone(
         organizations: orgs,
         zones: zones.where((z) => z.isActive).toList(),
         groups: groups,
       );
-      setState(() => orgSections = sections);
+      setState(() {
+        orgSections = sections;
+        locationScope = scope;
+        locationSelection = scope.normalize(locationSelection);
+      });
       await OfflineInspectionQueue.instance.cacheHierarchy(
         userId: widget.profile.id,
         payload: {'sections': _encodeOrgSections(sections)},
       );
+      unawaited(_cacheOfflineCatalogs(sections));
+      await _refreshPreviews();
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         message = orgSections.isEmpty
             ? checkInUserMessage(e, widget.language)
@@ -141,18 +203,241 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
   }
 
   void _restoreCachedSites() {
-    final cached = OfflineInspectionQueue.instance.cachedHierarchy(
-      widget.profile.id,
-    );
+    final queue = OfflineInspectionQueue.instance;
+    final cached = queue.cachedHierarchy(widget.profile.id);
     final raw = cached?['sections'];
     if (raw is! List) return;
     try {
-      orgSections = _decodeOrgSections(raw);
+      final decoded = _decodeOrgSections(raw);
+      if (widget.profile.isPlatformOwner ||
+          widget.profile.role == UserRole.superAdmin) {
+        orgSections = decoded;
+        return;
+      }
+      final grantedIds = queue
+          .cachedOfflineSiteAccess()
+          .where((access) => access.userId == widget.profile.id)
+          .where((access) => access.allows(SiteAccessRequirement.write))
+          .map((access) => access.siteId)
+          .toSet();
+      orgSections = [
+        for (final section in decoded)
+          if (_filterCachedZones(section.zones, grantedIds)
+              case final filteredZones when filteredZones.isNotEmpty)
+            OrgBrowseSection(
+              organization: section.organization,
+              zones: filteredZones,
+            ),
+      ];
     } catch (_) {
       // Ignore a cache written by an older incompatible application version.
     }
   }
 
+  List<ZoneBrowseSection> _filterCachedZones(
+    List<ZoneBrowseSection> zones,
+    Set<String> grantedIds,
+  ) => [
+    for (final zone in zones)
+      if (_filterCachedGroups(zone.groups, grantedIds) case final filteredGroups
+          when filteredGroups.isNotEmpty)
+        ZoneBrowseSection(zone: zone.zone, groups: filteredGroups),
+  ];
+
+  List<CampusChecklistGroup> _filterCachedGroups(
+    List<CampusChecklistGroup> groups,
+    Set<String> grantedIds,
+  ) => [
+    for (final group in groups)
+      if ([
+            for (final site in group.checklists)
+              if (grantedIds.contains(site.id) ||
+                  (group.campus != null &&
+                      grantedIds.contains(group.campus!.id)))
+                site,
+          ]
+          case final allowedChecklists when allowedChecklists.isNotEmpty)
+        CampusChecklistGroup(
+          campus: group.campus,
+          checklists: allowedChecklists,
+        ),
+  ];
+
+  Future<void> _cacheOfflineCatalogs(List<OrgBrowseSection> sections) async {
+    final catalog = ref.read(catalogRepositoryProvider);
+    final units = <ChecklistSite>[
+      for (final section in sections)
+        for (final zone in section.zones)
+          for (final group in zone.groups) ...group.checklists,
+    ];
+    for (final site in units) {
+      try {
+        final items = await catalog.listEffectiveCatalogForSite(
+          checklistType: site.checklistType,
+          siteId: site.id,
+        );
+        await OfflineInspectionQueue.instance.cacheCatalog(
+          siteId: site.id,
+          checklistType: site.checklistType,
+          items: _encodeOfflineCatalog(items),
+        );
+      } catch (_) {
+        // One unavailable template must not make the rest of the field pack
+        // unavailable. Its last encrypted snapshot, if any, is retained.
+      }
+    }
+  }
+
+  List<(ChecklistSite, ChecklistSite?)> get _allTargets => [
+    for (final section in orgSections)
+      for (final zone in section.zones)
+        for (final group in zone.groups)
+          for (final site in group.checklists) (site, group.campus),
+  ];
+
+  List<(ChecklistSite, ChecklistSite?)> get _visibleTargets {
+    final targets = _allTargets;
+    if (locationScope.leaves.isEmpty) return targets;
+    final ids = locationScope
+        .filteredLeaves(locationSelection)
+        .map((leaf) => leaf.legacySiteId)
+        .whereType<String>()
+        .toSet();
+    return [
+      for (final target in targets)
+        if (ids.contains(target.$1.id)) target,
+    ];
+  }
+
+  Inspection _previewInspection(
+    ChecklistSite site,
+    ChecklistSite? campus,
+    List<InspectionItem> items,
+  ) {
+    return Inspection(
+      id: 'preview_${site.id}',
+      siteId: site.id,
+      buildingCode: site.buildingCode,
+      inspectionDate: date,
+      inspectionTime: '',
+      floorLabel: 'ALL',
+      locationLabel: site.location,
+      inspectorName: widget.profile.fullName,
+      inspectorUserId: widget.profile.id,
+      siteNameEn: site.nameEn,
+      siteNameAr: site.nameAr,
+      pin: site.pin,
+      organizationId: site.organizationId,
+      formTheme: site.formTheme,
+      formThemeAccent: site.formThemeAccent,
+      parentSiteId: site.parentSiteId,
+      parentFormTheme: campus?.formTheme,
+      parentFormThemeAccent: campus?.formThemeAccent,
+      resolvedFormTheme: site.effectiveFormTheme,
+      resolvedFormThemeAccent: site.effectiveFormThemeAccent,
+      formThemeSource: site.formThemeSource,
+      items: items,
+    );
+  }
+
+  Future<void> _refreshPreviews() async {
+    final generation = ++_previewGeneration;
+    final targets = _visibleTargets;
+    if (!mounted) return;
+    setState(() => previewLoading = true);
+    final catalog = ref.read(catalogRepositoryProvider);
+    final next = <String, Inspection>{};
+    for (final target in targets) {
+      final site = target.$1;
+      var items = <InspectionItem>[];
+      try {
+        final rows = await catalog.listEffectiveCatalogForSite(
+          checklistType: site.checklistType,
+          siteId: site.id,
+        );
+        items = [
+          for (final row in rows)
+            InspectionItem(
+              itemIndex: row.itemIndex,
+              description: row.descriptionEn,
+              descriptionAr: row.descriptionAr,
+              localizedDescriptions: row.localizedDescriptions,
+              defaultAnswer: row.defaultAnswer,
+              isCustom: row.isCustom,
+              overdueAfterDays: row.overdueAfterDays,
+            ),
+        ];
+      } catch (_) {
+        items = _decodeOfflineCatalog(
+          OfflineInspectionQueue.instance.cachedCatalog(site.id),
+          widget.language,
+        );
+      }
+      if (!mounted || generation != _previewGeneration) return;
+      next[site.id] = _previewInspection(site, target.$2, items);
+    }
+    if (!mounted || generation != _previewGeneration) return;
+    setState(() {
+      previewInspections
+        ..clear()
+        ..addAll(next);
+      previewLoading = false;
+    });
+  }
+
+  void _applyLocationSelection(LocationFilterSelection selection) {
+    setState(() {
+      locationSelection = locationScope.normalize(selection);
+    });
+    unawaited(_refreshPreviews());
+  }
+
+  Future<void> _pickDate() async {
+    final now = qatarBusinessNow();
+    final today = DateTime(now.year, now.month, now.day);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: date.isAfter(today) ? today : date,
+      firstDate: DateTime(2024),
+      lastDate: today,
+    );
+    if (picked == null || !mounted) return;
+    setState(() => date = DateTime(picked.year, picked.month, picked.day));
+    await _refreshPreviews();
+  }
+
+  Future<void> _shiftDate(int days) async {
+    final now = qatarBusinessNow();
+    final today = DateTime(now.year, now.month, now.day);
+    final candidate = DateTime(date.year, date.month, date.day + days);
+    if (candidate.isAfter(today)) return;
+    setState(() => date = candidate);
+    await _refreshPreviews();
+  }
+
+  bool get _canMoveDateForward {
+    final now = qatarBusinessNow();
+    final today = DateTime(now.year, now.month, now.day);
+    return DateTime(date.year, date.month, date.day).isBefore(today);
+  }
+
+  Future<void> _openTarget(ChecklistSite site, ChecklistSite? campus) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => EntrySiteScreen(
+          profile: widget.profile,
+          site: site,
+          parentCampus: campus,
+          initialDate: date,
+          language: widget.language,
+          onLanguageChanged: widget.onLanguageChanged,
+        ),
+      ),
+    );
+    if (mounted) await _refreshHome();
+  }
+
+  // ignore: unused_element
   void _openOrg(OrgBrowseSection org) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -186,11 +471,27 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
     // before the first network await so a navigation/lifecycle change during a
     // long sync cannot turn a recoverable queue operation into a widget error.
     final client = ref.read(supabaseClientProvider);
+    final authRepository = ref.read(authRepositoryProvider);
     final repository = ref.read(inspectionRepositoryProvider);
     final soundEnabled = ref.read(soundEnabledProvider);
     final hapticsEnabled = ref.read(hapticsEnabledProvider);
     _syncingQueue = true;
     try {
+      final sessionReady = await authRepository.ensureActiveSession();
+      if (!sessionReady) {
+        if (!silentWhenOffline && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                widget.language == 'ar'
+                    ? 'العمل محفوظ محليًا. ستبدأ المزامنة تلقائيًا بعد استعادة الجلسة.'
+                    : 'Work is saved locally. Sync will resume automatically when the session is restored.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
       final reachable = await ChecklistConnectivity.canReachBackend(client);
       if (!reachable) {
         if (!silentWhenOffline && mounted) {
@@ -223,23 +524,48 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
               ? ChecklistSite.fromJson(Map<String, dynamic>.from(sitePayload))
               : null;
           final isLocalDraft = payload['isLocalDraft'] == true;
-          final Inspection full;
+          late Inspection full;
           if (isLocalDraft) {
             if (site == null) {
               throw const FormatException(
                 'Offline draft is missing its site snapshot',
               );
             }
-            full = await repository.createDraft(
-              site: site,
-              date: DateTime.parse(payload['inspectionDate'] as String),
-              inspectorName: (payload['inspectorName'] as String?) ?? '',
-              inspectionTime: (payload['inspectionTime'] as String?) ?? '',
-              floorLabel: (payload['floorLabel'] as String?) ?? 'ALL',
-              language: (payload['language'] as String?) ?? widget.language,
-              clientReference: id,
-              reinspectionReason: payload['reinspectionReason'] as String?,
+            final inspectionDate = DateTime.parse(
+              payload['inspectionDate'] as String,
             );
+            try {
+              full = await repository.createDraft(
+                site: site,
+                date: inspectionDate,
+                inspectorName: (payload['inspectorName'] as String?) ?? '',
+                inspectionTime: (payload['inspectionTime'] as String?) ?? '',
+                floorLabel: (payload['floorLabel'] as String?) ?? 'ALL',
+                language: (payload['language'] as String?) ?? widget.language,
+                clientReference: id,
+                reinspectionReason: payload['reinspectionReason'] as String?,
+              );
+            } catch (error) {
+              final text = '$error'.toLowerCase();
+              final duplicatePeriod =
+                  text.contains('reinspection reason is required') ||
+                  text.contains('another checklist in this period') ||
+                  text.contains('duplicate key') ||
+                  text.contains('23505');
+              if (!duplicatePeriod) rethrow;
+              final existing = await repository.getForSiteDate(
+                siteId: site.id,
+                date: inspectionDate,
+              );
+              // Reconcile only with this technician's editable draft. Never
+              // overwrite another person's or a finalized inspection.
+              if (existing == null ||
+                  existing.isSubmitted ||
+                  existing.inspectorUserId != widget.profile.id) {
+                rethrow;
+              }
+              full = existing;
+            }
           } else {
             final serverInspection = await repository.getById(id);
             if (serverInspection == null) {
@@ -435,7 +761,11 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
           await OfflineInspectionQueue.instance.remove(entry.key);
           okCount++;
         } catch (error, stack) {
-          if (ChecklistConnectivity.isTransportFailure(error)) {
+          final authRecoverable = ChecklistConnectivity.isAuthRecoveryFailure(
+            error,
+          );
+          if (ChecklistConnectivity.isTransportFailure(error) ||
+              authRecoverable) {
             await OfflineInspectionQueue.instance.markDeferred(entry.key);
             deferredCount++;
             break;
@@ -513,7 +843,7 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
         : widget.profile.fullName;
     final ar = widget.language == 'ar';
     final queue = OfflineInspectionQueue.instance;
-    final date = DateFormat('yyyy-MM-dd').format(qatarBusinessNow());
+    final targets = _visibleTargets;
     return Scaffold(
       drawer: ChecklistSettingsDrawer(
         profile: widget.profile,
@@ -526,6 +856,22 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
       appBar: AppBar(
         title: const Text(checkInName),
         actions: [
+          IconButton(
+            tooltip: ar ? 'أعمال الصيانة الوقائية PPM' : 'PPM work orders',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => PpmJobsScreen(
+                  profile: widget.profile,
+                  language: widget.language,
+                ),
+              ),
+            ),
+            icon: Badge(
+              isLabelVisible: queue.pendingPpmCount(widget.profile.id) > 0,
+              label: Text('${queue.pendingPpmCount(widget.profile.id)}'),
+              child: const Icon(Icons.handyman_outlined),
+            ),
+          ),
           if (ref.watch(notificationsEnabledProvider))
             ChecklistNoticeBell(
               notices: _entryNotices,
@@ -562,32 +908,44 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _refreshHome,
-        child: CiPageWidth(
-          child: ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 36),
-            children: [
-              CiWorkHeader(
-                title: '${L.welcome}, $name',
-                subtitle: ar
-                    ? 'عمل اليوم مرتب حسب الجهة والموقع'
-                    : "Today's work, organized by organization and site",
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ChecklistLocationFilterPanel(
+            scope: locationScope,
+            selection: locationSelection,
+            onSelectionChanged: _applyLocationSelection,
+            date: date,
+            onPreviousDate: loading ? null : () => _shiftDate(-1),
+            onNextDate: loading || !_canMoveDateForward
+                ? null
+                : () => _shiftDate(1),
+            onPickDate: _pickDate,
+            expanded: filtersExpanded,
+            onExpandedChanged: (value) =>
+                setState(() => filtersExpanded = value),
+            language: widget.language,
+            loading: loading || previewLoading,
+            maxContentWidth: 960,
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
+            child: CiPageWidth(
+              maxWidth: 960,
+              child: CiWorkHeader(
+                title: ar ? 'قوائم الإدخال' : 'Entry checklists',
+                subtitle: name,
                 meta: [
-                  CiMeta(date, icon: Icons.today_outlined),
                   CiMeta(
-                    ar
-                        ? '$_checklistCount قائمة'
-                        : '$_checklistCount checklists',
+                    targets.length.toString() +
+                        (ar ? ' قائمة متاحة' : ' available checklists'),
                     icon: Icons.fact_check_outlined,
                   ),
                   CiMeta(
                     queue.pendingCount == 0
                         ? (ar ? 'تمت المزامنة' : 'Synced')
-                        : (ar
-                              ? '${queue.pendingCount} بانتظار المزامنة'
-                              : '${queue.pendingCount} awaiting sync'),
+                        : queue.pendingCount.toString() +
+                              (ar ? ' بانتظار المزامنة' : ' awaiting sync'),
                     icon: queue.pendingCount == 0
                         ? Icons.cloud_done_outlined
                         : Icons.cloud_upload_outlined,
@@ -597,68 +955,151 @@ class _EntryHomeState extends ConsumerState<EntryHome> {
                   ),
                 ],
                 trailing: IconButton(
-                  tooltip: ar ? 'تحديث قائمة العمل' : 'Refresh work queue',
+                  tooltip: ar ? 'تحديث' : 'Refresh',
                   onPressed: loading ? null : _refreshHome,
                   icon: const Icon(Icons.refresh_rounded),
                 ),
               ),
-              if (message != null) ...[
-                const SizedBox(height: 12),
-                CiInlineNotice(
+            ),
+          ),
+          if (message != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+              child: CiPageWidth(
+                maxWidth: 960,
+                child: CiInlineNotice(
                   message: message!,
                   tone: orgSections.isEmpty ? CiTone.danger : CiTone.warning,
                 ),
-              ],
-              CiSectionLabel(
-                title: ar ? 'مسار العمل' : 'Work queue',
-                count: orgSections.length,
               ),
-              if (loading && orgSections.isEmpty)
-                const CiLoadingList(rows: 4)
-              else if (orgSections.isEmpty)
-                CiEmptyState(
-                  title: ar ? 'لا توجد مواقع متاحة' : 'No assigned sites',
-                  message: ar
-                      ? 'لم تُعيَّن مواقع قابلة للإدخال لهذا الحساب. اطلب من المشرف مراجعة الصلاحيات.'
-                      : 'No writable sites are assigned to this account. Ask an administrator to review access.',
-                  icon: Icons.location_off_outlined,
-                  action: OutlinedButton.icon(
-                    onPressed: _refreshHome,
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: Text(ar ? 'إعادة المحاولة' : 'Try again'),
-                  ),
-                )
-              else
-                CiQueuePanel(
-                  children: [
-                    for (final org in orgSections)
-                      CiQueueRow(
-                        title: org.organization.nameFor(widget.language),
-                        subtitle: ar
-                            ? '${org.campusCount} مواقع متاحة'
-                            : '${org.campusCount} available sites',
-                        icon: Icons.domain_outlined,
-                        meta: [
-                          CiMeta(
-                            ar
-                                ? '${org.zones.length} مناطق'
-                                : '${org.zones.length} zones',
-                            icon: Icons.map_outlined,
+            ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _refreshHome,
+              child: targets.isEmpty
+                  ? ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(16, 24, 16, 36),
+                      children: [
+                        CiPageWidth(
+                          maxWidth: 960,
+                          child: CiEmptyState(
+                            title: ar
+                                ? 'لا توجد قوائم متاحة'
+                                : 'No available checklists',
+                            message: ar
+                                ? 'لا توجد قوائم ضمن الصلاحيات والفلاتر الحالية.'
+                                : 'No checklists match the current access scope and filters.',
+                            icon: Icons.location_off_outlined,
+                            action: OutlinedButton.icon(
+                              onPressed: _refreshHome,
+                              icon: const Icon(Icons.refresh_rounded),
+                              label: Text(ar ? 'إعادة المحاولة' : 'Try again'),
+                            ),
                           ),
-                          CiMeta(
-                            ar
-                                ? '${org.checklistCount} قوائم'
-                                : '${org.checklistCount} checklists',
-                            icon: Icons.checklist_rounded,
+                        ),
+                      ],
+                    )
+                  : ListView.builder(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
+                      padding: const EdgeInsets.fromLTRB(8, 2, 8, 40),
+                      itemCount: targets.length,
+                      itemBuilder: (context, index) {
+                        final target = targets[index];
+                        final site = target.$1;
+                        final campus = target.$2;
+                        final preview = previewInspections[site.id];
+                        return Padding(
+                          key: ValueKey('entry-paper-${site.id}'),
+                          padding: const EdgeInsets.only(bottom: 18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Center(
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 794,
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                site.nameFor(widget.language),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .titleSmall
+                                                    ?.copyWith(
+                                                      fontWeight:
+                                                          FontWeight.w800,
+                                                    ),
+                                              ),
+                                              Text(
+                                                site.checklistType,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: Theme.of(
+                                                  context,
+                                                ).textTheme.bodySmall,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        FilledButton.tonalIcon(
+                                          onPressed: () =>
+                                              _openTarget(site, campus),
+                                          icon: const Icon(
+                                            Icons.edit_note_rounded,
+                                            size: 18,
+                                          ),
+                                          label: Text(
+                                            ar ? 'فتح للإدخال' : 'Open',
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              if (preview == null)
+                                const Padding(
+                                  padding: EdgeInsets.all(24),
+                                  child: Center(
+                                    child: CircularProgressIndicator(),
+                                  ),
+                                )
+                              else
+                                InkWell(
+                                  onTap: () => _openTarget(site, campus),
+                                  child: A4PaperSheet(
+                                    scrollable: false,
+                                    child: ChecklistFormLayout(
+                                      inspection: preview,
+                                      language: widget.language,
+                                      forceTableLayout: true,
+                                      readOnly: true,
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
-                        ],
-                        onTap: () => _openOrg(org),
-                      ),
-                  ],
-                ),
-            ],
+                        );
+                      },
+                    ),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

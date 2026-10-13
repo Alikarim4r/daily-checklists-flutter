@@ -6,9 +6,12 @@ import '../models/profile.dart';
 import '../repositories/audit_repository.dart';
 import '../repositories/auth_repository.dart';
 import '../repositories/catalog_repository.dart';
+import '../repositories/checklist_library_repository.dart';
 import '../repositories/correction_repository.dart';
 import '../repositories/corrective_action_repository.dart';
 import '../repositories/inspection_repository.dart';
+import '../repositories/fm_ppm_repository.dart';
+import '../repositories/location_hierarchy_repository.dart';
 import '../repositories/notification_repository.dart';
 import '../repositories/ops_metrics_repository.dart';
 import '../repositories/organization_repository.dart';
@@ -29,12 +32,25 @@ final siteRepositoryProvider = Provider<SiteRepository>(
   (ref) => SiteRepository(ref.watch(supabaseClientProvider)),
 );
 
+final locationHierarchyRepositoryProvider =
+    Provider<LocationHierarchyRepository>(
+      (ref) => LocationHierarchyRepository(ref.watch(supabaseClientProvider)),
+    );
+
 final organizationRepositoryProvider = Provider<OrganizationRepository>(
   (ref) => OrganizationRepository(ref.watch(supabaseClientProvider)),
 );
 
 final catalogRepositoryProvider = Provider<ChecklistCatalogRepository>(
   (ref) => ChecklistCatalogRepository(ref.watch(supabaseClientProvider)),
+);
+
+final fmPpmRepositoryProvider = Provider<FmPpmRepository>(
+  (ref) => FmPpmRepository(ref.watch(supabaseClientProvider)),
+);
+
+final checklistLibraryRepositoryProvider = Provider<ChecklistLibraryRepository>(
+  (ref) => ChecklistLibraryRepository(ref.watch(supabaseClientProvider)),
 );
 
 final policyRepositoryProvider = Provider<PolicyRepository>(
@@ -64,8 +80,14 @@ final opsMetricsRepositoryProvider = Provider<OpsMetricsRepository>(
   ),
 );
 
-final authStateProvider = StreamProvider<AuthState>((ref) {
-  return ref.watch(authRepositoryProvider).authStateChanges;
+final authStateProvider = StreamProvider<AuthState>((ref) async* {
+  final repository = ref.watch(authRepositoryProvider);
+  // Supabase restores the persisted session during initialize(), before the
+  // Riverpod tree subscribes. Seed the stream from currentSession so a cold
+  // app start never looks signed-out simply because the initial auth event
+  // was emitted before this listener existed.
+  yield AuthState(AuthChangeEvent.initialSession, repository.currentSession);
+  yield* repository.authStateChanges;
 });
 
 final currentProfileProvider = FutureProvider<Profile?>((ref) async {
