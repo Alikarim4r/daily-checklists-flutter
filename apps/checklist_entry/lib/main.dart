@@ -64,9 +64,6 @@ Map<String, dynamic> _encodeSite(ChecklistSite site) => {
   'building_code': site.buildingCode,
   'pin': site.pin,
   'checklist_type': site.checklistType,
-  'checklist_category': site.checklistCategory,
-  'checklist_subcategory': site.checklistSubcategory,
-  'floor_scope': site.floorScope,
   'location': site.location,
   'is_active': site.isActive,
   'report_logo_path': site.reportLogoPath,
@@ -169,55 +166,6 @@ List<OrgBrowseSection> _decodeOrgSections(List<dynamic> raw) => [
       ),
 ];
 
-List<Map<String, dynamic>> _encodeOfflineCatalog(List<CatalogItem> items) => [
-  for (final item in items)
-    {
-      'item_index': item.itemIndex,
-      'default_answer': item.defaultAnswer,
-      'description_en': item.descriptionEn,
-      'description_ar': item.descriptionAr,
-      'localized_descriptions': item.localizedDescriptions,
-      'sort_order': item.sortOrder,
-      'is_custom': item.isCustom,
-      'overdue_after_days': item.overdueAfterDays,
-    },
-];
-
-List<InspectionItem> _decodeOfflineCatalog(
-  Map<String, dynamic>? cached,
-  String language,
-) {
-  final raw = cached?['items'];
-  if (raw is! List) return const [];
-  final result = <InspectionItem>[];
-  for (final value in raw) {
-    if (value is! Map) continue;
-    final json = Map<String, dynamic>.from(value);
-    final localized = <String, String>{};
-    final translations = json['localized_descriptions'];
-    if (translations is Map) {
-      for (final entry in translations.entries) {
-        final text = entry.value?.toString().trim() ?? '';
-        if (text.isNotEmpty) localized[entry.key.toString()] = text;
-      }
-    }
-    result.add(
-      InspectionItem(
-        itemIndex: (json['item_index'] as num?)?.toInt() ?? result.length + 1,
-        description: json['description_en']?.toString() ?? '',
-        descriptionAr: json['description_ar']?.toString(),
-        localizedDescriptions: localized,
-        defaultAnswer: json['default_answer']?.toString() ?? 'Y',
-        response: null,
-        isCustom: json['is_custom'] == true,
-        overdueAfterDays: (json['overdue_after_days'] as num?)?.toInt() ?? 3,
-      ),
-    );
-  }
-  result.sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
-  return result;
-}
-
 class _EntryRootState extends ConsumerState<EntryRoot> {
   String language = 'en';
 
@@ -244,18 +192,7 @@ class _EntryRootState extends ConsumerState<EntryRoot> {
         language: language,
         onLanguageChanged: (v) => setState(() => language = v),
         allowSelfRegistration: true,
-        compactPremiumLogin: true,
-        allowOfflineAccess: true,
         registrationRequestedRole: 'technician_request',
-        registrationAccessCodeRequired: true,
-        registrationIntroEn:
-            'Create your own account using the company or invitation code provided by your company administrator.',
-        registrationIntroAr:
-            'أنشئ حسابك بنفسك باستخدام رمز الشركة أو رمز الدعوة الذي يقدمه لك مسؤول شركتك.',
-        registrationSuccessEn:
-            'Account created. If you used an invitation code, your assigned access is ready after email verification. Company-code requests appear to your company administrator.',
-        registrationSuccessAr:
-            'تم إنشاء الحساب. إذا استخدمت رمز دعوة فستكون صلاحياتك المعيّنة جاهزة بعد تأكيد البريد، أما رمز الشركة العام فيرسل الطلب إلى مسؤول شركتك.',
         brandMarkAsset: 'assets/branding/app_icon_simple.png',
         userErrorMessage: (error) => checkInUserMessage(error, language),
         allowedForProfile: (p) => p.isPlatformOwner || p.role.canUseEntry,

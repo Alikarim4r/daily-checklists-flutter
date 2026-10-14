@@ -64,6 +64,105 @@ class InspectionRepository {
     await _attachLocallyResolvedThemeData(rowsBySiteId, unresolvedSiteIds);
   }
 
+  Future<void> _attachLocationHierarchyData(
+    List<Map<String, dynamic>> inspectionRows,
+  ) async {
+    final buildingIds = <String>{};
+    final floorIds = <String>{};
+    final areaIds = <String>{};
+    for (final row in inspectionRows) {
+      final buildingId = row['building_id'] as String?;
+      final floorId = row['floor_id'] as String?;
+      final areaId = row['area_id'] as String?;
+      if (buildingId != null && buildingId.isNotEmpty) {
+        buildingIds.add(buildingId);
+      }
+      if (floorId != null && floorId.isNotEmpty) floorIds.add(floorId);
+      if (areaId != null && areaId.isNotEmpty) areaIds.add(areaId);
+    }
+    if (buildingIds.isEmpty && floorIds.isEmpty && areaIds.isEmpty) return;
+
+    try {
+      final buildingRows = buildingIds.isEmpty
+          ? const <dynamic>[]
+          : await _client
+                .from('facility_buildings')
+                .select('id, site_id, code, name_en, name_ar')
+                .inFilter('id', buildingIds.toList());
+      final floorRows = floorIds.isEmpty
+          ? const <dynamic>[]
+          : await _client
+                .from('facility_floors')
+                .select('id, code, name_en, name_ar, level_number')
+                .inFilter('id', floorIds.toList());
+      final areaRows = areaIds.isEmpty
+          ? const <dynamic>[]
+          : await _client
+                .from('facility_areas')
+                .select('id, code, name_en, name_ar, area_type')
+                .inFilter('id', areaIds.toList());
+
+      final buildings = <String, Map<String, dynamic>>{
+        for (final value in buildingRows)
+          if ((value as Map)['id'] case final String id)
+            id: Map<String, dynamic>.from(value),
+      };
+      final floors = <String, Map<String, dynamic>>{
+        for (final value in floorRows)
+          if ((value as Map)['id'] case final String id)
+            id: Map<String, dynamic>.from(value),
+      };
+      final areas = <String, Map<String, dynamic>>{
+        for (final value in areaRows)
+          if ((value as Map)['id'] case final String id)
+            id: Map<String, dynamic>.from(value),
+      };
+      final canonicalSiteIds = <String>{
+        for (final building in buildings.values)
+          if (building['site_id'] case final String id) id,
+      };
+      final siteRows = canonicalSiteIds.isEmpty
+          ? const <dynamic>[]
+          : await _client
+                .from('sites')
+                .select('id, name_en, name_ar')
+                .inFilter('id', canonicalSiteIds.toList());
+      final canonicalSites = <String, Map<String, dynamic>>{
+        for (final value in siteRows)
+          if ((value as Map)['id'] case final String id)
+            id: Map<String, dynamic>.from(value),
+      };
+
+      for (final row in inspectionRows) {
+        final building = buildings[row['building_id'] as String?];
+        final floor = floors[row['floor_id'] as String?];
+        final area = areas[row['area_id'] as String?];
+        final canonicalSite = canonicalSites[building?['site_id'] as String?];
+        if (canonicalSite != null) {
+          row['_hierarchy_site_name_en'] = canonicalSite['name_en'];
+          row['_hierarchy_site_name_ar'] = canonicalSite['name_ar'];
+        }
+        if (building != null) {
+          row['_hierarchy_building_code'] = building['code'];
+          row['_hierarchy_building_name_en'] = building['name_en'];
+          row['_hierarchy_building_name_ar'] = building['name_ar'];
+        }
+        if (floor != null) {
+          row['_hierarchy_floor_code'] = floor['code'];
+          row['_hierarchy_floor_name_en'] = floor['name_en'];
+          row['_hierarchy_floor_name_ar'] = floor['name_ar'];
+        }
+        if (area != null) {
+          row['_hierarchy_area_code'] = area['code'];
+          row['_hierarchy_area_name_en'] = area['name_en'];
+          row['_hierarchy_area_name_ar'] = area['name_ar'];
+        }
+      }
+    } catch (_) {
+      // Compatibility fallback while Phase 1 hierarchy is rolling out.
+    }
+  }
+
   Future<List<Map<String, dynamic>>> _safeThemeRows({
     required String table,
     required String columns,
@@ -240,6 +339,7 @@ class InspectionRepository {
       for (final row in rows as List) Map<String, dynamic>.from(row as Map),
     ];
     await _attachResolvedThemeData(maps);
+    await _attachLocationHierarchyData(maps);
     return maps.map(Inspection.fromJson).toList();
   }
 
@@ -268,6 +368,7 @@ class InspectionRepository {
       for (final row in rows as List) Map<String, dynamic>.from(row as Map),
     ];
     await _attachResolvedThemeData(maps);
+    await _attachLocationHierarchyData(maps);
     final list = <Inspection>[];
     for (final map in maps) {
       final site = map['sites'] as Map<String, dynamic>?;
@@ -295,6 +396,7 @@ class InspectionRepository {
     if (row == null) return null;
     final map = Map<String, dynamic>.from(row);
     await _attachResolvedThemeData([map]);
+    await _attachLocationHierarchyData([map]);
     final site = map['sites'] as Map<String, dynamic>?;
     final checklistType =
         (site?['checklist_type'] as String?)?.trim().isNotEmpty == true
@@ -426,6 +528,7 @@ class InspectionRepository {
     ];
     if (list.isEmpty) return null;
     await _attachResolvedThemeData(list);
+    await _attachLocationHierarchyData(list);
     // Prefer an open draft, then most recent submitted/approved.
     Map<String, dynamic> row = list.first;
     for (final r in list) {
@@ -467,6 +570,7 @@ class InspectionRepository {
     if (row == null) return null;
     final map = Map<String, dynamic>.from(row);
     await _attachResolvedThemeData([map]);
+    await _attachLocationHierarchyData([map]);
     final site = map['sites'] as Map<String, dynamic>?;
     final checklistType =
         (site?['checklist_type'] as String?)?.trim().isNotEmpty == true
@@ -499,6 +603,7 @@ class InspectionRepository {
     if (row == null) return null;
     final map = Map<String, dynamic>.from(row);
     await _attachResolvedThemeData([map]);
+    await _attachLocationHierarchyData([map]);
     final site = map['sites'] as Map<String, dynamic>?;
     final checklistType =
         (site?['checklist_type'] as String?)?.trim().isNotEmpty == true
@@ -589,6 +694,10 @@ class InspectionRepository {
           'inspector_name': inspection.inspectorName,
           'inspection_time': inspection.inspectionTime,
           'floor_label': inspection.floorLabel,
+          'location_label': inspection.locationLabel,
+          'building_code': inspection.buildingCode,
+          if (inspection.pinOverride != null)
+            'pin_override': inspection.pinOverride,
           'signature_path': inspection.signaturePath,
         },
         'p_items': [for (final item in inspection.items) item.toRpcJson()],
@@ -659,9 +768,26 @@ class InspectionRepository {
   Future<void> returnInspection({
     required Inspection inspection,
     required String reason,
+    required List<int> itemIndexes,
   }) async {
     final nextVersion = await _client.rpc(
       'manager_return_checklist_inspection',
+      params: {
+        'p_inspection_id': inspection.id,
+        'p_expected_version': inspection.version,
+        'p_reason': reason,
+        'p_item_indexes': itemIndexes,
+      },
+    );
+    inspection.version = (nextVersion as num).toInt();
+  }
+
+  Future<void> reopenApprovedInspection({
+    required Inspection inspection,
+    required String reason,
+  }) async {
+    final nextVersion = await _client.rpc(
+      'reopen_approved_checklist_inspection',
       params: {
         'p_inspection_id': inspection.id,
         'p_expected_version': inspection.version,
@@ -739,6 +865,7 @@ class InspectionRepository {
       for (final row in rows as List) Map<String, dynamic>.from(row as Map),
     ];
     await _attachResolvedThemeData(maps);
+    await _attachLocationHierarchyData(maps);
     final list = <Inspection>[];
     for (final map in maps) {
       final id = map['id'] as String;
@@ -835,7 +962,8 @@ class InspectionRepository {
     String? evidenceItemId,
     String? evidenceKind,
   }) async {
-    final isCompressiblePhoto = contentType == 'image/jpeg' || contentType == 'image/jpg';
+    final isCompressiblePhoto =
+        contentType == 'image/jpeg' || contentType == 'image/jpg';
     final uploadBytes = isCompressiblePhoto
         ? StorageImageOptimizer.optimize(bytes)
         : bytes;

@@ -76,6 +76,49 @@ class ChecklistCatalogRepository {
     return ChecklistTemplate.fromJson(Map<String, dynamic>.from(row));
   }
 
+  Future<ChecklistTemplate> createOrganizationCustomTemplate({
+    required String nameEn,
+    String nameAr = '',
+  }) async {
+    final id =
+        await _client.rpc(
+              'create_organization_custom_template',
+              params: {'p_name_en': nameEn.trim(), 'p_name_ar': nameAr.trim()},
+            )
+            as String;
+    final template = await getTemplateById(id);
+    if (template == null) {
+      throw StateError('custom_template_creation_failed');
+    }
+    return template;
+  }
+
+  Future<ChecklistTemplate> createOrganizationTemplateFor({
+    required String organizationId,
+    required String nameEn,
+    String nameAr = '',
+  }) async {
+    final suffix = DateTime.now().microsecondsSinceEpoch
+        .toRadixString(36)
+        .toUpperCase();
+    final code = 'CUSTOM_$suffix';
+    final row = await _client
+        .from('checklist_templates')
+        .insert({
+          'code': code,
+          'name_en': nameEn.trim(),
+          'name_ar': nameAr.trim().isEmpty ? nameEn.trim() : nameAr.trim(),
+          'organization_id': organizationId,
+          'family_code': code,
+          'version_number': 1,
+          'lifecycle_status': 'draft',
+          'is_active': true,
+        })
+        .select()
+        .single();
+    return ChecklistTemplate.fromJson(Map<String, dynamic>.from(row));
+  }
+
   Future<ChecklistTemplate> updateTemplate(ChecklistTemplate t) async {
     final row = await _client
         .from('checklist_templates')

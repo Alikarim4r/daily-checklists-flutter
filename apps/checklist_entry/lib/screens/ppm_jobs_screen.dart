@@ -47,7 +47,8 @@ class _PpmJobsScreenState extends ConsumerState<PpmJobsScreen> {
           .where(
             (a) =>
                 a.userId == widget.profile.id &&
-                a.allows(SiteAccessRequirement.write),
+                a.canWrite &&
+                a.isCurrentlyValid,
           )
           .map((a) => a.siteId)
           .toSet();
@@ -176,6 +177,7 @@ class _PpmJobsScreenState extends ConsumerState<PpmJobsScreen> {
   Future<void> _complete(FmPpmJob job) async {
     final notes = TextEditingController();
     final reading = TextEditingController(text: '{}');
+    final inspection = TextEditingController();
     String? validation;
     final save = await showDialog<bool>(
       context: context,
@@ -196,6 +198,15 @@ class _PpmJobsScreenState extends ConsumerState<PpmJobsScreen> {
                       labelText: t(
                         'Actual work completed',
                         'الأعمال المنفذة فعليًا',
+                      ),
+                    ),
+                  ),
+                  TextField(
+                    controller: inspection,
+                    decoration: InputDecoration(
+                      labelText: t(
+                        'Submitted A4 inspection ID (optional)',
+                        'معرّف فحص A4 المعتمد (اختياري)',
                       ),
                     ),
                   ),
@@ -255,23 +266,32 @@ class _PpmJobsScreenState extends ConsumerState<PpmJobsScreen> {
     if (save != true || !mounted) {
       notes.dispose();
       reading.dispose();
+      inspection.dispose();
       return;
     }
     final note = notes.text.trim();
+    final inspectionId = inspection.text.trim().isEmpty
+        ? null
+        : inspection.text.trim();
     final readings = Map<String, dynamic>.from(jsonDecode(reading.text) as Map);
     notes.dispose();
     reading.dispose();
+    inspection.dispose();
     setState(() => busy = true);
     try {
       final backend = ref.read(supabaseClientProvider);
-      final auth = ref.read(authRepositoryProvider);
       final online =
-          await auth.ensureActiveSession() &&
+          await _ensurePpmSession(ref) &&
           await ChecklistConnectivity.canReachBackend(backend);
       if (online) {
         await ref
             .read(fmPpmRepositoryProvider)
-            .completeJob(job.id, notes: note, readings: readings);
+            .completeJob(
+              job.id,
+              notes: note,
+              readings: readings,
+              inspectionId: inspectionId,
+            );
         await outbox.removePpmIfQueued(widget.profile.id, job.id);
         if (mounted) await _load();
       } else {
@@ -280,6 +300,7 @@ class _PpmJobsScreenState extends ConsumerState<PpmJobsScreen> {
           jobId: job.id,
           notes: note,
           readings: readings,
+          inspectionId: inspectionId,
         );
         if (mounted) {
           setState(

@@ -17,10 +17,12 @@ class SubscriptionManagementScreen extends StatefulWidget {
     super.key,
     required this.profile,
     required this.language,
+    this.onEntitlementChanged,
   });
 
   final Profile profile;
   final String language;
+  final ValueChanged<SubscriptionEntitlement?>? onEntitlementChanged;
 
   @override
   State<SubscriptionManagementScreen> createState() =>
@@ -150,6 +152,7 @@ class _SubscriptionManagementScreenState
     try {
       final current = await _repository.currentEntitlement();
       if (mounted) setState(() => _entitlement = current);
+      widget.onEntitlementChanged?.call(current);
     } catch (_) {
       // Keep the last server-verified entitlement visible.
     }

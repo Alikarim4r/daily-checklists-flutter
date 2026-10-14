@@ -1,4 +1,4 @@
-package com.moehe.checklists.checklist_entry
+package com.alielhassan.checkin
 
 import io.flutter.embedding.android.FlutterFragmentActivity
 

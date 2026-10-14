@@ -426,6 +426,11 @@ class Inspection {
     this.workflowNote,
     this.workflowChangedAt,
     this.workflowChangedBy,
+    this.returnItemIndexes = const <int>[],
+    this.reopenedAt,
+    this.reopenedBy,
+    this.reopenReason,
+    this.reopenCount = 0,
     this.createdAt,
     this.updatedAt,
     this.version = 1,
@@ -439,7 +444,22 @@ class Inspection {
     this.siteNameEn = '',
     this.siteNameAr = '',
     this.pin = '',
+    this.pinOverride,
     this.organizationId = '',
+    this.buildingId,
+    this.floorId,
+    this.areaId,
+    this.hierarchySiteNameEn,
+    this.hierarchySiteNameAr,
+    this.hierarchyBuildingCode,
+    this.hierarchyBuildingNameEn,
+    this.hierarchyBuildingNameAr,
+    this.hierarchyFloorCode,
+    this.hierarchyFloorNameEn,
+    this.hierarchyFloorNameAr,
+    this.hierarchyAreaCode,
+    this.hierarchyAreaNameEn,
+    this.hierarchyAreaNameAr,
     this.formTheme = 'classic_gold',
     this.formThemeAccent,
     this.parentSiteId,
@@ -452,7 +472,7 @@ class Inspection {
 
   final String id;
   final String siteId;
-  final String buildingCode;
+  String buildingCode;
   final DateTime inspectionDate;
   String inspectionTime;
   String floorLabel;
@@ -469,6 +489,11 @@ class Inspection {
   final String? workflowNote;
   final DateTime? workflowChangedAt;
   final String? workflowChangedBy;
+  final List<int> returnItemIndexes;
+  final DateTime? reopenedAt;
+  final String? reopenedBy;
+  final String? reopenReason;
+  final int reopenCount;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   int version;
@@ -481,8 +506,23 @@ class Inspection {
   final List<InspectionItem> items;
   final String siteNameEn;
   final String siteNameAr;
-  final String pin;
+  String pin;
+  String? pinOverride;
   final String organizationId;
+  final String? buildingId;
+  final String? floorId;
+  final String? areaId;
+  final String? hierarchySiteNameEn;
+  final String? hierarchySiteNameAr;
+  final String? hierarchyBuildingCode;
+  final String? hierarchyBuildingNameEn;
+  final String? hierarchyBuildingNameAr;
+  final String? hierarchyFloorCode;
+  final String? hierarchyFloorNameEn;
+  final String? hierarchyFloorNameAr;
+  final String? hierarchyAreaCode;
+  final String? hierarchyAreaNameEn;
+  final String? hierarchyAreaNameAr;
   final String formTheme;
   final String? formThemeAccent;
   final String? parentSiteId;
@@ -505,6 +545,40 @@ class Inspection {
   bool get awaitingReview => reviewStatus == ReviewStatus.submitted;
   bool get isReturned => reviewStatus == ReviewStatus.returned;
   bool get isTerminal => reviewStatus.isTerminal;
+
+  String hierarchySiteNameFor(String language) {
+    final value = language == 'ar' ? hierarchySiteNameAr : hierarchySiteNameEn;
+    if ((value ?? '').trim().isNotEmpty) return value!.trim();
+    return language == 'ar' && siteNameAr.trim().isNotEmpty
+        ? siteNameAr.trim()
+        : siteNameEn.trim();
+  }
+
+  String hierarchyBuildingFor(String language) {
+    final name = language == 'ar'
+        ? hierarchyBuildingNameAr
+        : hierarchyBuildingNameEn;
+    if ((name ?? '').trim().isNotEmpty) return name!.trim();
+    if ((hierarchyBuildingCode ?? '').trim().isNotEmpty) {
+      return hierarchyBuildingCode!.trim();
+    }
+    return buildingCode;
+  }
+
+  String hierarchyFloorFor(String language) {
+    final name = language == 'ar' ? hierarchyFloorNameAr : hierarchyFloorNameEn;
+    if ((name ?? '').trim().isNotEmpty) return name!.trim();
+    if ((hierarchyFloorCode ?? '').trim().isNotEmpty) {
+      return hierarchyFloorCode!.trim();
+    }
+    return floorLabel;
+  }
+
+  String hierarchyAreaFor(String language) {
+    final name = language == 'ar' ? hierarchyAreaNameAr : hierarchyAreaNameEn;
+    if ((name ?? '').trim().isNotEmpty) return name!.trim();
+    return (hierarchyAreaCode ?? '').trim();
+  }
 
   String get dateIso =>
       '${inspectionDate.year.toString().padLeft(4, '0')}-'
@@ -550,6 +624,16 @@ class Inspection {
           ? DateTime.tryParse(json['workflow_changed_at'] as String)
           : null,
       workflowChangedBy: json['workflow_changed_by'] as String?,
+      returnItemIndexes: [
+        for (final value in (json['return_item_indexes'] as List? ?? const []))
+          if (value is num) value.toInt(),
+      ],
+      reopenedAt: json['reopened_at'] != null
+          ? DateTime.tryParse(json['reopened_at'] as String)
+          : null,
+      reopenedBy: json['reopened_by'] as String?,
+      reopenReason: json['reopen_reason'] as String?,
+      reopenCount: (json['reopen_count'] as num?)?.toInt() ?? 0,
       createdAt: json['created_at'] != null
           ? DateTime.tryParse(json['created_at'] as String)
           : null,
@@ -567,9 +651,24 @@ class Inspection {
       items: items,
       siteNameEn: (site?['name_en'] ?? '') as String,
       siteNameAr: (site?['name_ar'] ?? '') as String,
-      pin: (site?['pin'] ?? '') as String,
+      pin: (json['pin_override'] ?? site?['pin'] ?? '') as String,
+      pinOverride: json['pin_override'] as String?,
       organizationId:
           (site?['organization_id'] ?? json['organization_id'] ?? '') as String,
+      buildingId: json['building_id'] as String?,
+      floorId: json['floor_id'] as String?,
+      areaId: json['area_id'] as String?,
+      hierarchySiteNameEn: json['_hierarchy_site_name_en'] as String?,
+      hierarchySiteNameAr: json['_hierarchy_site_name_ar'] as String?,
+      hierarchyBuildingCode: json['_hierarchy_building_code'] as String?,
+      hierarchyBuildingNameEn: json['_hierarchy_building_name_en'] as String?,
+      hierarchyBuildingNameAr: json['_hierarchy_building_name_ar'] as String?,
+      hierarchyFloorCode: json['_hierarchy_floor_code'] as String?,
+      hierarchyFloorNameEn: json['_hierarchy_floor_name_en'] as String?,
+      hierarchyFloorNameAr: json['_hierarchy_floor_name_ar'] as String?,
+      hierarchyAreaCode: json['_hierarchy_area_code'] as String?,
+      hierarchyAreaNameEn: json['_hierarchy_area_name_en'] as String?,
+      hierarchyAreaNameAr: json['_hierarchy_area_name_ar'] as String?,
       formTheme: (site?['form_theme'] as String?) ?? 'classic_gold',
       formThemeAccent: site?['form_theme_accent'] as String?,
       parentSiteId: site?['parent_site_id'] as String?,

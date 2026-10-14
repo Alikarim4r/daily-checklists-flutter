@@ -26,6 +26,17 @@ abstract final class ChecklistConnectivity {
     return _networkMarkers.any(value.contains);
   }
 
+  /// Authentication/session failures that should pause offline replay rather
+  /// than mark the field record itself as corrupt.
+  static bool isAuthRecoveryFailure(Object error) {
+    final value = '$error'.toLowerCase();
+    return value.contains('jwt') ||
+        value.contains('unauthorized') ||
+        value.contains('401') ||
+        value.contains('refresh token') ||
+        value.contains('session');
+  }
+
   /// Probes the actual backend. An attached Wi-Fi/mobile interface does not
   /// prove that DNS, the internet, or Supabase is reachable.
   static Future<bool> canReachBackend(

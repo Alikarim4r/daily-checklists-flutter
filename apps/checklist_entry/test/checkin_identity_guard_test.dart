@@ -27,7 +27,7 @@ void main() {
 
       expect(
         File('android/app/build.gradle.kts').readAsStringSync(),
-        contains('applicationId = "com.moehe.checklists.checklist_entry"'),
+        contains('applicationId = "com.alielhassan.checkin"'),
       );
       expect(
         File('ios/Runner/Info.plist').readAsStringSync(),

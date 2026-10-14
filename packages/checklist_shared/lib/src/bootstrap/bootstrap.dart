@@ -6,7 +6,14 @@ Future<void> bootstrapSupabase({
   SupabaseConfig config = SupabaseConfig.fromEnvironment,
 }) async {
   config.validate();
-  await Supabase.initialize(url: config.url, publishableKey: config.anonKey);
+  await Supabase.initialize(
+    url: config.url,
+    publishableKey: config.anonKey,
+    authOptions: const FlutterAuthClientOptions(
+      persistSession: true,
+      autoRefreshToken: true,
+    ),
+  );
 }
 
 SupabaseClient get supabase => Supabase.instance.client;

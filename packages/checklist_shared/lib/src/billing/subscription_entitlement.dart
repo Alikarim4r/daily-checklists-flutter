@@ -29,7 +29,7 @@ class SubscriptionEntitlement {
     return SubscriptionEntitlement(
       organizationId: json['organization_id'] as String,
       planTier: json['plan_tier'] as String,
-      productId: json['product_id'] as String,
+      productId: (json['product_id'] ?? '') as String,
       basePlanId: json['base_plan_id'] as String?,
       offerId: json['offer_id'] as String?,
       subscriptionState: json['subscription_state'] as String,

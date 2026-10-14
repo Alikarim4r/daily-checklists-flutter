@@ -15,6 +15,9 @@ class ChecklistTemplate {
     this.sourceTemplateId,
     this.publishedAt,
     this.publishedBy,
+    this.organizationId,
+    this.libraryTemplateId,
+    this.librarySourceVersion,
     this.items = const [],
   });
 
@@ -31,6 +34,9 @@ class ChecklistTemplate {
   final String? sourceTemplateId;
   final DateTime? publishedAt;
   final String? publishedBy;
+  final String? organizationId;
+  final String? libraryTemplateId;
+  final int? librarySourceVersion;
   final List<CatalogItem> items;
 
   FormPaperTheme get paperTheme =>
@@ -60,6 +66,9 @@ class ChecklistTemplate {
         ? null
         : DateTime.tryParse(json['published_at'] as String),
     publishedBy: json['published_by'] as String?,
+    organizationId: json['organization_id'] as String?,
+    libraryTemplateId: json['library_template_id'] as String?,
+    librarySourceVersion: (json['library_source_version'] as num?)?.toInt(),
     items: items ?? const [],
   );
 

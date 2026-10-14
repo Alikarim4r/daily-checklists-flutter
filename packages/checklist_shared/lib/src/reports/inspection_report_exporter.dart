@@ -578,13 +578,10 @@ class InspectionReportExporter {
     pw.MemoryImage? logo,
     String orgName,
   ) {
-    final siteName = ar
-        ? (inspection.siteNameAr.isNotEmpty
-              ? inspection.siteNameAr
-              : inspection.buildingCode)
-        : (inspection.siteNameEn.isNotEmpty
-              ? inspection.siteNameEn
-              : inspection.buildingCode);
+    final language = ar ? 'ar' : 'en';
+    final siteName = inspection.hierarchySiteNameFor(language).isNotEmpty
+        ? inspection.hierarchySiteNameFor(language)
+        : inspection.hierarchyBuildingFor(language);
 
     final logoWidget = logo != null
         ? pw.SizedBox(
@@ -722,6 +719,11 @@ class InspectionReportExporter {
     pw.MemoryImage? signatureImage,
   ) {
     final pin = inspection.pin.isNotEmpty ? inspection.pin : '—';
+    // Report header must match the value edited on this inspection, not
+    // an inherited hierarchy value that may differ from its saved snapshot.
+    final reportLocation = inspection.locationLabel;
+    final reportBuilding = inspection.bldgNo;
+    final reportFloor = inspection.floorLabel;
     final dir = ar ? pw.TextDirection.rtl : pw.TextDirection.ltr;
     final startAlign = ar ? pw.Alignment.centerRight : pw.Alignment.centerLeft;
     final startText = ar ? pw.TextAlign.right : pw.TextAlign.left;
@@ -816,7 +818,7 @@ class InspectionReportExporter {
         children: pair(
           goldLabel(ar ? 'الموقع:' : 'Location:', width: labelW, height: rowH),
           pw.Expanded(
-            child: val(inspection.locationLabel, height: rowH, forceLtr: !ar),
+            child: val(reportLocation, height: rowH, forceLtr: !ar),
           ),
         ),
       ),
@@ -857,7 +859,7 @@ class InspectionReportExporter {
                 pw.Expanded(
                   flex: 2,
                   child: val(
-                    inspection.floorLabel,
+                    reportFloor,
                     height: halfH,
                     align: pw.TextAlign.center,
                     forceLtr: true,
@@ -871,7 +873,7 @@ class InspectionReportExporter {
                 pw.Expanded(
                   flex: 3,
                   child: val(
-                    inspection.bldgNo,
+                    reportBuilding,
                     height: halfH,
                     align: pw.TextAlign.center,
                     forceLtr: true,
@@ -892,7 +894,7 @@ class InspectionReportExporter {
                 pw.Expanded(
                   flex: 3,
                   child: val(
-                    inspection.bldgNo,
+                    reportBuilding,
                     height: halfH,
                     align: pw.TextAlign.center,
                     forceLtr: true,
@@ -906,7 +908,7 @@ class InspectionReportExporter {
                 pw.Expanded(
                   flex: 2,
                   child: val(
-                    inspection.floorLabel,
+                    reportFloor,
                     height: halfH,
                     align: pw.TextAlign.center,
                   ),

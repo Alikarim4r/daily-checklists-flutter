@@ -15,11 +15,13 @@ class A4PaperSheet extends StatelessWidget {
     required this.child,
     this.maxWidth = 794, // ≈ A4 @ 96 dpi
     this.margin = const EdgeInsets.fromLTRB(28, 32, 28, 36),
+    this.scrollable = true,
   });
 
   final Widget child;
   final double maxWidth;
   final EdgeInsets margin;
+  final bool scrollable;
 
   /// A4 aspect ratio (width / height) for a single page viewport hint.
   static const double a4Aspect = 210 / 297;
@@ -78,12 +80,18 @@ class A4PaperSheet extends StatelessWidget {
           child: sheetInner,
         );
 
+        final body = Padding(
+          padding: EdgeInsets.fromLTRB(
+            8,
+            16,
+            8,
+            24 + (scrollable ? bottomInset : 0),
+          ),
+          child: Center(child: sheet),
+        );
         return ColoredBox(
           color: dark ? ChecklistChrome.darkCanvas : const Color(0x00000000),
-          child: SingleChildScrollView(
-            padding: EdgeInsets.fromLTRB(8, 16, 8, 24 + bottomInset),
-            child: Center(child: sheet),
-          ),
+          child: scrollable ? SingleChildScrollView(child: body) : body,
         );
       },
     );

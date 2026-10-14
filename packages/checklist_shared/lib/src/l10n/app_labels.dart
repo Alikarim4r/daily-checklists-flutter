@@ -4,6 +4,7 @@ const supportedLanguages = ['en', 'ar', 'bn', 'hi', 'ml', 'tl', 'ta'];
 
 /// Viewer app languages (full UI localization supported).
 const viewerLanguages = ['en', 'ar'];
+const adminLanguages = ['en', 'ar'];
 
 const languageDisplayNames = {
   'en': 'English',

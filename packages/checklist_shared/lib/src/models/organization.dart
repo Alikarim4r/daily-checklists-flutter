@@ -10,6 +10,11 @@ class Organization {
     this.logoArPath,
     this.formTheme = 'classic_gold',
     this.formThemeAccent,
+    this.selfService = false,
+    this.countryCode = 'QA',
+    this.defaultLanguage = 'en',
+    this.setupCompleted = false,
+    this.joinCode,
   });
 
   final String id;
@@ -24,6 +29,11 @@ class Organization {
   final String? logoArPath;
   final String formTheme;
   final String? formThemeAccent;
+  final bool selfService;
+  final String countryCode;
+  final String defaultLanguage;
+  final bool setupCompleted;
+  final String? joinCode;
 
   FormPaperTheme get paperTheme =>
       FormPaperTheme.resolve(themeDb: formTheme, accentHex: formThemeAccent);
@@ -45,6 +55,11 @@ class Organization {
     String? formTheme,
     String? formThemeAccent,
     bool clearThemeAccent = false,
+    bool? selfService,
+    String? countryCode,
+    String? defaultLanguage,
+    bool? setupCompleted,
+    String? joinCode,
   }) {
     return Organization(
       id: id,
@@ -57,6 +72,11 @@ class Organization {
       formThemeAccent: clearThemeAccent
           ? null
           : (formThemeAccent ?? this.formThemeAccent),
+      selfService: selfService ?? this.selfService,
+      countryCode: countryCode ?? this.countryCode,
+      defaultLanguage: defaultLanguage ?? this.defaultLanguage,
+      setupCompleted: setupCompleted ?? this.setupCompleted,
+      joinCode: joinCode ?? this.joinCode,
     );
   }
 
@@ -69,6 +89,11 @@ class Organization {
     logoArPath: json['logo_ar_path'] as String?,
     formTheme: (json['form_theme'] as String?) ?? 'classic_gold',
     formThemeAccent: json['form_theme_accent'] as String?,
+    selfService: json['self_service'] as bool? ?? false,
+    countryCode: (json['country_code'] ?? 'QA') as String,
+    defaultLanguage: (json['default_language'] ?? 'en') as String,
+    setupCompleted: json['setup_completed'] as bool? ?? false,
+    joinCode: json['join_code'] as String?,
   );
 
   Map<String, dynamic> toInsertJson() => {

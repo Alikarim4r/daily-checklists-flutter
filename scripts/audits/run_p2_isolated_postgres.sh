@@ -17,9 +17,10 @@ started=1
 run(){ psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -f "$1"; }
 run "$ROOT/supabase/tests/p1_global_library_fixture.sql" >/dev/null
 run "$ROOT/supabase/tests/p2_ppm_fixture.sql" >/dev/null
-for m in 20261014001000_ppm_assets_and_schedules.sql 20261014002000_ppm_execution_rpc.sql;do
+for m in 20261014001000_ppm_assets_and_schedules.sql 20261014002000_ppm_execution_rpc.sql 20261014003000_ppm_background_scheduler.sql;do
  echo "Applying $m in disposable PostgreSQL"
  run "$ROOT/supabase/migrations/$m" >/dev/null
 done
 run "$ROOT/supabase/tests/p2_ppm_integration.sql"
+run "$ROOT/supabase/tests/p2_ppm_scheduler_integration.sql"
 echo 'P2 PPM ISOLATED INTEGRATION PASS'

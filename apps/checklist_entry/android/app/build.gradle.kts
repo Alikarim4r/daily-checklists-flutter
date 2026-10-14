@@ -36,7 +36,7 @@ if (releaseTaskRequested && !releaseSigningReady) {
 }
 
 android {
-    namespace = "com.moehe.checklists.checklist_entry"
+    namespace = "com.alielhassan.checkin"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -46,7 +46,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.moehe.checklists.checklist_entry"
+        applicationId = "com.alielhassan.checkin"
         minSdk = maxOf(24, flutter.minSdkVersion)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

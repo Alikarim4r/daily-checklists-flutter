@@ -1,15 +1,20 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/enums.dart';
 import '../models/profile.dart';
+import '../offline/offline_inspection_queue.dart';
 import '../providers/providers.dart';
 import '../providers/session_security_provider.dart';
-import '../security/session_relock_policy.dart';
+import '../services/checklist_connectivity.dart';
 import '../theme/checklist_brand.dart';
 
 typedef ProfilePredicate = bool Function(Profile profile);
 typedef HomeBuilder = Widget Function(BuildContext context, Profile profile);
+typedef PendingProfileBuilder =
+    Widget Function(BuildContext context, Profile profile);
 typedef UserErrorMessage = String Function(Object error);
 
 /// Login → approval → role gate → optional site access → home.
@@ -25,12 +30,22 @@ class ChecklistAuthGate extends ConsumerStatefulWidget {
     this.onLanguageChanged,
     this.allowSelfRegistration = true,
     this.registrationRequestedRole = 'technician_request',
+    this.registrationAccessCodeRequired = false,
+    this.registrationIntroEn,
+    this.registrationIntroAr,
+    this.registrationSuccessEn,
+    this.registrationSuccessAr,
+    this.registrationActionLabelEn,
+    this.registrationActionLabelAr,
+    this.pendingProfileBuilder,
     this.brandMarkAsset,
     this.siteAccessRequirement = SiteAccessRequirement.none,
     this.accessDeniedMessage = 'لا تملك صلاحية استخدام هذا التطبيق.',
     this.noSiteAccessMessage =
         'لم تُعيَّن لك مواقع بعد. تواصل مع المسؤول لاعتماد الحساب وربطه بالمواقع.',
     this.userErrorMessage,
+    this.allowOfflineAccess = false,
+    this.compactPremiumLogin = false,
   });
 
   final String appTitle;
@@ -41,11 +56,24 @@ class ChecklistAuthGate extends ConsumerStatefulWidget {
   final ValueChanged<String>? onLanguageChanged;
   final bool allowSelfRegistration;
   final String registrationRequestedRole;
+  final bool registrationAccessCodeRequired;
+  final String? registrationIntroEn;
+  final String? registrationIntroAr;
+  final String? registrationSuccessEn;
+  final String? registrationSuccessAr;
+  final String? registrationActionLabelEn;
+  final String? registrationActionLabelAr;
+  final PendingProfileBuilder? pendingProfileBuilder;
   final String? brandMarkAsset;
   final SiteAccessRequirement siteAccessRequirement;
   final String accessDeniedMessage;
   final String noSiteAccessMessage;
   final UserErrorMessage? userErrorMessage;
+
+  /// Allows a previously approved user to keep working from encrypted local
+  /// data when the backend is unreachable. Passwords are never cached.
+  final bool allowOfflineAccess;
+  final bool compactPremiumLogin;
 
   @override
   ConsumerState<ChecklistAuthGate> createState() => _ChecklistAuthGateState();
@@ -57,12 +85,12 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
   final email = TextEditingController();
   final password = TextEditingController();
   final fullName = TextEditingController();
+  final accessCode = TextEditingController();
   bool loading = false;
   bool obscurePassword = true;
   bool registerMode = false;
   String? error;
   String? info;
-  final SessionRelockPolicy _relockPolicy = SessionRelockPolicy();
   String? _accessFutureKey;
   Future<int>? _accessFuture;
 
@@ -91,15 +119,14 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     email.dispose();
     password.dispose();
     fullName.dispose();
+    accessCode.dispose();
     super.dispose();
   }
 
@@ -112,19 +139,71 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
     }
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.detached) {
-      _relockPolicy.onBackgrounded();
+  Profile? _cachedOfflineProfile() {
+    if (!widget.allowOfflineAccess ||
+        !OfflineInspectionQueue.instance.isReady) {
+      return null;
+    }
+    final queue = OfflineInspectionQueue.instance;
+    final profile = queue.cachedOfflineProfile();
+    if (profile == null ||
+        !(profile.isApprovedActive || profile.isPlatformOwner) ||
+        !widget.allowedForProfile(profile)) {
+      return null;
+    }
+    if (widget.siteAccessRequirement != SiteAccessRequirement.none &&
+        !profile.isPlatformOwner &&
+        profile.role != UserRole.superAdmin) {
+      final hasValidGrant = queue
+          .cachedOfflineSiteAccess()
+          .where((access) => access.userId == profile.id)
+          .any((access) => access.allows(widget.siteAccessRequirement));
+      if (!hasValidGrant) return null;
+    }
+    return profile;
+  }
+
+  void _rememberOfflineProfile(Profile profile) {
+    if (!widget.allowOfflineAccess ||
+        !(profile.isApprovedActive || profile.isPlatformOwner) ||
+        !widget.allowedForProfile(profile)) {
       return;
     }
-    if (state == AppLifecycleState.resumed && _relockPolicy.onResumed()) {
-      _accessFutureKey = null;
-      _accessFuture = null;
-      ref.read(sessionSecurityProvider.notifier).lockForResume();
+    unawaited(_cacheOfflineAuthorization(profile));
+  }
+
+  Future<void> _cacheOfflineAuthorization(Profile profile) async {
+    try {
+      final needsGrantSnapshot =
+          widget.siteAccessRequirement != SiteAccessRequirement.none &&
+          !profile.isPlatformOwner &&
+          profile.role != UserRole.superAdmin;
+      final siteAccess = needsGrantSnapshot
+          ? await ref.read(siteRepositoryProvider).listMySiteAccess()
+          : const <UserSiteAccess>[];
+      await OfflineInspectionQueue.instance.cacheOfflineProfile(
+        profile,
+        siteAccess: siteAccess,
+      );
+    } catch (_) {
+      // Never overwrite a previously valid encrypted authorization snapshot
+      // when the backend cannot refresh it.
     }
+  }
+
+  Widget _offlineHome(Profile profile) {
+    return _maybeBiometricGate(context, widget.homeBuilder(context, profile));
+  }
+
+  Widget _offlineWhenBackendUnavailable({required Widget onlineFallback}) {
+    final cached = _cachedOfflineProfile();
+    // Explicit sign-out purges the encrypted offline profile. Therefore a
+    // valid cached profile is a durable local statement that this user chose
+    // to stay signed in. Do not bounce a field technician back to Login merely
+    // because Auth/session restoration is still catching up after process
+    // restart or a long offline period.
+    if (cached != null) return _offlineHome(cached);
+    return onlineFallback;
   }
 
   Future<int> _countSiteAccess(Profile profile) {
@@ -177,13 +256,19 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
             password: password.text,
             fullName: fullName.text.trim(),
             requestedRole: widget.registrationRequestedRole,
+            accessCode: widget.registrationAccessCodeRequired
+                ? accessCode.text
+                : null,
           );
       setState(() {
         registerMode = false;
         info = ar
-            ? 'تم إرسال طلب التسجيل. انتظر موافقة المسؤول قبل الدخول.'
-            : 'Registration submitted. Wait for admin approval before signing in.';
+            ? (widget.registrationSuccessAr ??
+                  'تم إرسال طلب التسجيل. انتظر موافقة المسؤول قبل الدخول.')
+            : (widget.registrationSuccessEn ??
+                  'Registration submitted. Wait for admin approval before signing in.');
         password.clear();
+        accessCode.clear();
       });
     } catch (e) {
       setState(() => error = _messageFor(e));
@@ -213,14 +298,30 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
     return auth.when(
       loading: () =>
           const Scaffold(body: Center(child: CircularProgressIndicator())),
-      error: (e, _) => Scaffold(body: Center(child: Text(_messageFor(e)))),
+      error: (e, _) {
+        final cached = _cachedOfflineProfile();
+        if (cached != null && ChecklistConnectivity.isTransportFailure(e)) {
+          return _offlineHome(cached);
+        }
+        return Scaffold(body: Center(child: Text(_messageFor(e))));
+      },
       data: (state) {
-        if (state.session == null) return _loginScaffold();
+        if (state.session == null) {
+          return _offlineWhenBackendUnavailable(
+            onlineFallback: _loginScaffold(),
+          );
+        }
         final profileAsync = ref.watch(currentProfileProvider);
         return profileAsync.when(
           loading: () =>
               const Scaffold(body: Center(child: CircularProgressIndicator())),
-          error: (e, _) => Scaffold(body: Center(child: Text(_messageFor(e)))),
+          error: (e, _) {
+            final cached = _cachedOfflineProfile();
+            if (cached != null && ChecklistConnectivity.isTransportFailure(e)) {
+              return _offlineHome(cached);
+            }
+            return Scaffold(body: Center(child: Text(_messageFor(e))));
+          },
           data: (profile) {
             if (profile == null) {
               return Scaffold(
@@ -245,6 +346,10 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
               );
             }
             if (!profile.isApprovedActive && !profile.isPlatformOwner) {
+              final pendingBuilder = widget.pendingProfileBuilder;
+              if (pendingBuilder != null) {
+                return pendingBuilder(context, profile);
+              }
               return _statusScaffold(
                 ar
                     ? 'الحساب بانتظار الموافقة أو غير نشط.'
@@ -262,6 +367,12 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
                 future: _countSiteAccess(profile),
                 builder: (context, snap) {
                   if (snap.hasError) {
+                    final cached = _cachedOfflineProfile();
+                    if (cached != null &&
+                        cached.id == profile.id &&
+                        ChecklistConnectivity.isTransportFailure(snap.error!)) {
+                      return _offlineHome(cached);
+                    }
                     return _statusScaffold(_messageFor(snap.error!), profile);
                   }
                   if (!snap.hasData) {
@@ -272,6 +383,7 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
                   if (snap.data! < 1) {
                     return _statusScaffold(widget.noSiteAccessMessage, profile);
                   }
+                  _rememberOfflineProfile(profile);
                   return _maybeBiometricGate(
                     context,
                     widget.homeBuilder(context, profile),
@@ -279,6 +391,7 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
                 },
               );
             }
+            _rememberOfflineProfile(profile);
             return _maybeBiometricGate(
               context,
               widget.homeBuilder(context, profile),
@@ -363,35 +476,35 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
     );
   }
 
-  Widget _brandMark() {
+  Widget _brandMark({double size = 72, double radius = 16}) {
     final asset = widget.brandMarkAsset;
     if (asset != null && asset.isNotEmpty) {
       return ClipRRect(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(radius),
         child: Image.asset(
           asset,
-          width: 72,
-          height: 72,
+          width: size,
+          height: size,
           fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => _fallbackMark(),
+          errorBuilder: (_, _, _) => _fallbackMark(size: size, radius: radius),
         ),
       );
     }
-    return _fallbackMark();
+    return _fallbackMark(size: size, radius: radius);
   }
 
-  Widget _fallbackMark() {
+  Widget _fallbackMark({double size = 72, double radius = 16}) {
     return Container(
-      width: 72,
-      height: 72,
+      width: size,
+      height: size,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(radius),
         gradient: ChecklistChrome.iconWellGradient,
       ),
       alignment: Alignment.center,
       child: Icon(
         Icons.fact_check_rounded,
-        size: 36,
+        size: size * .5,
         color: ChecklistChrome.iconGlyph,
       ),
     );
@@ -403,44 +516,60 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
     final registering = widget.allowSelfRegistration && registerMode;
     final subtitle = registering
         ? (ar
-              ? 'أنشئ حساباً. سيظهر لدى المشرف للموافقة قبل الدخول.'
-              : 'Create an account. An admin must approve before access.')
+              ? (widget.registrationIntroAr ??
+                    'أنشئ حساباً. سيظهر لدى المشرف للموافقة قبل الدخول.')
+              : (widget.registrationIntroEn ??
+                    'Create an account. An admin must approve before access.'))
         : widget.subtitle;
 
     return Scaffold(
-      backgroundColor: dark
+      backgroundColor: widget.compactPremiumLogin
+          ? theme.scaffoldBackgroundColor
+          : dark
           ? ChecklistChrome.darkCanvas
           : Color.alphaBlend(
               ChecklistChrome.accentSoft.withValues(alpha: 0.55),
               Colors.white,
             ),
       body: SafeArea(
-        child: Center(
+        child: Align(
+          alignment: widget.compactPremiumLogin
+              ? Alignment.topCenter
+              : Alignment.center,
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            padding: EdgeInsets.symmetric(
+              horizontal: 20,
+              vertical: widget.compactPremiumLogin ? 16 : 24,
+            ),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 420),
               child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: dark ? ChecklistChrome.darkSurface : Colors.white,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: ChecklistChrome.accent.withValues(alpha: 0.28),
-                  ),
-                  boxShadow: dark
-                      ? null
-                      : [
-                          BoxShadow(
-                            color: ChecklistChrome.primary.withValues(
-                              alpha: 0.10,
-                            ),
-                            blurRadius: 28,
-                            offset: const Offset(0, 12),
-                          ),
-                        ],
-                ),
+                decoration: widget.compactPremiumLogin
+                    ? const BoxDecoration()
+                    : BoxDecoration(
+                        color: dark
+                            ? ChecklistChrome.darkSurface
+                            : Colors.white,
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(
+                          color: ChecklistChrome.accent.withValues(alpha: 0.28),
+                        ),
+                        boxShadow: dark
+                            ? null
+                            : [
+                                BoxShadow(
+                                  color: ChecklistChrome.primary.withValues(
+                                    alpha: 0.10,
+                                  ),
+                                  blurRadius: 28,
+                                  offset: const Offset(0, 12),
+                                ),
+                              ],
+                      ),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+                  padding: widget.compactPremiumLogin
+                      ? const EdgeInsets.fromLTRB(4, 4, 4, 24)
+                      : const EdgeInsets.fromLTRB(24, 20, 24, 24),
                   child: Form(
                     key: _formKey,
                     child: Column(
@@ -463,31 +592,59 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
                             ),
                           ),
                         const SizedBox(height: 8),
-                        Center(child: _brandMark()),
-                        const SizedBox(height: 16),
-                        Text(
-                          widget.appTitle,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w800,
-                            color: dark
-                                ? ChecklistChrome.darkInk
-                                : ChecklistChrome.ink,
+                        if (widget.compactPremiumLogin)
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              _brandMark(size: 52, radius: 12),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      widget.appTitle,
+                                      style: theme.textTheme.headlineSmall,
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      subtitle,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: theme.textTheme.bodySmall,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          )
+                        else ...[
+                          Center(child: _brandMark()),
+                          const SizedBox(height: 16),
+                          Text(
+                            widget.appTitle,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                              color: dark
+                                  ? ChecklistChrome.darkInk
+                                  : ChecklistChrome.ink,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          subtitle,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: dark
-                                ? ChecklistChrome.darkInkMuted
-                                : ChecklistChrome.inkMuted,
-                            height: 1.35,
+                          const SizedBox(height: 8),
+                          Text(
+                            subtitle,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: dark
+                                  ? ChecklistChrome.darkInkMuted
+                                  : ChecklistChrome.inkMuted,
+                              height: 1.35,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 22),
+                        ],
+                        SizedBox(height: widget.compactPremiumLogin ? 28 : 22),
                         if (registering) ...[
                           TextFormField(
                             controller: fullName,
@@ -503,6 +660,36 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
                             validator: (v) {
                               if (v == null || v.trim().isEmpty) {
                                 return ar ? 'الاسم مطلوب' : 'Name is required';
+                              }
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 14),
+                        ],
+                        if (registering &&
+                            widget.registrationAccessCodeRequired) ...[
+                          TextFormField(
+                            controller: accessCode,
+                            textInputAction: TextInputAction.next,
+                            textCapitalization: TextCapitalization.characters,
+                            autocorrect: false,
+                            decoration: InputDecoration(
+                              labelText: ar
+                                  ? 'رمز الشركة أو الدعوة'
+                                  : 'Company or invitation code',
+                              hintText: 'ORG-XXXXXX / INV-XXXXXXXX',
+                              prefixIcon: const Icon(Icons.vpn_key_outlined),
+                              border: const OutlineInputBorder(),
+                            ),
+                            validator: (value) {
+                              if (!registering ||
+                                  !widget.registrationAccessCodeRequired) {
+                                return null;
+                              }
+                              if (value == null || value.trim().isEmpty) {
+                                return ar
+                                    ? 'رمز الشركة أو الدعوة مطلوب'
+                                    : 'Company or invitation code is required';
                               }
                               return null;
                             },
@@ -637,7 +824,11 @@ class _ChecklistAuthGateState extends ConsumerState<ChecklistAuthGate>
                                 )
                               : Text(
                                   registering
-                                      ? (ar ? 'إنشاء حساب' : 'Create account')
+                                      ? (ar
+                                            ? (widget.registrationActionLabelAr ??
+                                                  'إنشاء حساب')
+                                            : (widget.registrationActionLabelEn ??
+                                                  'Create account'))
                                       : (ar ? 'تسجيل الدخول' : 'Sign in'),
                                   style: const TextStyle(
                                     fontWeight: FontWeight.w700,

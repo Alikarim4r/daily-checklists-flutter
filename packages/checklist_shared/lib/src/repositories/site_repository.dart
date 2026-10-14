@@ -12,7 +12,7 @@ class SiteRepository {
 
   static const _siteSelect =
       'id, organization_id, zone_id, parent_site_id, name_en, name_ar, '
-      'building_code, pin, checklist_type, location, is_active, report_logo_path, '
+      'building_code, pin, checklist_type, checklist_category, checklist_subcategory, floor_scope, location, is_active, report_logo_path, '
       'form_theme, form_theme_accent';
 
   Future<List<ChecklistSite>> _withEffectiveThemes(
@@ -279,7 +279,10 @@ class SiteRepository {
       return listChecklistSites();
     }
     final access = await listMySiteAccess();
-    final ids = access.where((a) => a.canRead).map((a) => a.siteId).toSet();
+    final ids = access
+        .where((a) => a.allows(SiteAccessRequirement.read))
+        .map((a) => a.siteId)
+        .toSet();
     return _expandChecklistAccess(grantedIds: ids);
   }
 
@@ -289,7 +292,10 @@ class SiteRepository {
       return listChecklistSites();
     }
     final access = await listMySiteAccess();
-    final ids = access.where((a) => a.canWrite).map((a) => a.siteId).toSet();
+    final ids = access
+        .where((a) => a.allows(SiteAccessRequirement.write))
+        .map((a) => a.siteId)
+        .toSet();
     return _expandChecklistAccess(grantedIds: ids);
   }
 
@@ -326,7 +332,10 @@ class SiteRepository {
       ]);
       all = loaded[0] as List<ChecklistSite>;
       final access = loaded[1] as List<UserSiteAccess>;
-      grantedIds = access.where(accessFlag).map((a) => a.siteId).toSet();
+      grantedIds = access
+          .where((a) => a.isCurrentlyValid && accessFlag(a))
+          .map((a) => a.siteId)
+          .toSet();
     }
 
     final parentGrants = grantedIds == null
@@ -488,6 +497,9 @@ class SiteRepository {
     String? buildingCode,
     String pin = '',
     String checklistType = 'DEFAULT',
+    String checklistCategory = 'general',
+    String checklistSubcategory = '',
+    String floorScope = 'all',
     String location = 'MOEHE Permanent Headquarters',
     String siteType = 'other',
   }) async {
@@ -503,6 +515,9 @@ class SiteRepository {
           'building_code': (code == null || code.isEmpty) ? null : code,
           'pin': pin,
           'checklist_type': checklistType,
+          'checklist_category': checklistCategory,
+          'checklist_subcategory': checklistSubcategory,
+          'floor_scope': floorScope,
           'location': location,
           'site_type': siteType,
           'is_active': true,
@@ -521,23 +536,36 @@ class SiteRepository {
     String? buildingCode,
     String pin = '',
     String checklistType = 'DEFAULT',
+    String? checklistCategory,
+    String? checklistSubcategory,
+    String? floorScope,
     String location = 'MOEHE Permanent Headquarters',
     bool isActive = true,
   }) async {
     final code = buildingCode?.trim();
+    final payload = <String, dynamic>{
+      'zone_id': zoneId,
+      'parent_site_id': parentSiteId,
+      'name_en': nameEn,
+      'name_ar': nameAr,
+      'building_code': (code == null || code.isEmpty) ? null : code,
+      'pin': pin,
+      'checklist_type': checklistType,
+      'location': location,
+      'is_active': isActive,
+    };
+    if (checklistCategory != null) {
+      payload['checklist_category'] = checklistCategory;
+    }
+    if (checklistSubcategory != null) {
+      payload['checklist_subcategory'] = checklistSubcategory;
+    }
+    if (floorScope != null) {
+      payload['floor_scope'] = floorScope;
+    }
     final row = await _client
         .from('sites')
-        .update({
-          'zone_id': zoneId,
-          'parent_site_id': parentSiteId,
-          'name_en': nameEn,
-          'name_ar': nameAr,
-          'building_code': (code == null || code.isEmpty) ? null : code,
-          'pin': pin,
-          'checklist_type': checklistType,
-          'location': location,
-          'is_active': isActive,
-        })
+        .update(payload)
         .eq('id', id)
         .select(_siteSelect)
         .single();
@@ -557,6 +585,9 @@ class SiteRepository {
       buildingCode: site.buildingCode,
       pin: site.pin,
       checklistType: checklistType,
+      checklistCategory: site.checklistCategory,
+      checklistSubcategory: site.checklistSubcategory,
+      floorScope: site.floorScope,
       location: site.location,
       isActive: site.isActive,
     );
@@ -597,13 +628,6 @@ class SiteRepository {
     required SiteAccessRequirement requirement,
   }) async {
     final access = await listMySiteAccess();
-    switch (requirement) {
-      case SiteAccessRequirement.none:
-        return access.length;
-      case SiteAccessRequirement.read:
-        return access.where((a) => a.canRead).length;
-      case SiteAccessRequirement.write:
-        return access.where((a) => a.canWrite).length;
-    }
+    return access.where((a) => a.allows(requirement)).length;
   }
 }
