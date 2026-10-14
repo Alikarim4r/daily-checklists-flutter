@@ -11,6 +11,7 @@ import '../repositories/correction_repository.dart';
 import '../repositories/corrective_action_repository.dart';
 import '../repositories/inspection_repository.dart';
 import '../repositories/fm_ppm_repository.dart';
+import '../repositories/technical_documents_repository.dart';
 import '../repositories/location_hierarchy_repository.dart';
 import '../repositories/notification_repository.dart';
 import '../repositories/ops_metrics_repository.dart';
@@ -44,6 +45,11 @@ final organizationRepositoryProvider = Provider<OrganizationRepository>(
 final catalogRepositoryProvider = Provider<ChecklistCatalogRepository>(
   (ref) => ChecklistCatalogRepository(ref.watch(supabaseClientProvider)),
 );
+
+final technicalDocumentsRepositoryProvider =
+    Provider<TechnicalDocumentsRepository>(
+      (ref) => TechnicalDocumentsRepository(ref.watch(supabaseClientProvider)),
+    );
 
 final fmPpmRepositoryProvider = Provider<FmPpmRepository>(
   (ref) => FmPpmRepository(ref.watch(supabaseClientProvider)),

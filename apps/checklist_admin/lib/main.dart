@@ -20,6 +20,7 @@ import 'screens/delete_tab.dart';
 import 'screens/first_company_setup_screen.dart';
 import 'screens/policies_screen.dart';
 import 'screens/ppm_tab.dart';
+import 'screens/technical_documents_tab.dart';
 import 'screens/structure_tab.dart';
 import 'screens/users_tab.dart';
 
@@ -348,6 +349,13 @@ class _AdminShellState extends ConsumerState<AdminShell> {
         icon: Icons.handyman_outlined,
         selectedIcon: Icons.handyman,
         page: PpmTab(profile: p, language: widget.language),
+      ),
+      _AdminDestination(
+        labelEn: 'Technical Docs',
+        labelAr: 'المستندات الفنية',
+        icon: Icons.description_outlined,
+        selectedIcon: Icons.description,
+        page: TechnicalDocumentsTab(profile: p, language: widget.language),
       ),
       _AdminDestination(
         labelEn: 'Users',
