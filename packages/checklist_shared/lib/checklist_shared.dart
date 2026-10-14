@@ -23,6 +23,7 @@ export 'src/models/inspection.dart';
 export 'src/models/fm_ppm.dart';
 export 'src/models/technical_documents.dart';
 export 'src/repositories/technical_documents_repository.dart';
+export 'src/repositories/checklist_filter_repository.dart';
 export 'src/models/fm_ppm_starter_recipes.dart';
 export 'src/repositories/fm_ppm_repository.dart';
 export 'src/models/location_hierarchy.dart';

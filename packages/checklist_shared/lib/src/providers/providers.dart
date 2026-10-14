@@ -12,6 +12,7 @@ import '../repositories/corrective_action_repository.dart';
 import '../repositories/inspection_repository.dart';
 import '../repositories/fm_ppm_repository.dart';
 import '../repositories/technical_documents_repository.dart';
+import '../repositories/checklist_filter_repository.dart';
 import '../repositories/location_hierarchy_repository.dart';
 import '../repositories/notification_repository.dart';
 import '../repositories/ops_metrics_repository.dart';
@@ -44,6 +45,10 @@ final organizationRepositoryProvider = Provider<OrganizationRepository>(
 
 final catalogRepositoryProvider = Provider<ChecklistCatalogRepository>(
   (ref) => ChecklistCatalogRepository(ref.watch(supabaseClientProvider)),
+);
+
+final checklistFilterRepositoryProvider = Provider<ChecklistFilterRepository>(
+  (ref) => ChecklistFilterRepository(ref.watch(supabaseClientProvider)),
 );
 
 final technicalDocumentsRepositoryProvider =

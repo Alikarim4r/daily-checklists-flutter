@@ -10,6 +10,9 @@ import 'package:intl/intl.dart';
 import 'package:signature/signature.dart';
 
 import '../design/checkview_tokens.dart';
+import '../design/checkview_motion.dart';
+import '../design/checkview_filter_panel.dart';
+import '../design/checkview_location_match.dart';
 import '../design/checkview_errors.dart';
 import '../design/checkview_widgets.dart';
 import 'checkview_notices.dart';
@@ -49,6 +52,10 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
   List<UserSiteAccess> myAccess = [];
   List<Inspection> records = [];
   String? siteFilter;
+  LocationFilterScope locationScope = const LocationFilterScope([]);
+  LocationFilterSelection locationSelection = const LocationFilterSelection();
+  bool filtersExpanded = false;
+  String _searchQuery = '';
 
   /// Drill-down: org → zone → campus → checklist.
   OrgBrowseSection? browseOrg;
@@ -266,8 +273,6 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     super.dispose();
   }
 
-  bool get _wide => MediaQuery.sizeOf(context).width >= CvBreakpoint.split;
-
   bool get _isReviewer => widget.profile.canReviewInspections;
 
   /// Writers and reviewers see the full workflow, viewers only approved.
@@ -360,11 +365,8 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
   bool get _canEditSelected {
     final insp = selected;
     if (insp == null) return false;
-    // Approved forms are view-only in Viewer (admin edits come later).
-    if (insp.isTerminal) return false;
-    if (_canManageSelected()) return true;
-    if (!insp.isSubmitted) return _canWriteSelected();
-    return false;
+    if (insp.isSubmitted || insp.isTerminal) return false;
+    return _canWriteSelected();
   }
 
   Future<void> _refreshOverdue(Inspection insp) async {
@@ -417,6 +419,11 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         orgRepo.listAllZones(),
         siteRepo.listMySiteAccess(),
         _safeUnreadNotifications(),
+        ref
+            .read(locationHierarchyRepositoryProvider)
+            .listMyChecklistLocationScope(
+              requirement: SiteAccessRequirement.read,
+            ),
       ]);
       if (!mounted || generation != _loadGeneration) return;
       final groups = foundation[0] as List<CampusChecklistGroup>;
@@ -424,17 +431,28 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       final allZones = foundation[2] as List<Zone>;
       final access = foundation[3] as List<UserSiteAccess>;
       final workflow = foundation[4] as List<WorkflowNotification>;
+      final scope = foundation[5] as LocationFilterScope;
+      final normalizedSelection = scope.normalize(locationSelection);
       final sections = groupCampusGroupsByOrgThenZone(
         organizations: orgs,
         zones: allZones.where((z) => z.isActive).toList(),
         groups: groups,
       );
       final siteList = [for (final g in groups) ...g.checklists];
-      final list = await inspRepo.listInspections(
+      final loadedRecords = await inspRepo.listInspections(
         siteId: siteFilter,
         date: date,
         reviewStatuses: _reviewFilterFor(access),
       );
+      final list = loadedRecords
+          .where(
+            (row) => cvMatchesAuthorizedLocation(
+              inspection: row,
+              scope: scope,
+              selection: normalizedSelection,
+            ),
+          )
+          .toList(growable: false);
       if (!mounted || generation != _loadGeneration) return;
       final checklistTypeBySiteId = {
         for (final site in siteList) site.id: site.checklistType,
@@ -476,6 +494,8 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       final shouldAlert =
           _lastNoticeCount != null && built.length > _lastNoticeCount!;
       setState(() {
+        locationScope = scope;
+        locationSelection = normalizedSelection;
         orgSections = sections;
         campusGroups = groups;
         sites = siteList;
@@ -634,27 +654,25 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         }
       }
       _signature.clear();
-      setState(() => _signaturePreviewBytes = null);
-      if (!_wide) {
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (context) => InspectionFormPage(
-              profile: widget.profile,
-              language: language,
-              initial: full,
-              myAccess: myAccess,
-              sites: sites,
-              onChanged: () async {
-                await _load();
-              },
-            ),
+      setState(() {
+        _signaturePreviewBytes = null;
+        selected = full;
+      });
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (context) => InspectionFormPage(
+            profile: widget.profile,
+            language: language,
+            initial: full,
+            myAccess: myAccess,
+            sites: sites,
+            onChanged: () async {
+              await _load();
+            },
           ),
-        );
-        await _load();
-        return;
-      }
-      setState(() => selected = full);
-      await _refreshOverdue(full);
+        ),
+      );
+      await _load();
     } finally {
       if (mounted && openingInspectionId == row.id) {
         setState(() => openingInspectionId = null);
@@ -801,7 +819,6 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       return;
     }
     try {
-      await ref.read(inspectionRepositoryProvider).saveItems(current);
       await ref.read(inspectionRepositoryProvider).approveInspection(current);
       await ChecklistFeedback.success(
         soundEnabled: ref.read(soundEnabledProvider),
@@ -837,17 +854,33 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         !_canManageSelected()) {
       return;
     }
-    final reason = await requestWorkflowReason(
-      context,
-      language: language,
-      action: action,
-    );
-    if (reason == null || !mounted) return;
+    String? reason;
+    List<int> itemIndexes = const [];
+    if (action == 'return') {
+      final decision = await requestReturnDecision(
+        context,
+        language: language,
+        inspection: current,
+      );
+      if (decision == null || !mounted) return;
+      reason = decision.reason;
+      itemIndexes = decision.itemIndexes;
+    } else {
+      reason = await requestWorkflowReason(
+        context,
+        language: language,
+        action: action,
+      );
+      if (reason == null || !mounted) return;
+    }
     try {
-      await ref.read(inspectionRepositoryProvider).saveItems(current);
       final repository = ref.read(inspectionRepositoryProvider);
       if (action == 'return') {
-        await repository.returnInspection(inspection: current, reason: reason);
+        await repository.returnInspection(
+          inspection: current,
+          reason: reason,
+          itemIndexes: itemIndexes,
+        );
       } else {
         await repository.rejectInspection(inspection: current, reason: reason);
       }
@@ -1011,8 +1044,48 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       lastDate: today,
     );
     if (picked == null || !mounted) return;
-    setState(() => date = picked);
+    setState(() => date = DateTime(picked.year, picked.month, picked.day));
     await _load();
+  }
+
+  Future<void> _shiftDate(int days) async {
+    final now = qatarBusinessNow();
+    final today = DateTime(now.year, now.month, now.day);
+    final candidate = DateTime(date.year, date.month, date.day + days);
+    if (candidate.isAfter(today)) return;
+    setState(() => date = candidate);
+    await _load();
+  }
+
+  void _resetLocationFilters() {
+    setState(() {
+      locationSelection = locationScope.normalize(
+        const LocationFilterSelection(),
+      );
+      _searchQuery = '';
+      siteFilter = null;
+      selected = null;
+    });
+    _load();
+  }
+
+  void _applyLocationSelection(LocationFilterSelection selection) {
+    setState(() {
+      // A breadcrumb/site drilldown must never secretly override new filters.
+      siteFilter = null;
+      browseOrg = null;
+      browseZone = null;
+      browseCampus = null;
+      locationSelection = locationScope.normalize(selection);
+      selected = null;
+    });
+    _load();
+  }
+
+  bool get _canMoveDateForward {
+    final now = qatarBusinessNow();
+    final today = DateTime(now.year, now.month, now.day);
+    return DateTime(date.year, date.month, date.day).isBefore(today);
   }
 
   String _listModeLabel(int mode) => switch (mode) {
@@ -1294,6 +1367,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
 
   String get _dateIso => DateFormat('yyyy-MM-dd').format(date);
 
+  // ignore: unused_element
   CvTitleBlock _contextBlock() {
     return CvTitleBlock(
       loading: loading,
@@ -1592,6 +1666,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     ];
   }
 
+  // ignore: unused_element
   Widget _browsePane() {
     if (!_loadedOnce) {
       return ListView(
@@ -1627,6 +1702,159 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
           ),
           children: sections,
         ),
+      ),
+    );
+  }
+
+  Future<void> _exportInspection(Inspection inspection) async {
+    final previous = selected;
+    if (mounted) setState(() => selected = inspection);
+    await _exportSelected();
+    if (mounted) setState(() => selected = previous);
+  }
+
+  List<Inspection> get _visibleRecords {
+    final query = _searchQuery.toLowerCase().trim();
+    if (query.isEmpty) return records;
+    return records
+        .where((row) {
+          final contents = [
+            row.buildingCode,
+            row.floorLabel,
+            row.locationLabel,
+            row.siteNameEn,
+            row.siteNameAr,
+            row.hierarchySiteNameEn ?? '',
+            row.hierarchySiteNameAr ?? '',
+            row.hierarchyAreaNameEn ?? '',
+            row.hierarchyAreaNameAr ?? '',
+            row.templateNameEnSnapshot ?? '',
+            row.templateNameArSnapshot ?? '',
+            row.referenceNo,
+            _siteName(row),
+          ].join(' ').toLowerCase();
+          return contents.contains(query);
+        })
+        .toList(growable: false);
+  }
+
+  Widget _stackedPaperPane() {
+    final visibleRecords = _visibleRecords;
+    if (!_loadedOnce) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(CvSpace.gutter),
+        children: const [CvSkeletonLedger()],
+      );
+    }
+    if (visibleRecords.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(
+            CvSpace.gutter,
+            CvSpace.xl,
+            CvSpace.gutter,
+            CvSpace.xxl,
+          ),
+          children: [
+            CvEmptyState(
+              icon: Icons.event_busy_outlined,
+              title: ar
+                  ? 'لا توجد قوائم مسجلة في هذا التاريخ'
+                  : 'No recorded checklists on this date',
+              message: ar
+                  ? 'غيّر التاريخ أو الفلاتر لعرض القوائم المتاحة.'
+                  : 'Change the date or filters to view available checklists.',
+              action: OutlinedButton.icon(
+                onPressed: _pickDate,
+                icon: const Icon(Icons.calendar_month_outlined, size: 18),
+                label: Text(ar ? 'اختيار التاريخ' : 'Choose date'),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: const EdgeInsets.fromLTRB(8, 2, 8, CvSpace.xxl),
+        itemCount: visibleRecords.length,
+        itemBuilder: (context, index) {
+          final inspection = visibleRecords[index];
+          final title = _siteName(inspection).isEmpty
+              ? inspection.buildingCode
+              : _siteName(inspection);
+          return CvEntrance(
+            key: ValueKey('paper-${inspection.id}'),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: CvSpace.lg),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 794),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleSmall
+                                    ?.copyWith(fontWeight: FontWeight.w800),
+                              ),
+                            ),
+                            CvStatusMark(
+                              label: inspection.reviewStatus.labelFor(language),
+                              tone: cvReviewTone(inspection.reviewStatus),
+                            ),
+                            const SizedBox(width: 4),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              tooltip: ar ? 'طباعة / PDF' : 'Print / PDF',
+                              onPressed: () => _exportInspection(inspection),
+                              icon: const Icon(Icons.print_outlined, size: 19),
+                            ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              tooltip: ar ? 'فتح القائمة' : 'Open checklist',
+                              onPressed: () => _open(inspection),
+                              icon: const Icon(
+                                Icons.open_in_full_rounded,
+                                size: 18,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  InkWell(
+                    onTap: () => _open(inspection),
+                    child: A4PaperSheet(
+                      scrollable: false,
+                      child: ChecklistFormLayout(
+                        inspection: inspection,
+                        language: language,
+                        forceTableLayout: true,
+                        readOnly: true,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -1721,6 +1949,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
     );
   }
 
+  // ignore: unused_element
   Widget _detailPane() {
     final insp = selected;
     if (insp == null) {
@@ -1761,6 +1990,12 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         onInspectorChanged: (v) => setState(() => selected!.inspectorName = v),
         onTimeChanged: (v) => setState(() => selected!.inspectionTime = v),
         onFloorChanged: (v) => setState(() => selected!.floorLabel = v),
+        onLocationChanged: (v) => setState(() => selected!.locationLabel = v),
+        onPinChanged: (v) => setState(() {
+          selected!.pin = v;
+          selected!.pinOverride = v;
+        }),
+        onBuildingNoChanged: (v) => setState(() => selected!.buildingCode = v),
         onResponseChanged: (item, value) {
           final err = item.trySetResponse(value, language: language);
           if (err != null && mounted) {
@@ -1788,8 +2023,8 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
             ? (item, path, [pairId]) =>
                   _clearPhoto(item, path, isIssue: false, pairId: pairId)
             : null,
-        onAddItem: canManage ? _addCustomItem : null,
-        onDeleteItem: canManage ? _deleteCustomItem : null,
+        onAddItem: canEdit && canManage ? _addCustomItem : null,
+        onDeleteItem: canEdit && canManage ? _deleteCustomItem : null,
         signatureController: canEdit ? _signature : null,
         signaturePreviewBytes: _signaturePreviewBytes,
         onClearSignature: canEdit
@@ -1831,7 +2066,6 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
 
   @override
   Widget build(BuildContext context) {
-    final wide = _wide;
     final canNavBack = _canNavBack;
     return PopScope(
       canPop: !(widget.active && canNavBack),
@@ -1877,7 +2111,47 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
         body: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _contextBlock(),
+            AnimatedSize(
+              duration: CvMotion.of(context, CvMotion.spatial),
+              curve: CvMotion.glide,
+              alignment: Alignment.topCenter,
+              child: CvLocationFilterPanel(
+                scope: locationScope,
+                selection: locationSelection,
+                onSelectionChanged: _applyLocationSelection,
+                date: date,
+                onPreviousDate: loading ? null : () => _shiftDate(-1),
+                onNextDate: loading || !_canMoveDateForward
+                    ? null
+                    : () => _shiftDate(1),
+                onPickDate: _pickDate,
+                expanded: filtersExpanded,
+                onExpandedChanged: (value) =>
+                    setState(() => filtersExpanded = value),
+                language: language,
+                search: _searchQuery,
+                onSearchChanged: (value) =>
+                    setState(() => _searchQuery = value),
+                onReset: _resetLocationFilters,
+                resultsCount: _visibleRecords.length,
+                loading: loading,
+              ),
+            ),
+            if (_isReviewer)
+              Align(
+                alignment: AlignmentDirectional.centerEnd,
+                child: Padding(
+                  padding: const EdgeInsetsDirectional.only(
+                    end: CvSpace.gutter,
+                    bottom: 2,
+                  ),
+                  child: TextButton.icon(
+                    onPressed: _pickListMode,
+                    icon: const Icon(Icons.rule_folder_outlined, size: 17),
+                    label: Text(_listModeLabel(listMode)),
+                  ),
+                ),
+              ),
             if (message != null)
               CvBanner(
                 tone: CvBannerTone.error,
@@ -1890,16 +2164,47 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
                 onDismiss: () => setState(() => _status = null),
               ),
             Expanded(
-              child: wide
-                  ? Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        SizedBox(width: 380, child: _browsePane()),
-                        const VerticalDivider(width: 1),
-                        Expanded(child: _detailPane()),
-                      ],
-                    )
-                  : _browsePane(),
+              child: AnimatedSwitcher(
+                duration: CvMotion.of(context, CvMotion.spatial),
+                reverseDuration: CvMotion.of(context, CvMotion.standard),
+                switchInCurve: CvMotion.glide,
+                switchOutCurve: Curves.easeInCubic,
+                layoutBuilder: (current, previous) => Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    for (final old in previous) IgnorePointer(child: old),
+                    ?current,
+                  ],
+                ),
+                transitionBuilder: (child, animation) => FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0, 0.025),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                ),
+                child: KeyedSubtree(
+                  key: ValueKey(
+                    [
+                      date.toIso8601String(),
+                      locationSelection.organizationId,
+                      locationSelection.zoneId,
+                      locationSelection.siteId,
+                      locationSelection.buildingId,
+                      locationSelection.floorId,
+                      locationSelection.areaId,
+                      locationSelection.serviceTypeCode,
+                      listMode,
+                      _searchQuery,
+                      _visibleRecords.length,
+                    ].join('|'),
+                  ),
+                  child: _stackedPaperPane(),
+                ),
+              ),
             ),
           ],
         ),
