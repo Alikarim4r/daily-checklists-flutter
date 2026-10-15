@@ -598,9 +598,15 @@ class LocationFilterScope {
       final options = optionsFor(dimension, result);
       final current = result.valueFor(dimension);
       if (current != null && options.any((o) => o.value == current)) continue;
+      // Only auto-select geographic singleton dimensions. In newer service
+      // facets, auto-selecting a single mapped option would silently hide
+      // legacy checklists that still lack classification metadata.
+      final geographic =
+          hierarchyDimensions.indexOf(dimension) <=
+          hierarchyDimensions.indexOf(LocationFilterDimension.area);
       result = result.withValue(
         dimension,
-        options.length == 1 ? options.single.value : null,
+        geographic && options.length == 1 ? options.single.value : null,
       );
     }
     final serviceOptions = optionsFor(

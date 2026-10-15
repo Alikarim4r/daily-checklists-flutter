@@ -54,7 +54,7 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
   String? siteFilter;
   LocationFilterScope locationScope = const LocationFilterScope([]);
   LocationFilterSelection locationSelection = const LocationFilterSelection();
-  bool filtersExpanded = false;
+  bool filtersExpanded = true;
   String _searchQuery = '';
 
   /// Drill-down: org → zone → campus → checklist.
@@ -423,7 +423,8 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
             .read(locationHierarchyRepositoryProvider)
             .listMyChecklistLocationScope(
               requirement: SiteAccessRequirement.read,
-            ),
+            )
+            .catchError((Object _) => const LocationFilterScope([])),
       ]);
       if (!mounted || generation != _loadGeneration) return;
       final groups = foundation[0] as List<CampusChecklistGroup>;
@@ -431,13 +432,20 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
       final allZones = foundation[2] as List<Zone>;
       final access = foundation[3] as List<UserSiteAccess>;
       final workflow = foundation[4] as List<WorkflowNotification>;
-      final scope = foundation[5] as LocationFilterScope;
-      final normalizedSelection = scope.normalize(locationSelection);
+      final mappedScope = foundation[5] as LocationFilterScope;
       final sections = groupCampusGroupsByOrgThenZone(
         organizations: orgs,
         zones: allZones.where((z) => z.isActive).toList(),
         groups: groups,
       );
+      // Existing site-grant based checklists must survive partial P1 mapping.
+      // Authorized legacy groups are returned by listAccessibleCampusGroups,
+      // never by unrestricted listAllSites.
+      final scope = combineAuthorizedLegacyChecklistScope(
+        mapped: mappedScope,
+        authorizedSections: sections,
+      );
+      final normalizedSelection = scope.normalize(locationSelection);
       final siteList = [for (final g in groups) ...g.checklists];
       final loadedRecords = await inspRepo.listInspections(
         siteId: siteFilter,
@@ -2197,6 +2205,11 @@ class ViewerHomeState extends ConsumerState<ViewerHome> {
                       locationSelection.floorId,
                       locationSelection.areaId,
                       locationSelection.serviceTypeCode,
+                      locationSelection.sectorId,
+                      locationSelection.serviceClassId,
+                      locationSelection.departmentId,
+                      locationSelection.coverageId,
+                      locationSelection.documentKindId,
                       listMode,
                       _searchQuery,
                       _visibleRecords.length,

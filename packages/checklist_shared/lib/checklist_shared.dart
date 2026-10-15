@@ -75,6 +75,7 @@ export 'src/utils/policy_enforcement.dart';
 export 'src/utils/problem_open_age.dart';
 export 'src/utils/signature_ink.dart';
 export 'src/utils/site_hierarchy.dart';
+export 'src/utils/authorized_legacy_filter_scope.dart';
 export 'src/widgets/a4_paper_sheet.dart';
 export 'src/widgets/auth_gate.dart';
 export 'src/widgets/checklist_app_background.dart';

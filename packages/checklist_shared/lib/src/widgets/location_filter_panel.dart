@@ -91,17 +91,25 @@ class ChecklistLocationFilterPanel extends StatelessWidget {
   List<LocationFilterDimension> _visibleDimensions(
     LocationFilterSelection normalized,
   ) {
-    final dimensions = <LocationFilterDimension>[
-      for (final dimension in LocationFilterScope.hierarchyDimensions)
-        if (scope.shouldShow(dimension, normalized)) dimension,
+    // Identical facet vocabulary and order in CheckAdmin and CheckView.
+    const ordered = <LocationFilterDimension>[
+      LocationFilterDimension.organization,
+      LocationFilterDimension.zone,
+      LocationFilterDimension.site,
+      LocationFilterDimension.building,
+      LocationFilterDimension.floor,
+      LocationFilterDimension.area,
+      LocationFilterDimension.sector,
+      LocationFilterDimension.serviceClass,
+      LocationFilterDimension.department,
+      LocationFilterDimension.coverage,
+      LocationFilterDimension.documentKind,
+      LocationFilterDimension.checklistType,
     ];
-    if (scope.shouldShow(LocationFilterDimension.documentKind, normalized)) {
-      dimensions.add(LocationFilterDimension.documentKind);
-    }
-    if (scope.shouldShow(LocationFilterDimension.checklistType, normalized)) {
-      dimensions.add(LocationFilterDimension.checklistType);
-    }
-    return dimensions;
+    return [
+      for (final dimension in ordered)
+        if (scope.optionsFor(dimension, normalized).isNotEmpty) dimension,
+    ];
   }
 
   @override

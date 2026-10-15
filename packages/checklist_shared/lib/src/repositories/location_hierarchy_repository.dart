@@ -246,16 +246,23 @@ class LocationHierarchyRepository {
       'list_my_checklist_location_scope',
       params: {'p_requirement': accessRequirementDbValue(requirement)},
     );
-    // Server independently limits facets to location AND service grants for
-    // each visible checklist assignment. A client cannot enumerate other sites.
-    final facetsRaw = await _client.rpc(
-      'list_my_checklist_filter_facets',
-      params: {'p_requirement': accessRequirementDbValue(requirement)},
-    );
-    final facets = <String, Map<String, dynamic>>{
-      for (final row in facetsRaw as List)
-        (row as Map)['assignment_id'] as String: Map<String, dynamic>.from(row),
-    };
+    // Classification is additive. A missing/failed supplemental endpoint may
+    // never suppress the previously authorized location and checklist filters.
+    // Base location authorization still comes from the server's original RPC.
+    final facets = <String, Map<String, dynamic>>{};
+    try {
+      final facetsRaw = await _client.rpc(
+        'list_my_checklist_filter_facets',
+        params: {'p_requirement': accessRequirementDbValue(requirement)},
+      );
+      for (final row in facetsRaw as List) {
+        final data = Map<String, dynamic>.from(row as Map);
+        facets[data['assignment_id'] as String] = data;
+      }
+    } catch (_) {
+      // Safe partial availability: old site permissions and list contents are
+      // not contingent on the new classification metadata endpoint.
+    }
     final leaves = [
       for (final row in raw as List)
         LocationScopeLeaf.fromJson({

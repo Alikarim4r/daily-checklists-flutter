@@ -12,10 +12,12 @@ class ChecklistFilterWorkbench extends ConsumerStatefulWidget {
     required this.profile,
     required this.language,
     required this.onOpenLegacySite,
+    this.onMatchingLegacySiteIdsChanged,
   });
   final Profile profile;
   final String language;
   final ValueChanged<String> onOpenLegacySite;
+  final ValueChanged<Set<String>?>? onMatchingLegacySiteIdsChanged;
   @override
   ConsumerState<ChecklistFilterWorkbench> createState() =>
       _ChecklistFilterWorkbenchState();
@@ -25,7 +27,7 @@ class _ChecklistFilterWorkbenchState
     extends ConsumerState<ChecklistFilterWorkbench> {
   LocationFilterScope scope = const LocationFilterScope([]);
   LocationFilterSelection selection = const LocationFilterSelection();
-  bool expanded = false, loading = true, saving = false;
+  bool expanded = true, loading = true, saving = false;
   DateTime date = DateTime.now();
   String? error;
   String get language => widget.language;
@@ -75,11 +77,35 @@ class _ChecklistFilterWorkbenchState
       });
     }
     try {
-      final s = await ref
+      // Never block the existing site-grant filters because of a newer
+      // facility hierarchy RPC failing or having no mapped assignments.
+      final mapped = await ref
           .read(locationHierarchyRepositoryProvider)
-          .listMyChecklistLocationScope(
-            requirement: SiteAccessRequirement.read,
-          );
+          .listMyChecklistLocationScope(requirement: SiteAccessRequirement.read)
+          .catchError((Object _) => const LocationFilterScope([]));
+      var s = mapped;
+      try {
+        final groups = await ref
+            .read(siteRepositoryProvider)
+            .listAccessibleCampusGroups(profile: widget.profile);
+        final orgs = await ref
+            .read(organizationRepositoryProvider)
+            .listOrganizations(activeOnly: true);
+        final zones = await ref
+            .read(organizationRepositoryProvider)
+            .listAllZones();
+        s = combineAuthorizedLegacyChecklistScope(
+          mapped: mapped,
+          authorizedSections: groupCampusGroupsByOrgThenZone(
+            organizations: orgs,
+            zones: zones,
+            groups: groups,
+          ),
+        );
+      } catch (_) {
+        // Existing mapped/granted records remain available even when
+        // legacy catalog metadata is temporarily unavailable.
+      }
       if (!mounted) return;
       setState(() {
         scope = s;
@@ -529,7 +555,13 @@ class _ChecklistFilterWorkbenchState
             child: ChecklistLocationFilterPanel(
               scope: scope,
               selection: selection,
-              onSelectionChanged: (v) => setState(() => selection = v),
+              onSelectionChanged: (v) {
+                setState(() => selection = v);
+                widget.onMatchingLegacySiteIdsChanged?.call({
+                  for (final leaf in scope.filteredLeaves(v))
+                    if (leaf.legacySiteId != null) leaf.legacySiteId!,
+                });
+              },
               date: date,
               onPreviousDate: () =>
                   setState(() => date = date.subtract(const Duration(days: 1))),
@@ -576,6 +608,14 @@ class _ChecklistFilterWorkbenchState
                   ),
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
+              ),
+              TextButton.icon(
+                onPressed: () {
+                  setState(() => selection = const LocationFilterSelection());
+                  widget.onMatchingLegacySiteIdsChanged?.call(null);
+                },
+                icon: const Icon(Icons.restart_alt, size: 17),
+                label: Text(t('Reset', 'إعادة ضبط')),
               ),
               if (canManage)
                 TextButton.icon(
