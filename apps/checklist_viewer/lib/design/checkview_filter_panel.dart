@@ -2,6 +2,7 @@ import 'package:checklist_shared/checklist_shared.dart';
 import 'package:flutter/material.dart';
 
 import 'checkview_tokens.dart';
+import 'checkview_widgets.dart';
 
 /// A CheckView-only filter surface. Every selectable dimension is derived from
 /// the authorized location scope; it never queries or exposes other tenants.
@@ -102,15 +103,86 @@ class _CvLocationFilterPanelState extends State<CvLocationFilterPanel> {
       ar ? 'نوع القائمة / العمل' : 'Checklist / Work type',
   };
 
-  static bool _isClassification(LocationFilterDimension dimension) =>
-      const <LocationFilterDimension>{
-        LocationFilterDimension.sector,
-        LocationFilterDimension.serviceClass,
-        LocationFilterDimension.department,
-        LocationFilterDimension.coverage,
-        LocationFilterDimension.documentKind,
-        LocationFilterDimension.checklistType,
-      }.contains(dimension);
+  /// Visibility is calculated from the entire accessible scope, independent
+  /// of every transient selection. A choice must not remove a filter control.
+  bool _visibleForAccess(LocationFilterDimension dimension) {
+    const all = LocationFilterSelection();
+    final choices = widget.scope.optionsFor(dimension, all);
+    if (choices.isEmpty) return false;
+    if (choices.length > 1) return true;
+    // Service taxonomy always retains its place for a permitted branch,
+    // including the sole General department of Hard Services.
+    return switch (dimension) {
+      LocationFilterDimension.sector ||
+      LocationFilterDimension.serviceClass ||
+      LocationFilterDimension.department ||
+      LocationFilterDimension.coverage ||
+      LocationFilterDimension.documentKind => true,
+      _ => false,
+    };
+  }
+
+  /// Choices depend only on ancestors, never on the currently selected
+  /// siblings or descendants. This keeps each selector useful and avoids
+  /// forced disappearance/reflow as the user navigates the hierarchy.
+  List<LocationFilterOption> _choicesFor(
+    LocationFilterDimension dimension,
+    LocationFilterSelection current,
+  ) {
+    var context = const LocationFilterSelection();
+    if (dimension == LocationFilterDimension.documentKind ||
+        dimension == LocationFilterDimension.checklistType) {
+      for (final ancestor in LocationFilterScope.hierarchyDimensions) {
+        context = context.withValue(ancestor, current.valueFor(ancestor));
+      }
+    } else {
+      for (final ancestor in LocationFilterScope.hierarchyDimensions) {
+        if (ancestor == dimension) break;
+        context = context.withValue(ancestor, current.valueFor(ancestor));
+      }
+    }
+    return widget.scope.optionsFor(dimension, context);
+  }
+
+  String _currentLabel(
+    LocationFilterDimension dimension,
+    LocationFilterSelection selected,
+    List<LocationFilterOption> options,
+  ) {
+    final value = selected.valueFor(dimension);
+    for (final option in options) {
+      if (option.value == value) return option.labelFor(widget.language);
+    }
+    if (options.length == 1) {
+      return options.single.labelFor(widget.language);
+    }
+    return ar ? 'الكل' : 'All';
+  }
+
+  Future<void> _showChoices(
+    LocationFilterDimension dimension,
+    LocationFilterSelection selected,
+    List<LocationFilterOption> options,
+  ) async {
+    if (options.isEmpty) return;
+    final picked = await showCvChoiceSheet<String>(
+      context: context,
+      title: label(dimension),
+      selected: selected.valueFor(dimension) ?? '',
+      choices: [
+        CvChoice(value: '', label: ar ? 'الكل' : 'All'),
+        for (final option in options)
+          CvChoice(
+            value: option.value,
+            label: option.labelFor(widget.language),
+          ),
+      ],
+    );
+    if (picked == null || !mounted) return;
+    final value = picked.isEmpty ? null : picked;
+    if (value == selected.valueFor(dimension)) return;
+    widget.onSelectionChanged(_select(dimension, value));
+  }
 
   String get dateLabel =>
       '${widget.date.year.toString().padLeft(4, '0')}-'
@@ -143,23 +215,14 @@ class _CvLocationFilterPanelState extends State<CvLocationFilterPanel> {
   Widget build(BuildContext context) {
     final colors = CheckViewColors.of(context);
     final normalized = widget.scope.normalize(widget.selection);
-    // Restore the original permission-aware density: do not reserve a control
-    // for geography or classifications with no meaningful authorized choice.
-    // General is the one deliberate exception after choosing a service class:
-    // Hard Services may have exactly one 'General' department.
-    final fields = <(LocationFilterDimension, List<LocationFilterOption>)>[
+    // Permission-scoped controls remain mounted throughout all selections.
+    final dimensions = [
       for (final dimension in _dimensions)
-        if (widget.scope.optionsFor(dimension, normalized).length > 1 ||
-            // Preserve the one "General" department after choosing a service.
-            (dimension == LocationFilterDimension.department &&
-                widget.selection.serviceClassId != null &&
-                widget.scope.optionsFor(dimension, normalized).isNotEmpty) ||
-            // An explicitly selected classification remains visible so the
-            // user can clear it, even if child filters narrow its options.
-            (_isClassification(dimension) &&
-                widget.selection.valueFor(dimension) != null &&
-                widget.scope.optionsFor(dimension, normalized).isNotEmpty))
-          (dimension, widget.scope.optionsFor(dimension, normalized)),
+        if (_visibleForAccess(dimension)) dimension,
+    ];
+    final fields = [
+      for (final dimension in dimensions)
+        (dimension, _choicesFor(dimension, normalized)),
     ];
     final leaves = widget.scope.filteredLeaves(normalized);
     final areas = leaves.map((e) => e.areaId).toSet().length;
@@ -211,7 +274,7 @@ class _CvLocationFilterPanelState extends State<CvLocationFilterPanel> {
                           Text(
                             ar
                                 ? '${fields.length} فلاتر • $areas مساحات • $checked قوائم • ${widget.resultsCount} سجل'
-                                : '${fields.length} filters • $areas areas • $checked checklists • ${widget.resultsCount} records',
+                                : '${dimensions.length} filters • $areas areas • $checked checklists • ${widget.resultsCount} records',
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ],
@@ -308,17 +371,13 @@ class _CvLocationFilterPanelState extends State<CvLocationFilterPanel> {
                             const SizedBox(height: 13),
                             LayoutBuilder(
                               builder: (context, constraints) {
-                                // Responsive FULL-WIDTH rows, not a fixed
-                                // four-column grid or a capped desktop card.
-                                // 1/2/3 choices receive 100/50/33% widths.
-                                // With many choices, balance row counts so
-                                // the last row never contains a lone narrow
-                                // control or leaves unused desktop space.
-                                const gap = 9.0;
+                                // The same title-cell dropdown appearance as
+                                // Operations (the second CheckView tab).
+                                // Every row consumes the full available width.
                                 final available = constraints.maxWidth;
-                                final maxPerRow = available < 380
+                                final maxPerRow = available < 400
                                     ? 1
-                                    : (available / 188).floor().clamp(1, 7);
+                                    : (available / 210).floor().clamp(1, 5);
                                 final rowCount = fields.isEmpty
                                     ? 0
                                     : (fields.length / maxPerRow).ceil();
@@ -332,69 +391,51 @@ class _CvLocationFilterPanelState extends State<CvLocationFilterPanel> {
                                   crossAxisAlignment:
                                       CrossAxisAlignment.stretch,
                                   children: [
-                                    for (var row = 0; row < rowCount; row++)
+                                    for (
+                                      var row = 0;
+                                      row < rowCount;
+                                      row++
+                                    ) ...[
+                                      if (row > 0) const SizedBox(height: 8),
                                       Builder(
                                         builder: (context) {
                                           final count =
                                               perRow +
                                               (row < overflowRows ? 1 : 0);
-                                          final start =
+                                          final startIndex =
                                               row * perRow +
                                               (row < overflowRows
                                                   ? row
                                                   : overflowRows);
                                           final rowFields = fields.sublist(
-                                            start,
-                                            start + count,
+                                            startIndex,
+                                            startIndex + count,
                                           );
-                                          return Padding(
-                                            padding: EdgeInsets.only(
-                                              bottom: row == rowCount - 1
-                                                  ? 0
-                                                  : 11,
-                                            ),
-                                            child: Row(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                for (
-                                                  var index = 0;
-                                                  index < rowFields.length;
-                                                  index++
-                                                ) ...[
-                                                  if (index > 0)
-                                                    const SizedBox(width: gap),
-                                                  Expanded(
-                                                    child: _CvLocationField(
-                                                      key: ValueKey(
-                                                        rowFields[index].$1,
-                                                      ),
-                                                      title: label(
-                                                        rowFields[index].$1,
-                                                      ),
-                                                      options:
-                                                          rowFields[index].$2,
-                                                      language: widget.language,
-                                                      selected: normalized
-                                                          .valueFor(
-                                                            rowFields[index].$1,
-                                                          ),
-                                                      onChanged: (value) => widget
-                                                          .onSelectionChanged(
-                                                            _select(
-                                                              rowFields[index]
-                                                                  .$1,
-                                                              value,
-                                                            ),
-                                                          ),
-                                                    ),
+                                          return CvTitleBlock(
+                                            fields: [
+                                              for (final (dimension, options)
+                                                  in rowFields)
+                                                CvTitleField(
+                                                  label: label(dimension),
+                                                  value: _currentLabel(
+                                                    dimension,
+                                                    normalized,
+                                                    options,
                                                   ),
-                                                ],
-                                              ],
-                                            ),
+                                                  maxLines: 2,
+                                                  onTap: options.isEmpty
+                                                      ? null
+                                                      : () => _showChoices(
+                                                          dimension,
+                                                          normalized,
+                                                          options,
+                                                        ),
+                                                ),
+                                            ],
                                           );
                                         },
                                       ),
+                                    ],
                                   ],
                                 );
                               },
@@ -433,62 +474,6 @@ class _CvLocationFilterPanelState extends State<CvLocationFilterPanel> {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _CvLocationField extends StatelessWidget {
-  const _CvLocationField({
-    super.key,
-    required this.title,
-    required this.options,
-    required this.language,
-    required this.selected,
-    required this.onChanged,
-  });
-
-  final String title;
-  final List<LocationFilterOption> options;
-  final String language;
-  final String? selected;
-  final ValueChanged<String?> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    // A single fixed General department is informative, not interactive.
-    // Display its actual label instead of a blank disabled dropdown.
-    final current = options.length == 1 && selected == null
-        ? options.single.value
-        : (options.any((o) => o.value == selected) ? selected : null);
-    return DropdownButtonFormField<String?>(
-      key: ValueKey('$title:$current:${options.length}'),
-      initialValue: current,
-      isExpanded: true,
-      decoration: InputDecoration(
-        isDense: true,
-        labelText: '$title (${options.length})',
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 12,
-          vertical: 11,
-        ),
-      ),
-      items: [
-        if (options.length > 1 || selected != null)
-          DropdownMenuItem<String?>(
-            value: null,
-            child: Text(language == 'ar' ? 'الكل' : 'All'),
-          ),
-        for (final option in options)
-          DropdownMenuItem<String?>(
-            value: option.value,
-            child: Text(
-              option.labelFor(language),
-              overflow: TextOverflow.ellipsis,
-              maxLines: 1,
-            ),
-          ),
-      ],
-      onChanged: options.length <= 1 && selected == null ? null : onChanged,
     );
   }
 }

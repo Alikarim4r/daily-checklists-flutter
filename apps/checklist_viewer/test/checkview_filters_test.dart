@@ -1,6 +1,7 @@
 import 'package:checklist_shared/checklist_shared.dart';
 import 'package:checklist_viewer/design/checkview_filter_panel.dart';
 import 'package:checklist_viewer/design/checkview_location_match.dart';
+import 'package:checklist_viewer/design/checkview_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -138,10 +139,9 @@ void main() {
       ]) {
         expect(find.text(label), findsNothing, reason: label);
       }
-      expect(find.text('Area (2)'), findsOneWidget);
-      final areaWidth = tester
-          .getSize(find.byKey(const ValueKey(LocationFilterDimension.area)))
-          .width;
+      expect(find.text('Area'), findsOneWidget);
+      expect(find.byType(CvTitleBlock), findsOneWidget);
+      final areaWidth = tester.getSize(find.byType(CvTitleBlock).first).width;
       // The sole available filter stretches across the desktop browser, not
       // 25% of a fixed grid with an unused margin.
       expect(areaWidth, greaterThan(1000));
@@ -183,20 +183,155 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final area = tester.getSize(
-      find.byKey(const ValueKey(LocationFilterDimension.area)),
-    );
-    final type = tester.getSize(
-      find.byKey(const ValueKey(LocationFilterDimension.checklistType)),
-    );
-    expect(find.text('Area (2)'), findsOneWidget);
-    expect(find.text('Checklist type (2)'), findsOneWidget);
-    expect((area.width - type.width).abs(), lessThan(2));
-    expect(area.width, greaterThan(560));
-    expect(area.width + type.width, greaterThan(1200));
+    expect(find.text('Area'), findsOneWidget);
+    expect(find.text('Checklist type'), findsOneWidget);
+    final cell = tester.getSize(find.byType(CvTitleBlock).first);
+    expect(cell.width, greaterThan(1200));
+    expect(find.byType(CvTitleBlock), findsOneWidget);
+    // Both controls share the actual Ops tab title-strip cell treatment.
+    expect(find.byType(DropdownButtonFormField), findsNothing);
     expect(find.text('Organization (1)'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('authorized buttons stay mounted while selections cascade', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var selected = const LocationFilterSelection();
+    final scope = LocationFilterScope([
+      leaf('a1', 'Washrooms', type: 'cleaning'),
+      leaf('a2', 'Corridors', type: 'maintenance'),
+    ]);
+    Widget page() => MaterialApp(
+      home: Scaffold(
+        body: CvLocationFilterPanel(
+          scope: scope,
+          selection: selected,
+          onSelectionChanged: (v) => selected = v,
+          date: DateTime(2026, 10, 13),
+          onPreviousDate: () {},
+          onNextDate: () {},
+          onPickDate: () {},
+          expanded: true,
+          onExpandedChanged: (_) {},
+          language: 'en',
+          search: '',
+          onSearchChanged: (_) {},
+          onReset: () {},
+          resultsCount: 2,
+        ),
+      ),
+    );
+    await tester.pumpWidget(page());
+    await tester.pumpAndSettle();
+    expect(find.text('Area'), findsOneWidget);
+    expect(find.text('Checklist type'), findsOneWidget);
+    await tester.tap(find.text('Area'));
+    await tester.pumpAndSettle();
+    expect(find.text('Washrooms'), findsWidgets);
+    await tester.tap(find.text('Washrooms').last);
+    await tester.pumpAndSettle();
+    expect(selected.areaId, 'a1');
+    await tester.pumpWidget(page());
+    await tester.pumpAndSettle();
+    expect(find.text('Area'), findsOneWidget);
+    expect(find.text('Checklist type'), findsOneWidget);
+    expect(find.text('Washrooms'), findsOneWidget);
+    // The sibling selector survives even if its options narrow to one.
+    await tester.tap(find.text('Checklist type'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cleaning'), findsWidgets);
+    expect(find.text('All'), findsWidgets);
+    await tester.tap(find.text('All').last);
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(page());
+    await tester.pumpAndSettle();
+    expect(find.text('Area'), findsOneWidget);
+    expect(find.text('Checklist type'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'authorized classification button remains fixed after choosing a service',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1160, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      var selected = const LocationFilterSelection();
+      LocationScopeLeaf record(String id, String service, String dept) =>
+          LocationScopeLeaf.fromJson({
+            'organization_id': 'org',
+            'organization_name_en': 'Ministry',
+            'site_id': 'site',
+            'site_name_en': 'HQ',
+            'building_id': 'b',
+            'building_code': 'B1',
+            'building_name_en': 'Building',
+            'floor_id': 'f',
+            'floor_code': 'GF',
+            'floor_name_en': 'Ground floor',
+            'area_id': id,
+            'area_code': id,
+            'area_name_en': id,
+            'assignment_id': id,
+            'checklist_name_en': id,
+            'service_type_code': service,
+            'service_type_name_en': service,
+            'service_type_name_ar': service,
+            'sector_id': 'facilities',
+            'service_class_id': service,
+            'service_class_name_en': service == 'hard'
+                ? 'Hard Services'
+                : 'Soft Services',
+            'department_id': dept,
+            'department_name_en': dept == 'general' ? 'General' : 'Cleaning',
+            'coverage_id': 'general-$id',
+            'coverage_name_en': 'General',
+            'document_kind_id': 'inspection',
+            'document_kind_name_en': 'Inspection',
+          });
+      final scope = LocationFilterScope([
+        record('i1', 'hard', 'general'),
+        record('i2', 'soft', 'cleaning'),
+      ]);
+      Widget page() => MaterialApp(
+        home: Scaffold(
+          body: CvLocationFilterPanel(
+            scope: scope,
+            selection: selected,
+            onSelectionChanged: (v) => selected = v,
+            date: DateTime(2026, 10, 13),
+            onPreviousDate: () {},
+            onNextDate: () {},
+            onPickDate: () {},
+            expanded: true,
+            onExpandedChanged: (_) {},
+            language: 'en',
+            search: '',
+            onSearchChanged: (_) {},
+            onReset: () {},
+            resultsCount: 2,
+          ),
+        ),
+      );
+      await tester.pumpWidget(page());
+      await tester.pumpAndSettle();
+      expect(find.text('Service class'), findsOneWidget);
+      expect(find.text('Department'), findsOneWidget);
+      await tester.tap(find.text('Service class'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Hard Services').last);
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(page());
+      await tester.pumpAndSettle();
+      expect(selected.serviceClassId, 'hard');
+      expect(find.text('Department'), findsOneWidget);
+      expect(find.text('General'), findsWidgets);
+      expect(find.text('Service class'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('Arabic RTL compact panel expands without overflow', (
     tester,
