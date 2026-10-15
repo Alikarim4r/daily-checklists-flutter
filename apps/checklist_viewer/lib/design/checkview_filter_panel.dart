@@ -102,6 +102,16 @@ class _CvLocationFilterPanelState extends State<CvLocationFilterPanel> {
       ar ? 'نوع القائمة / العمل' : 'Checklist / Work type',
   };
 
+  static bool _isClassification(LocationFilterDimension dimension) =>
+      const <LocationFilterDimension>{
+        LocationFilterDimension.sector,
+        LocationFilterDimension.serviceClass,
+        LocationFilterDimension.department,
+        LocationFilterDimension.coverage,
+        LocationFilterDimension.documentKind,
+        LocationFilterDimension.checklistType,
+      }.contains(dimension);
+
   String get dateLabel =>
       '${widget.date.year.toString().padLeft(4, '0')}-'
       '${widget.date.month.toString().padLeft(2, '0')}-'
@@ -133,243 +143,294 @@ class _CvLocationFilterPanelState extends State<CvLocationFilterPanel> {
   Widget build(BuildContext context) {
     final colors = CheckViewColors.of(context);
     final normalized = widget.scope.normalize(widget.selection);
+    // Restore the original permission-aware density: do not reserve a control
+    // for geography or classifications with no meaningful authorized choice.
+    // General is the one deliberate exception after choosing a service class:
+    // Hard Services may have exactly one 'General' department.
     final fields = <(LocationFilterDimension, List<LocationFilterOption>)>[
       for (final dimension in _dimensions)
-        if (widget.scope.optionsFor(dimension, normalized).isNotEmpty)
+        if (widget.scope.optionsFor(dimension, normalized).length > 1 ||
+            // Preserve the one "General" department after choosing a service.
+            (dimension == LocationFilterDimension.department &&
+                widget.selection.serviceClassId != null &&
+                widget.scope.optionsFor(dimension, normalized).isNotEmpty) ||
+            // An explicitly selected classification remains visible so the
+            // user can clear it, even if child filters narrow its options.
+            (_isClassification(dimension) &&
+                widget.selection.valueFor(dimension) != null &&
+                widget.scope.optionsFor(dimension, normalized).isNotEmpty))
           (dimension, widget.scope.optionsFor(dimension, normalized)),
     ];
     final leaves = widget.scope.filteredLeaves(normalized);
     final areas = leaves.map((e) => e.areaId).toSet().length;
     final checked = leaves.map((e) => e.assignmentId).toSet().length;
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1200),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-          child: Material(
-            color: colors.surface,
-            elevation: 0,
-            clipBehavior: Clip.antiAlias,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(18),
-              side: BorderSide(color: colors.hairline),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+      child: Material(
+        color: colors.surface,
+        elevation: 0,
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: BorderSide(color: colors.hairline),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            InkWell(
+              onTap: () => widget.onExpandedChanged(!widget.expanded),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+                child: Row(
+                  children: [
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: colors.accentSoft,
+                        borderRadius: BorderRadius.circular(11),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(9),
+                        child: Icon(
+                          Icons.tune_rounded,
+                          color: colors.accent,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 11),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            ar
+                                ? 'البحث والفلاتر المتقدمة'
+                                : 'Search & advanced filters',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          Text(
+                            ar
+                                ? '${fields.length} فلاتر • $areas مساحات • $checked قوائم • ${widget.resultsCount} سجل'
+                                : '${fields.length} filters • $areas areas • $checked checklists • ${widget.resultsCount} records',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (widget.loading)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 9),
+                        child: SizedBox(
+                          width: 15,
+                          height: 15,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                    AnimatedRotation(
+                      turns: widget.expanded ? .5 : 0,
+                      duration: CvMotion.of(context, CvMotion.standard),
+                      child: Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        color: colors.inkMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                InkWell(
-                  onTap: () => widget.onExpandedChanged(!widget.expanded),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-                    child: Row(
-                      children: [
-                        DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: colors.accentSoft,
-                            borderRadius: BorderRadius.circular(11),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(9),
-                            child: Icon(
-                              Icons.tune_rounded,
-                              color: colors.accent,
-                              size: 20,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 11),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                ar
-                                    ? 'البحث والفلاتر المتقدمة'
-                                    : 'Search & advanced filters',
-                                style: Theme.of(context).textTheme.titleSmall,
-                              ),
-                              Text(
-                                ar
-                                    ? '${fields.length} فلاتر • $areas مساحات • $checked قوائم • ${widget.resultsCount} سجل'
-                                    : '${fields.length} filters • $areas areas • $checked checklists • ${widget.resultsCount} records',
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (widget.loading)
-                          const Padding(
-                            padding: EdgeInsets.only(right: 9),
-                            child: SizedBox(
-                              width: 15,
-                              height: 15,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          ),
-                        AnimatedRotation(
-                          turns: widget.expanded ? .5 : 0,
-                          duration: CvMotion.of(context, CvMotion.standard),
-                          child: Icon(
-                            Icons.keyboard_arrow_down_rounded,
-                            color: colors.inkMuted,
-                          ),
-                        ),
-                      ],
+            Divider(height: 1, color: colors.hairline),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    tooltip: ar ? 'السابق' : 'Previous date',
+                    onPressed: widget.onPreviousDate,
+                    icon: Icon(ar ? Icons.chevron_right : Icons.chevron_left),
+                  ),
+                  Flexible(
+                    child: TextButton(
+                      onPressed: widget.onPickDate,
+                      child: Text(
+                        dateLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
                     ),
                   ),
-                ),
-                Divider(height: 1, color: colors.hairline),
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 4,
+                  IconButton(
+                    tooltip: ar ? 'التالي' : 'Next date',
+                    onPressed: widget.onNextDate,
+                    icon: Icon(ar ? Icons.chevron_left : Icons.chevron_right),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton(
-                        tooltip: ar ? 'السابق' : 'Previous date',
-                        onPressed: widget.onPreviousDate,
-                        icon: Icon(
-                          ar ? Icons.chevron_right : Icons.chevron_left,
-                        ),
+                ],
+              ),
+            ),
+            AnimatedSize(
+              alignment: Alignment.topCenter,
+              curve: CvMotion.glide,
+              duration: CvMotion.of(context, CvMotion.spatial),
+              child: widget.expanded
+                  ? ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: MediaQuery.sizeOf(context).height * 0.40,
                       ),
-                      Flexible(
-                        child: TextButton(
-                          onPressed: widget.onPickDate,
-                          child: Text(
-                            dateLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontWeight: FontWeight.w800),
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: ar ? 'التالي' : 'Next date',
-                        onPressed: widget.onNextDate,
-                        icon: Icon(
-                          ar ? Icons.chevron_left : Icons.chevron_right,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                AnimatedSize(
-                  alignment: Alignment.topCenter,
-                  curve: CvMotion.glide,
-                  duration: CvMotion.of(context, CvMotion.spatial),
-                  child: widget.expanded
-                      ? ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxHeight: MediaQuery.sizeOf(context).height * 0.40,
-                          ),
-                          child: SingleChildScrollView(
-                            padding: const EdgeInsets.fromLTRB(13, 4, 13, 14),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                TextField(
-                                  controller: _search,
-                                  onChanged: widget.onSearchChanged,
-                                  decoration: InputDecoration(
-                                    isDense: true,
-                                    prefixIcon: const Icon(
-                                      Icons.search_rounded,
-                                    ),
-                                    hintText: ar
-                                        ? 'ابحث باسم القائمة أو الموقع أو المبنى أو المساحة...'
-                                        : 'Search checklist, site, building or area...',
-                                    suffixIcon: _search.text.isEmpty
-                                        ? null
-                                        : IconButton(
-                                            tooltip: ar
-                                                ? 'مسح البحث'
-                                                : 'Clear search',
-                                            icon: const Icon(
-                                              Icons.close_rounded,
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(13, 4, 13, 14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            TextField(
+                              controller: _search,
+                              onChanged: widget.onSearchChanged,
+                              decoration: InputDecoration(
+                                isDense: true,
+                                prefixIcon: const Icon(Icons.search_rounded),
+                                hintText: ar
+                                    ? 'ابحث باسم القائمة أو الموقع أو المبنى أو المساحة...'
+                                    : 'Search checklist, site, building or area...',
+                                suffixIcon: _search.text.isEmpty
+                                    ? null
+                                    : IconButton(
+                                        tooltip: ar
+                                            ? 'مسح البحث'
+                                            : 'Clear search',
+                                        icon: const Icon(Icons.close_rounded),
+                                        onPressed: () {
+                                          _search.clear();
+                                          widget.onSearchChanged('');
+                                        },
+                                      ),
+                              ),
+                            ),
+                            const SizedBox(height: 13),
+                            LayoutBuilder(
+                              builder: (context, constraints) {
+                                // Responsive FULL-WIDTH rows, not a fixed
+                                // four-column grid or a capped desktop card.
+                                // 1/2/3 choices receive 100/50/33% widths.
+                                // With many choices, balance row counts so
+                                // the last row never contains a lone narrow
+                                // control or leaves unused desktop space.
+                                const gap = 9.0;
+                                final available = constraints.maxWidth;
+                                final maxPerRow = available < 380
+                                    ? 1
+                                    : (available / 188).floor().clamp(1, 7);
+                                final rowCount = fields.isEmpty
+                                    ? 0
+                                    : (fields.length / maxPerRow).ceil();
+                                final perRow = rowCount == 0
+                                    ? 0
+                                    : fields.length ~/ rowCount;
+                                final overflowRows = rowCount == 0
+                                    ? 0
+                                    : fields.length % rowCount;
+                                return Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    for (var row = 0; row < rowCount; row++)
+                                      Builder(
+                                        builder: (context) {
+                                          final count =
+                                              perRow +
+                                              (row < overflowRows ? 1 : 0);
+                                          final start =
+                                              row * perRow +
+                                              (row < overflowRows
+                                                  ? row
+                                                  : overflowRows);
+                                          final rowFields = fields.sublist(
+                                            start,
+                                            start + count,
+                                          );
+                                          return Padding(
+                                            padding: EdgeInsets.only(
+                                              bottom: row == rowCount - 1
+                                                  ? 0
+                                                  : 11,
                                             ),
-                                            onPressed: () {
-                                              _search.clear();
-                                              widget.onSearchChanged('');
-                                            },
-                                          ),
+                                            child: Row(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                for (
+                                                  var index = 0;
+                                                  index < rowFields.length;
+                                                  index++
+                                                ) ...[
+                                                  if (index > 0)
+                                                    const SizedBox(width: gap),
+                                                  Expanded(
+                                                    child: _CvLocationField(
+                                                      key: ValueKey(
+                                                        rowFields[index].$1,
+                                                      ),
+                                                      title: label(
+                                                        rowFields[index].$1,
+                                                      ),
+                                                      options:
+                                                          rowFields[index].$2,
+                                                      language: widget.language,
+                                                      selected: normalized
+                                                          .valueFor(
+                                                            rowFields[index].$1,
+                                                          ),
+                                                      onChanged: (value) => widget
+                                                          .onSelectionChanged(
+                                                            _select(
+                                                              rowFields[index]
+                                                                  .$1,
+                                                              value,
+                                                            ),
+                                                          ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                  ],
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    ar
+                                        ? 'المواقع المصرح بها فقط'
+                                        : 'Authorized locations only',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall,
                                   ),
                                 ),
-                                const SizedBox(height: 13),
-                                LayoutBuilder(
-                                  builder: (context, constraints) {
-                                    final width = constraints.maxWidth;
-                                    final columns = width >= 950
-                                        ? 4
-                                        : width >= 620
-                                        ? 3
-                                        : width >= 310
-                                        ? 2
-                                        : 1;
-                                    const gap = 9.0;
-                                    final fieldWidth =
-                                        (width - (columns - 1) * gap) / columns;
-                                    return Wrap(
-                                      spacing: gap,
-                                      runSpacing: 11,
-                                      children: [
-                                        for (final (dimension, options)
-                                            in fields)
-                                          SizedBox(
-                                            width: fieldWidth,
-                                            child: _CvLocationField(
-                                              key: ValueKey(dimension),
-                                              title: label(dimension),
-                                              options: options,
-                                              language: widget.language,
-                                              selected: normalized.valueFor(
-                                                dimension,
-                                              ),
-                                              onChanged: (value) =>
-                                                  widget.onSelectionChanged(
-                                                    _select(dimension, value),
-                                                  ),
-                                            ),
-                                          ),
-                                      ],
-                                    );
-                                  },
-                                ),
-                                const SizedBox(height: 12),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        ar
-                                            ? 'المواقع المصرح بها فقط'
-                                            : 'Authorized locations only',
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.bodySmall,
-                                      ),
-                                    ),
-                                    TextButton.icon(
-                                      onPressed: widget.onReset,
-                                      icon: const Icon(
-                                        Icons.restart_alt_rounded,
-                                        size: 17,
-                                      ),
-                                      label: Text(ar ? 'إعادة ضبط' : 'Reset'),
-                                    ),
-                                  ],
+                                TextButton.icon(
+                                  onPressed: widget.onReset,
+                                  icon: const Icon(
+                                    Icons.restart_alt_rounded,
+                                    size: 17,
+                                  ),
+                                  label: Text(ar ? 'إعادة ضبط' : 'Reset'),
                                 ),
                               ],
                             ),
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
-              ],
+                          ],
+                        ),
+                      ),
+                    )
+                  : const SizedBox.shrink(),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -394,7 +455,11 @@ class _CvLocationField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final current = options.any((o) => o.value == selected) ? selected : null;
+    // A single fixed General department is informative, not interactive.
+    // Display its actual label instead of a blank disabled dropdown.
+    final current = options.length == 1 && selected == null
+        ? options.single.value
+        : (options.any((o) => o.value == selected) ? selected : null);
     return DropdownButtonFormField<String?>(
       key: ValueKey('$title:$current:${options.length}'),
       initialValue: current,
@@ -408,7 +473,7 @@ class _CvLocationField extends StatelessWidget {
         ),
       ),
       items: [
-        if (options.length > 1)
+        if (options.length > 1 || selected != null)
           DropdownMenuItem<String?>(
             value: null,
             child: Text(language == 'ar' ? 'الكل' : 'All'),
@@ -423,7 +488,7 @@ class _CvLocationField extends StatelessWidget {
             ),
           ),
       ],
-      onChanged: options.length <= 1 ? null : onChanged,
+      onChanged: options.length <= 1 && selected == null ? null : onChanged,
     );
   }
 }
