@@ -14,6 +14,7 @@ import '../repositories/ops_metrics_repository.dart';
 import '../repositories/organization_repository.dart';
 import '../repositories/policy_repository.dart';
 import '../repositories/site_repository.dart';
+import '../repositories/subscription_repository.dart';
 
 final supabaseClientProvider = Provider<SupabaseClient>((ref) => supabase);
 
@@ -27,6 +28,10 @@ final auditRepositoryProvider = Provider<AuditRepository>(
 
 final siteRepositoryProvider = Provider<SiteRepository>(
   (ref) => SiteRepository(ref.watch(supabaseClientProvider)),
+);
+
+final subscriptionRepositoryProvider = Provider<SubscriptionRepository>(
+  (ref) => SubscriptionRepository(ref.watch(supabaseClientProvider)),
 );
 
 final organizationRepositoryProvider = Provider<OrganizationRepository>(
